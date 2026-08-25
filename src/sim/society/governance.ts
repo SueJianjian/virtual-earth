@@ -1,6 +1,7 @@
 import { forkRandom, randomFloat } from "../random.ts";
 import type { OrganizationState, RelationshipState, WorldDelta, WorldState } from "../types.ts";
 import { minimumMembersFor, organizationCapacity } from "./organization.ts";
+import { foodSecurityForOrganization } from "../agents/food.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -24,10 +25,12 @@ export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "ye
   const context = { state, random: state.random, metrics: {} as never, regionId: organization.regionId, candidateMemberIds: members };
   const capacity = organizationCapacity(organization, context);
   const minimumMembers = minimumMembersFor(organization.type);
+  const foodSecurity = foodSecurityForOrganization(state, { ...organization, memberIds: members });
   const resourceTotal = Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + state.resources
     .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
     .reduce((sum, resource) => sum + resource.amount, 0);
-  const stable = members.length >= minimumMembers && members.length <= capacity && resourceTotal >= 0;
+  const foodResilient = organization.type === "family" || organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.1;
+  const stable = members.length >= minimumMembers && members.length <= capacity && resourceTotal >= 0 && foodResilient;
   const status = stable ? "active" : members.length < minimumMembers ? "collapsed" : "fragmenting";
   if (members.length !== organization.memberIds.length || status !== organization.status) {
     delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: { ...organization, memberIds: members, status } });
@@ -39,7 +42,7 @@ export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "ye
       const child = { ...organization, id: `${organization.id}:fragment:${members[midpoint]}` as OrganizationState["id"], memberIds: members.slice(midpoint), status: "active" as const, childOrganizationIds: [] };
       delta.entityEffects.push({ collection: "organizations", operation: "create", id: child.id, value: child });
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: { ...organization, memberIds: members.slice(0, midpoint), status: "fragmenting", childOrganizationIds: [...organization.childOrganizationIds, child.id] } });
-      delta.eventDrafts.push({ kind: "organization-split", ruleId: "organizational-fragmentation", sourceIds: members, probability: 0.2, roll, evidence: { capacity, members: members.length }, payload: { organizationId: organization.id, childId: child.id }, source: "natural" });
+      delta.eventDrafts.push({ kind: "organization-split", ruleId: "organizational-fragmentation", sourceIds: members, probability: 0.2, roll, evidence: { capacity, members: members.length, foodSecurity }, payload: { organizationId: organization.id, childId: child.id }, source: "natural" });
     }
   }
   return delta;

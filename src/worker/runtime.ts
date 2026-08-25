@@ -2,6 +2,7 @@ import { stepWorld, metricsFor } from "../sim/engine.ts";
 import { focusRegion, summarizeRegionState } from "../sim/lod/index.ts";
 import { deserializeWorld, serializeWorld } from "../persistence/serialize.ts";
 import { createWorld, worldDigest } from "../sim/world.ts";
+import { foodSecurityFromBalance } from "../sim/agents/food.ts";
 import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 import type { WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
 
@@ -34,9 +35,23 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
   const snapshot = (): WorldSnapshot => {
     const observation = state.observation;
     const storedSummary = observation.focusRegionId ? state.lod.summaries.find((summary) => summary.regionId === observation.focusRegionId) : undefined;
+    const refreshedAggregate = storedSummary?.mode === "aggregate"
+      ? (() => {
+        const foodBalance = state.resources
+          .filter((resource) => resource.resourceId === "food" && resource.regionId === storedSummary.regionId)
+          .reduce((sum, resource) => sum + resource.amount, 0);
+        return {
+          ...storedSummary,
+          foodBalance,
+          foodPerAgent: foodBalance / Math.max(1, storedSummary.population),
+          foodSecurity: foodSecurityFromBalance(foodBalance, storedSummary.population),
+          resources: structuredClone(state.resources.filter((resource) => resource.regionId === storedSummary.regionId)),
+        };
+      })()
+      : undefined;
     const selectedRegion = observation.focusRegionId
       ? storedSummary?.mode === "aggregate"
-        ? storedSummary
+        ? refreshedAggregate
         : summarizeRegionState(state, observation.focusRegionId, storedSummary?.mode ?? "micro")
       : undefined;
     const projection = observation.focusRegionId ? focusRegion(state, observation.focusRegionId).projection : observation.projection;

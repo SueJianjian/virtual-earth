@@ -2,7 +2,7 @@ import type { SimulationStage } from "../types.ts";
 import { stepAgents } from "./lifecycle.ts";
 
 export { createAgent, eligibleAgentCount, stepAgents } from "./lifecycle.ts";
-export { foodBalanceFor, foodPerCapitaForAgent, foodSecurityForAgent, meanFoodSecurity } from "./food.ts";
+export { foodBalanceFor, foodPerCapitaForAgent, foodSecurityForAgent, foodSecurityForOrganization, foodSecurityForRegion, foodSecurityFromBalance, meanFoodSecurity } from "./food.ts";
 export { createFamily, createFamilyIfEligible, createRelationship, familyIdFor, relationshipIdFor } from "./relationships.ts";
 
 export const agentsStage: SimulationStage = {

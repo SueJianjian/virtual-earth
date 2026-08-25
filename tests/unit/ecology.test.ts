@@ -120,4 +120,25 @@ describe("emergent ecology", () => {
     expect(event?.evidence).toMatchObject({ fromRegion: "region:0:0", toRegion: "region:1:0" });
     expect(event?.roll).toBeGreaterThanOrEqual(0);
   });
+
+  it("can migrate toward food even when the adjacent habitat is not better", () => {
+    const outcomes = Array.from({ length: 96 }, (_, seed) => {
+      const state = initializeEnvironment(createWorld(120 + seed, { width: 8, height: 8 }));
+      const species = {
+        id: `species:food-migrant:${seed}` as never,
+        role: "producer" as const,
+        traits: { energyUse: 0.1, reproduction: 0.2, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 1, cognitivePotential: 0 },
+      };
+      state.fields.temperature.values.fill(0.2);
+      state.fields.humidity.values.fill(0.2);
+      state.species.push(species);
+      state.populations.push({ id: `population:food-migrant:${seed}` as never, speciesId: species.id, regionId: "region:0:0" as never, count: 100, energy: 1 });
+      state.resources.push({ id: `resource:food:destination:${seed}`, resourceId: "food", regionId: "region:1:0" as never, amount: 20, cap: 40, originEventId: "event:food" });
+      return stepEcology(state, ecologyContext(state));
+    });
+
+    const event = outcomes.flatMap((delta) => delta.eventDrafts).find((candidate) => candidate.kind === "population-migration" && candidate.evidence.foodDriven === true);
+    expect(event?.evidence).toMatchObject({ fromRegion: "region:0:0", toRegion: "region:1:0", foodDriven: true });
+    expect(Number(event?.evidence.destinationFoodSecurity)).toBeGreaterThan(Number(event?.evidence.originFoodSecurity));
+  });
 });

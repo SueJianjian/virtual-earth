@@ -1,5 +1,6 @@
 import { forkRandom, randomFloat } from "../random.ts";
 import { attemptAbiogenesis, attemptTrophicSpecies } from "./species.ts";
+import { foodSecurityForRegion } from "../agents/food.ts";
 import { nextPopulationCount, populationCellIndex, suitability } from "./populations.ts";
 import type {
   EcologyDelta,
@@ -94,9 +95,15 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       const candidateTemperature = state.fields.temperature.values[candidateIndex] ?? metrics.meanTemperature;
       const candidateHumidity = state.fields.humidity.values[candidateIndex] ?? metrics.meanHumidity;
       const candidateSuitability = suitability(species, candidateTemperature, candidateHumidity);
-      const migrationProbability = Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * 0.35));
+      const originFoodSecurity = foodSecurityForRegion(state, population.regionId, population.count);
+      const destinationFoodSecurity = foodSecurityForRegion(state, candidateRegionId as typeof population.regionId, population.count);
+      const foodAdvantage = Math.max(0, destinationFoodSecurity - originFoodSecurity);
+      const foodStress = Math.max(0, 0.5 - originFoodSecurity);
+      const migrationProbability = Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * 0.35 + foodAdvantage * 0.25 + foodStress * 0.1));
       const [roll] = randomFloat(forkRandom(state.random, `migration:${population.id}:${state.tick}`));
-      if (candidateSuitability > suitabilityScore + 0.1 && roll < migrationProbability) {
+      const habitatAdvantage = candidateSuitability > suitabilityScore + 0.1;
+      const foodDriven = foodAdvantage > 0.1 && candidateSuitability >= suitabilityScore - 0.05;
+      if ((habitatAdvantage || foodDriven) && roll < migrationProbability) {
         nextRegionId = candidateRegionId as typeof population.regionId;
         delta.eventDrafts.push({
           kind: "population-migration",
@@ -104,7 +111,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
           sourceIds: [population.id],
           probability: migrationProbability,
           roll,
-          evidence: { fromRegion: population.regionId, toRegion: candidateRegionId, suitability: suitabilityScore, destinationSuitability: candidateSuitability, mobility: species.traits.mobility ?? 0 },
+          evidence: { fromRegion: population.regionId, toRegion: candidateRegionId, suitability: suitabilityScore, destinationSuitability: candidateSuitability, mobility: species.traits.mobility ?? 0, originFoodSecurity, destinationFoodSecurity, foodAdvantage, foodDriven },
           payload: { populationId: population.id, fromRegion: population.regionId, toRegion: candidateRegionId },
           source: "natural",
         });

@@ -4,6 +4,7 @@ import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { metricsFor } from "../../src/sim/engine.ts";
 import { createWorld } from "../../src/sim/world.ts";
+import { createRandom } from "../../src/sim/random.ts";
 import type { WorldDelta } from "../../src/sim/types.ts";
 
 const emptyDelta = (): WorldDelta => ({
@@ -69,5 +70,29 @@ describe("food security", () => {
     const fed = stepAgents(withFood.state, emptyDelta(), 1).entityEffects.find((effect) => effect.collection === "agents" && effect.id === withFood.agents[0]!.id && effect.value);
     expect(hungry?.collection === "agents" && hungry.value?.needs.food).toBeCloseTo(0.49);
     expect(fed?.collection === "agents" && fed.value?.needs.food).toBeCloseTo(0.5);
+  });
+
+  it("records held food as a positive condition for forming a family", () => {
+    const familyEvent = Array.from({ length: 64 }, (_, seed) => {
+      const { state, agents } = fixture();
+      state.random = createRandom(seed + 1);
+      agents.forEach((agent) => {
+        agent.age = 25;
+        agent.traits.sociality = 1;
+        agent.traits.cooperation = 1;
+      });
+      state.organizations = [createOrganization("clan", agents[0]!.regionId, agents.map((agent) => agent.id))];
+      state.resources = [{
+        id: "resource:food:clan",
+        resourceId: "food",
+        regionId: agents[0]!.regionId,
+        holderId: state.organizations[0]!.id,
+        amount: 1,
+        cap: 1,
+        originEventId: "event:food",
+      }];
+      return stepAgents(state, emptyDelta(), 1).eventDrafts.find((event) => event.kind === "family-formation");
+    }).find((event) => event !== undefined);
+    expect(familyEvent?.evidence.foodSecurity).toBeGreaterThan(0);
   });
 });

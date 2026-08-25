@@ -176,7 +176,8 @@ export const stepAgents = (
     const relationId = relationshipIdFor("partner", first.id, second.id);
     if (relationshipMap.has(relationId)) continue;
     const affinity = ((first.traits.sociality ?? 0) + (second.traits.sociality ?? 0) + (first.traits.cooperation ?? 0) + (second.traits.cooperation ?? 0)) / 4;
-    const probability = clamp(affinity * 0.45);
+    const foodSecurity = (foodSecurityForAgent(state, first) + foodSecurityForAgent(state, second)) / 2;
+    const probability = clamp(affinity * (0.43 + foodSecurity * 0.02));
     const [roll] = randomFloat(forkRandom(state.random, `partner:${first.id}:${second.id}`));
     if (roll >= probability) continue;
     addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, state.tick + 1, affinity));
@@ -191,7 +192,7 @@ export const stepAgents = (
           sourceIds: [first.id, second.id],
           probability,
           roll,
-          evidence: { affinity, members: family.memberIds.length },
+          evidence: { affinity, foodSecurity, members: family.memberIds.length },
           payload: { familyId: family.id, memberIds: family.memberIds },
           source: "natural",
         });

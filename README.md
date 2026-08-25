@@ -48,6 +48,9 @@ event count and the final authoritative digest.
 - Held food now feeds back into member food needs through bounded per-capita
   security. Hunger, fertility and mortality therefore respond to conserved
   organization balances instead of an unrelated global counter.
+- Food security also biases family formation, can make a better-supplied
+  neighboring region attractive to mobile populations, and reduces the
+  effective capacity of large organizations under persistent shortage.
 - Organization rules are independent for clan, tribe, settlement, city, state,
   federation and empire. Higher-order organizations retain child organization
   IDs and recruit current local members during governance.

@@ -89,6 +89,25 @@ describe("emergent society", () => {
     }));
   });
 
+  it("puts a large organization under food-driven fragmentation pressure", () => {
+    const context = makeContext(74, 80);
+    const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds);
+    const poorState = structuredClone(context.state) as WorldState;
+    poorState.organizations = [city];
+    const poorDelta = governOrganization(poorState, city);
+    expect(poorDelta.entityEffects).toContainEqual(expect.objectContaining({
+      operation: "update",
+      value: expect.objectContaining({ status: "fragmenting" }),
+    }));
+
+    const richState = structuredClone(poorState) as WorldState;
+    richState.resources = [{ id: "resource:food:city", resourceId: "food", regionId: "region:0:0" as never, holderId: city.id, amount: 80, cap: 100, originEventId: "event:food" }];
+    const richDelta = governOrganization(richState, city);
+    expect(richDelta.entityEffects).not.toContainEqual(expect.objectContaining({
+      value: expect.objectContaining({ status: "fragmenting" }),
+    }));
+  });
+
   it("records allocation, trade, and consumption through the resource ledger", () => {
     const context = makeContext(74, 12);
     const left = createOrganization("settlement", "region:0:0" as never, context.candidateMemberIds.slice(0, 8));

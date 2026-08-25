@@ -47,6 +47,39 @@ describe("simulation worker runtime", () => {
     expect(stepped?.type === "snapshot" && stepped.snapshot.projection?.sourceRevision).toBe(1);
   });
 
+  it("refreshes aggregate food fields after authoritative resource changes", () => {
+    const state = createWorld(137, { width: 8, height: 8 });
+    const region = "region:1:1" as never;
+    state.lod.summaries = [{
+      regionId: region,
+      version: 0,
+      mode: "aggregate",
+      population: 10,
+      populationByAge: { bins: {} },
+      skillHistogram: { bins: {} },
+      cultureHistogram: { bins: {} },
+      householdCount: 0,
+      organizations: [],
+      agentIds: [],
+      relationshipCount: 0,
+      relationshipDigest: "0",
+      relationshipRecords: [],
+      lineage: { descendantCount: 0, generationDepth: 0, knowledgeCarrierCount: 0, beliefCarrierCount: 0, relationshipCounts: {} },
+      foodBalance: 0,
+      foodPerAgent: 0,
+      foodSecurity: 0,
+      resources: [],
+      migrationRate: 0,
+      historyIds: [],
+      random: { ...state.random },
+      canonicalDigest: "0",
+    }];
+    state.resources = [{ id: "resource:food:aggregate", resourceId: "food", regionId: region, amount: 2, cap: 4, originEventId: "event:food" }];
+    const runtime = createSimulationRuntime(state);
+    const snapshot = runtime.dispatch({ type: "focusRegion", regionId: region })[0];
+    expect(snapshot?.type === "snapshot" && snapshot.snapshot.selectedRegion).toMatchObject({ foodBalance: 2, foodPerAgent: 0.2, foodSecurity: 0.4 });
+  });
+
   it("restores saves and preserves the current world on load errors", () => {
     const runtime = createSimulationRuntime(createWorld(133, { width: 8, height: 8 }));
     runtime.dispatch({ type: "step", count: 2 });
