@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { clearSimulationStages, registerSimulationStage, stepWorld } from "../../src/sim/engine.ts";
 import { createWorld, assertBlankWorld } from "../../src/sim/world.ts";
 import { createWorldviewState, listWorldviewPacks, stepWorldviews } from "../../src/sim/worldview/index.ts";
+import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
 import type { WorldDelta, WorldviewContext } from "../../src/sim/types.ts";
 
 const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext => ({
@@ -41,6 +42,16 @@ describe("worldview packs", () => {
     expect(firstDelta).toEqual(secondDelta);
     expect(firstDelta.worldviewEffects.every((effect) => "kind" in effect)).toBe(true);
     expect(firstDelta.worldviewEffects.every((effect) => effect.kind !== "propose-entity" || effect.evidence.eligible === true)).toBe(true);
+  });
+
+  it("derives a deterministic real region instead of a synthetic origin", () => {
+    const world = createWorld(101, { width: 8, height: 8 });
+    world.populations = [{ id: "population:region" as never, speciesId: "species:region" as never, regionId: "region:3:2" as never, count: 12, energy: 1 }];
+    const first = regionIdForWorldview({ ...highContext(world), state: world });
+    const second = regionIdForWorldview({ ...highContext(world), state: structuredClone(world) });
+    expect(first).toBe("region:3:2");
+    expect(second).toBe(first);
+    expect(first).not.toBe("region:origin");
   });
 
   it("forms a worldview entity only through enabled-pack reducer validation", () => {

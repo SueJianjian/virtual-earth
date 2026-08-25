@@ -5,6 +5,7 @@ import { initializeTerrainWater } from "./terrain.ts";
 import type {
   EnvironmentDelta,
   EnvironmentInput,
+  WorldEvent,
   WorldState,
 } from "../types.ts";
 
@@ -32,6 +33,18 @@ const terrainNutrients = (state: WorldState): Float32Array => {
   return nutrients;
 };
 
+const activeUserEvents = (state: WorldState, incoming: WorldEvent[]): WorldEvent[] => {
+  const events = [...state.events, ...incoming];
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    if (seen.has(event.id)) return false;
+    seen.add(event.id);
+    if (event.source !== "user") return incoming.includes(event);
+    const duration = Math.max(1, Math.trunc(Number(event.payload.duration ?? 1)));
+    return incoming.includes(event) || state.tick - event.tick < duration;
+  });
+};
+
 export const initializeEnvironment = (state: WorldState): WorldState => {
   const next = structuredClone(state);
   const water = initializeTerrainWater(next);
@@ -51,6 +64,7 @@ export const stepEnvironment = (
   input: EnvironmentInput,
 ): EnvironmentDelta => {
   const delta = emptyDelta();
+  const activeEvents = activeUserEvents(state, input.externalEvents);
   const isBlankStart = state.tick === 0 && isEmpty(state.fields.water.values);
   const needsNutrients = state.tick === 0 && isEmpty(state.fields.nutrients.values);
   const workingState = structuredClone(state);
@@ -63,7 +77,7 @@ export const stepEnvironment = (
   const climate = calculateClimate(workingState, input.solarFlux);
   workingState.fields.temperature.values.set(climate.temperature);
   workingState.fields.humidity.values.set(climate.humidity);
-  const water = simulateWater(workingState, input.externalEvents);
+  const water = simulateWater(workingState, activeEvents);
   for (let index = 0; index < water.length; index += 1) {
     delta.fieldChanges.push(
       { field: "temperature", index, operation: "set", value: climate.temperature[index] ?? 0, causeRuleId: "climate-field" },
@@ -82,7 +96,7 @@ export const stepEnvironment = (
   }
   delta.chemistryChanges = calculateChemistry(workingState);
   const width = state.fields.elevation.width;
-  for (const event of input.externalEvents) {
+  for (const event of activeEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
     const match = /^region:(\d+):(\d+)$/.exec(region);
     const x = Math.max(0, Math.min(width - 1, Number(match?.[1] ?? 0)));

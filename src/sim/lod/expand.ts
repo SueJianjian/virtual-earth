@@ -26,16 +26,16 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
     });
   }
   const relationships: RelationshipState[] = [];
-  const familyCount = Math.min(summary.householdCount, Math.floor(agents.length / 2));
-  for (let index = 0; index < familyCount * 2; index += 2) {
-    const first = agents[index];
-    const second = agents[index + 1];
+  const relationshipCount = Math.min(summary.relationshipCount, agents.length > 1 ? agents.length * 2 : 0);
+  for (let index = 0; index < relationshipCount; index += 1) {
+    const first = agents[index % agents.length];
+    const second = agents[(index + 1) % agents.length];
     if (!first || !second) continue;
     const relation: RelationshipState = {
       id: `relationship:projection:${hashString(`${summary.canonicalDigest}:${index}`).toString(16)}`,
       fromId: first.id,
       toId: second.id,
-      kind: "partner",
+      kind: index < summary.householdCount ? "partner" : "friend",
       strength: 0.4,
       createdTick: version,
       sourceEventId: `projection:${summary.canonicalDigest}`,
@@ -45,17 +45,16 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
     second.relationshipIds.push(relation.id);
   }
   const organizations: OrganizationState[] = [];
-  for (let index = 0; index + 1 < agents.length; index += 2) {
-    const first = agents[index];
-    const second = agents[index + 1];
-    if (!first || !second) continue;
+  for (const summaryOrganization of summary.organizations) {
+    const memberCount = Math.min(summaryOrganization.memberCount, agents.length);
+    const memberIds = agents.slice(0, memberCount).map((agent) => agent.id);
     organizations.push({
-      id: asOrganizationId(`family:projection:${hashString(`${summary.canonicalDigest}:${index}`).toString(16)}`),
-      type: "family",
-      memberIds: [first.id, second.id],
-      childOrganizationIds: [],
+      id: asOrganizationId(summaryOrganization.id),
+      type: summaryOrganization.type,
+      memberIds,
+      childOrganizationIds: [...summaryOrganization.childIds],
       regionId: summary.regionId,
-      resources: {},
+      resources: Object.fromEntries(summaryOrganization.resourceIds.map((resourceId) => [resourceId, 0])),
       status: "active",
     });
   }

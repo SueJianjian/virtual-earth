@@ -23,4 +23,18 @@ describe("god mode causal events", () => {
     expect(runtime.getState().species).toEqual([]);
     expect(runtime.getState().populations).toEqual([]);
   });
+
+  it("applies a duration-limited intervention across steps and then expires it", () => {
+    const runtime = createSimulationRuntime(createWorld(142, { width: 8, height: 8 }));
+    const event = createGodEvent("user:heat:duration", "heat", "region:0:0" as never, 1, 2);
+    runtime.dispatch({ type: "applyEvent", event });
+    const afterFirst = runtime.getState().fields.temperature.values[0] ?? 0;
+    runtime.dispatch({ type: "step", count: 1 });
+    const afterSecond = runtime.getState().fields.temperature.values[0] ?? 0;
+    runtime.dispatch({ type: "step", count: 1 });
+    const afterExpiry = runtime.getState().fields.temperature.values[0] ?? 0;
+
+    expect(afterSecond).toBe(afterFirst);
+    expect(afterExpiry).not.toBe(afterSecond);
+  });
 });

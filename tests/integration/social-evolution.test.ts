@@ -35,4 +35,14 @@ describe("social evolution integration", () => {
     expect(activeOrganizations.some((organization) => organization.type === "settlement" && organization.memberIds.length >= 8)).toBe(true);
     expect(state.events.filter((event) => event.kind === "organization-formation").length).toBeGreaterThan(1);
   });
+
+  it("reaches city-scale organization through sustained local conditions", () => {
+    let state = createWorld(123, { width: 16, height: 8 });
+    for (let index = 0; index < 1_200; index += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    }
+
+    expect(state.organizations.some((organization) => organization.status === "active" && organization.type === "city" && organization.memberIds.length >= 30)).toBe(true);
+    expect(state.events.some((event) => event.kind === "organization-formation" && event.payload.type === "city")).toBe(true);
+  }, 15_000);
 });

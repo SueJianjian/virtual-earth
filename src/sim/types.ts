@@ -296,6 +296,7 @@ export type RegionSummary = {
   cultureHistogram: Distribution;
   householdCount: number;
   organizations: OrganizationSummary[];
+  relationshipCount: number;
   relationshipDigest: string;
   resources: ResourceLedgerEntry[];
   migrationRate: number;

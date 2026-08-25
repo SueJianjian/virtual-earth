@@ -1,5 +1,5 @@
 import type { WorldviewPack } from "../../types.ts";
-import { ruleFromPredicates } from "../rules.ts";
+import { regionIdForWorldview, ruleFromPredicates } from "../rules.ts";
 
 export const greekMythology: WorldviewPack = {
   id: "mythology.greek-motif",
@@ -11,8 +11,8 @@ export const greekMythology: WorldviewPack = {
   ],
   resources: [{ id: "oracle-trust", cap: 100, sinks: ["divination"], sources: ["observation"] }],
   rules: [
-    ruleFromPredicates("greek-civic-discovery", [{ subject: "organization", metric: "settlementDensity", operator: ">=", value: 1 }, { subject: "population", metric: "populationCount", operator: ">=", value: 12 }], 0.1, (_context, evidence) => ({ kind: "propose-entity", packId: "mythology.greek-motif", entityKind: "deity", regionId: "region:origin" as never, evidence, probability: 0.1 })),
-    ruleFromPredicates("greek-fate-discovery", [{ subject: "culture", metric: "knowledgeDiversity", operator: ">=", value: 2 }, { subject: "population", metric: "populationCount", operator: ">=", value: 8 }], 0.07, (_context, evidence) => ({ kind: "discover-motif", packId: "mythology.greek-motif", motifId: "fate-question", regionId: "region:origin" as never, evidence })),
+    ruleFromPredicates("greek-civic-discovery", [{ subject: "organization", metric: "settlementDensity", operator: ">=", value: 1 }, { subject: "population", metric: "populationCount", operator: ">=", value: 12 }], 0.1, (context, evidence) => ({ kind: "propose-entity", packId: "mythology.greek-motif", entityKind: "deity", regionId: regionIdForWorldview(context), evidence, probability: 0.1 })),
+    ruleFromPredicates("greek-fate-discovery", [{ subject: "culture", metric: "knowledgeDiversity", operator: ">=", value: 2 }, { subject: "population", metric: "populationCount", operator: ">=", value: 8 }], 0.07, (context, evidence) => ({ kind: "discover-motif", packId: "mythology.greek-motif", motifId: "fate-question", regionId: regionIdForWorldview(context), evidence })),
   ],
   templates: [{ id: "civic-omen", kind: "social-omen", payloadKeys: ["organizationId", "sign"] }],
 };

@@ -1,5 +1,5 @@
 import type { WorldviewPack } from "../../types.ts";
-import { ruleFromPredicates } from "../rules.ts";
+import { regionIdForWorldview, ruleFromPredicates } from "../rules.ts";
 
 export const chineseMythology: WorldviewPack = {
   id: "mythology.chinese-motif",
@@ -11,8 +11,8 @@ export const chineseMythology: WorldviewPack = {
   ],
   resources: [{ id: "ritual-attention", cap: 100, sinks: ["ritual"], sources: ["collective-memory"] }],
   rules: [
-    ruleFromPredicates("chinese-river-discovery", [{ subject: "field", metric: "waterCoverage", operator: ">=", value: 0.2 }, { subject: "field", metric: "biomass", operator: ">=", value: 0.05 }], 0.12, (_context, evidence) => ({ kind: "propose-entity", packId: "mythology.chinese-motif", entityKind: "deity", regionId: "region:origin" as never, evidence, probability: 0.12 })),
-    ruleFromPredicates("chinese-ancestor-memory", [{ subject: "culture", metric: "knowledgeDiversity", operator: ">=", value: 1 }, { subject: "population", metric: "populationCount", operator: ">=", value: 4 }], 0.08, (_context, evidence) => ({ kind: "discover-motif", packId: "mythology.chinese-motif", motifId: "ancestor-memory", regionId: "region:origin" as never, evidence })),
+    ruleFromPredicates("chinese-river-discovery", [{ subject: "field", metric: "waterCoverage", operator: ">=", value: 0.2 }, { subject: "field", metric: "biomass", operator: ">=", value: 0.05 }], 0.12, (context, evidence) => ({ kind: "propose-entity", packId: "mythology.chinese-motif", entityKind: "deity", regionId: regionIdForWorldview(context), evidence, probability: 0.12 })),
+    ruleFromPredicates("chinese-ancestor-memory", [{ subject: "culture", metric: "knowledgeDiversity", operator: ">=", value: 1 }, { subject: "population", metric: "populationCount", operator: ">=", value: 4 }], 0.08, (context, evidence) => ({ kind: "discover-motif", packId: "mythology.chinese-motif", motifId: "ancestor-memory", regionId: regionIdForWorldview(context), evidence })),
   ],
   templates: [{ id: "river-sign", kind: "natural-sign", payloadKeys: ["regionId", "intensity"] }],
 };

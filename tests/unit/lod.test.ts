@@ -49,6 +49,7 @@ describe("conserved multi-scale state", () => {
     expect(summary?.operation).toBe("upsert-summary");
     if (summary?.operation !== "upsert-summary") return;
     expect(summary.summary.population).toBe(state.agents.length);
+    expect(summary.summary.relationshipCount).toBe(state.relationships.length);
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "remove")).toHaveLength(state.agents.length);
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "remove")).toHaveLength(state.relationships.length);
   });
@@ -63,5 +64,8 @@ describe("conserved multi-scale state", () => {
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "create")).toHaveLength(1);
     expect(delta.lodEffects?.[0]?.operation).toBe("upsert-summary");
     expect(delta.lodEffects?.[0]?.operation === "upsert-summary" && delta.lodEffects[0].summary.mode).toBe("micro");
+    if (delta.lodEffects?.[0]?.operation === "upsert-summary") {
+      expect(delta.lodEffects[0].summary.organizations.map((organization) => organization.type)).toContain("family");
+    }
   });
 });

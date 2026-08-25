@@ -9,4 +9,17 @@ describe("worldview autonomy integration", () => {
     expect(result.state.worldview.entities).toEqual([]);
     expect(worldDigest(result.state)).toBe(result.digest);
   });
+
+  it("places emergent worldview entities in a real active region", () => {
+    const packs = ["cultivation.path", "mythology.chinese-motif", "mythology.greek-motif", "mythology.indian-motif", "mythology.norse-motif"];
+    let state = createWorld(123, { width: 16, height: 8, enabledPackIds: packs });
+    for (let index = 0; index < 1_200; index += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    }
+
+    expect(state.worldview.entities.length).toBeGreaterThan(0);
+    expect(state.worldview.discoveredRuleIds.length).toBeGreaterThan(0);
+    expect(state.worldview.entities.every((entity) => /^region:\d+:\d+$/.test(entity.regionId))).toBe(true);
+    expect(state.worldview.entities.some((entity) => entity.regionId === "region:origin")).toBe(false);
+  }, 15_000);
 });

@@ -20,6 +20,7 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     cultureHistogram: distribution(agents.map((agent) => Math.min(0.99, agent.knowledgeIds.length / 10))),
     householdCount: organizations.filter((organization) => organization.type === "family").length,
     organizations: organizationSummaries,
+    relationshipCount: relationshipIds.length,
     relationshipDigest: hashString(JSON.stringify(relationshipIds)).toString(16),
     resources: structuredClone(state.resources.filter((resource) => resource.regionId === regionId)),
     migrationRate: 0,
