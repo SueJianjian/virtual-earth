@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAgent, eligibleAgentCount, stepAgents } from "../../src/sim/agents/index.ts";
+import { stepWorld } from "../../src/sim/engine.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createWorld } from "../../src/sim/world.ts";
@@ -32,7 +33,22 @@ describe("agent emergence and lifecycle", () => {
     const first = stepAgents(world, emptyDelta(), 1);
     const second = stepAgents(structuredClone(world), emptyDelta(), 1);
     expect(first).toEqual(second);
-    expect(first.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "update")).not.toHaveLength(0);
+    expect(first.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "create")).not.toHaveLength(0);
+  });
+
+  it("persists newly emerged agents through the world reducer", () => {
+    const world = createWorld(23, { width: 8, height: 8 });
+    const species = createSpecies("emergent", "consumer");
+    species.traits.cognitivePotential = 1;
+    world.species = [species];
+    world.populations = [{ ...population, speciesId: species.id }];
+    world.fields.biomass.values[0] = 0.5;
+    world.chemistry.oxygen.values[0] = 0.5;
+
+    const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
+
+    expect(result.state.agents.length).toBeGreaterThan(0);
+    expect(result.state.agents.every((agent) => agent.populationId === population.id)).toBe(true);
   });
 
   it("removes agents at the end of lifespan and cleans relationship edges", () => {

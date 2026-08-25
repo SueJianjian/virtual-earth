@@ -69,7 +69,7 @@ export const eligibleAgentCount = (
 ): number => {
   const cognitive = species.traits.cognitivePotential ?? 0;
   if (population.count < 4 || cognitive < 0.3 || oxygen < 0.005 || biomass < 0.001) return 0;
-  return Math.min(64, Math.floor(Math.sqrt(population.count) * cognitive * 0.55));
+  return Math.min(64, Math.ceil(Math.sqrt(population.count) * cognitive * 0.55));
 };
 
 const addRelationship = (
@@ -237,9 +237,10 @@ export const stepAgents = (
   }
   for (const agent of agents.values()) {
     if (deadIds.has(agent.id)) continue;
+    const operation = state.agents.some((existing) => existing.id === agent.id) ? "update" : "create";
     delta.entityEffects.push({
       collection: "agents",
-      operation: "update",
+      operation,
       id: agent.id,
       value: { ...agent, relationshipIds: [...new Set(relationshipIds.get(agent.id) ?? [])].sort() },
     });
