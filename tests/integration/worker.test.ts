@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { createSimulationRuntime } from "../../src/worker/runtime.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { clearSimulationStages } from "../../src/sim/engine.ts";
+import { createAgent } from "../../src/sim/agents/index.ts";
+import { createSpecies } from "../../src/sim/ecology/species.ts";
 
 describe("simulation worker runtime", () => {
   beforeEach(() => clearSimulationStages());
@@ -79,6 +81,44 @@ describe("simulation worker runtime", () => {
     const snapshot = runtime.dispatch({ type: "focusRegion", regionId: region })[0];
     expect(snapshot?.type === "snapshot" && snapshot.snapshot.selectedRegion).toMatchObject({ foodBalance: 2, foodPerAgent: 0.2, foodSecurity: 0.4 });
     expect(snapshot?.type === "snapshot" && snapshot.snapshot.foodSecurityByRegion?.[region]).toBe(0.4);
+  });
+
+  it("uses micro agents, aggregate summaries, then populations for regional food security", () => {
+    const state = createWorld(138, { width: 8, height: 8 });
+    const species = createSpecies("security", "consumer");
+    const microPopulation = { id: "population:micro" as never, speciesId: species.id, regionId: "region:0:0" as never, count: 10, energy: 1 };
+    const fallbackPopulation = { id: "population:fallback" as never, speciesId: species.id, regionId: "region:2:0" as never, count: 8, energy: 1 };
+    state.species = [species];
+    state.populations = [microPopulation, fallbackPopulation];
+    state.agents = [
+      createAgent(microPopulation, species, 0, "security"),
+      createAgent(microPopulation, species, 1, "security"),
+    ];
+    state.lod.summaries = [{
+      regionId: "region:1:0" as never,
+      version: 0,
+      mode: "aggregate",
+      population: 10,
+      populationByAge: { bins: {} }, skillHistogram: { bins: {} }, cultureHistogram: { bins: {} }, householdCount: 0,
+      organizations: [], agentIds: [], relationshipCount: 0, relationshipDigest: "0", relationshipRecords: [],
+      lineage: { descendantCount: 0, generationDepth: 0, knowledgeCarrierCount: 0, beliefCarrierCount: 0, relationshipCounts: {} },
+      foodBalance: 0, foodPerAgent: 0, foodSecurity: 0, resources: [], migrationRate: 0, historyIds: [], random: { ...state.random }, canonicalDigest: "0",
+    }];
+    state.resources = [
+      { id: "food:micro", resourceId: "food", regionId: "region:0:0" as never, amount: 1, cap: 2, originEventId: "event:food" },
+      { id: "food:aggregate", resourceId: "food", regionId: "region:1:0" as never, amount: 2, cap: 2, originEventId: "event:food" },
+      { id: "food:fallback", resourceId: "food", regionId: "region:2:0" as never, amount: 2, cap: 2, originEventId: "event:food" },
+    ];
+    const runtime = createSimulationRuntime(state);
+    const before = worldDigest(runtime.getState());
+    const message = runtime.dispatch({ type: "pause" })[0];
+
+    expect(message?.type === "snapshot" && message.snapshot.foodSecurityByRegion).toMatchObject({
+      "region:0:0": 1,
+      "region:1:0": 0.4,
+      "region:2:0": 0.5,
+    });
+    expect(worldDigest(runtime.getState())).toBe(before);
   });
 
   it("restores saves and preserves the current world on load errors", () => {
