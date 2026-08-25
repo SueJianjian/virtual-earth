@@ -95,6 +95,7 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
     species: [],
     populations: [],
     agents: [],
+    knowledge: [],
     relationships: [],
     cultures: [],
     organizations: [],
@@ -149,6 +150,7 @@ export const assertBlankWorld = (state: WorldState): void => {
   if (state.species.length > 0) failures.push("species");
   if (state.populations.length > 0) failures.push("populations");
   if (state.agents.length > 0) failures.push("agents");
+  if (state.knowledge.length > 0) failures.push("knowledge");
   if (state.relationships.length > 0) failures.push("relationships");
   if (state.cultures.length > 0) failures.push("cultures");
   if (state.organizations.length > 0) failures.push("organizations");

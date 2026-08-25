@@ -103,6 +103,12 @@ export type EntityEffect =
       value?: CultureState;
     }
   | {
+      collection: "knowledge";
+      operation: "create" | "update" | "remove";
+      id: string;
+      value?: KnowledgeState;
+    }
+  | {
       collection: "organizations";
       operation: "create" | "update" | "remove";
       id: OrganizationId;
@@ -314,8 +320,23 @@ export type AgentState = {
   populationId: EntityId;
   regionId: RegionId;
   age: number;
+  lifespan: number;
+  parentIds: EntityId[];
   traits: Record<string, number>;
+  skills: Record<string, number>;
+  needs: Record<string, number>;
+  memoryIds: string[];
+  knowledgeIds: string[];
+  beliefIds: string[];
   relationshipIds: string[];
+};
+export type KnowledgeState = {
+  id: string;
+  kind: string;
+  sourceIds: EntityId[];
+  credibility: number;
+  transmissionCost: number;
+  forgettingRate: number;
 };
 export type CultureState = {
   id: EntityId;
@@ -418,6 +439,7 @@ export type WorldState = {
   species: SpeciesState[];
   populations: PopulationState[];
   agents: AgentState[];
+  knowledge: KnowledgeState[];
   relationships: RelationshipState[];
   cultures: CultureState[];
   organizations: OrganizationState[];

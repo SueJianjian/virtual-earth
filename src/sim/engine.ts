@@ -2,6 +2,8 @@ import { hashString, nextRandom } from "./random.ts";
 import { appendEvents, appendExternalEvents } from "./events/ledger.ts";
 import { stepEnvironment } from "./environment/index.ts";
 import { stepEcology } from "./ecology/index.ts";
+import { agentsStage } from "./agents/index.ts";
+import { cultureStage } from "./culture/index.ts";
 import { worldDigest } from "./world.ts";
 import type {
   EntityEffect,
@@ -88,6 +90,7 @@ const collectionFor = (state: WorldState, collection: EntityEffect["collection"]
   if (collection === "populations") return state.populations;
   if (collection === "agents") return state.agents;
   if (collection === "cultures") return state.cultures;
+  if (collection === "knowledge") return state.knowledge;
   if (collection === "organizations") return state.organizations;
   return state.worldview.entities;
 };
@@ -237,6 +240,8 @@ const installDefaultStages = (): void => {
       },
     });
   }
+  if (!stageRegistry.has(agentsStage.id)) registerSimulationStage(agentsStage);
+  if (!stageRegistry.has(cultureStage.id)) registerSimulationStage(cultureStage);
 };
 
 export const stepWorld = (state: WorldState, input: StepInput): { state: WorldState; events: WorldState["events"]; digest: string } => {
