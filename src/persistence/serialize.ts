@@ -63,7 +63,15 @@ const validateWorld = (value: unknown): WorldState => {
       beliefCarrierCount: 0,
       relationshipCounts,
     };
-    return { ...summary, agentIds, relationshipRecords, lineage };
+    return {
+      ...summary,
+      agentIds,
+      relationshipRecords,
+      lineage,
+      foodBalance: typeof partial.foodBalance === "number" ? partial.foodBalance : 0,
+      foodPerAgent: typeof partial.foodPerAgent === "number" ? partial.foodPerAgent : 0,
+      foodSecurity: typeof partial.foodSecurity === "number" ? partial.foodSecurity : 0,
+    };
   });
   const focusRegionId = world.observation && typeof world.observation === "object" && typeof (world.observation as { focusRegionId?: unknown }).focusRegionId === "string"
     ? (world.observation as { focusRegionId: WorldState["observation"]["focusRegionId"] }).focusRegionId

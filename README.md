@@ -45,6 +45,9 @@ event count and the final authoritative digest.
   allocate, trade and consume food with conservation checks and auditable
   transactions; organization conflict, fragmentation and dissolution remain in
   the event history.
+- Held food now feeds back into member food needs through bounded per-capita
+  security. Hunger, fertility and mortality therefore respond to conserved
+  organization balances instead of an unrelated global counter.
 - Organization rules are independent for clan, tribe, settlement, city, state,
   federation and empire. Higher-order organizations retain child organization
   IDs and recruit current local members during governance.

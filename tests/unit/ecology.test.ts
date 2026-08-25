@@ -23,6 +23,7 @@ const ecologyContext = (state: ReturnType<typeof createWorld>): RuleContext => (
     settlementDensity: 0,
     tradeVolume: 0,
     foodSurplus: 0,
+    foodSecurity: 0,
     organizationCapacity: 0,
     resourceBalance: 0,
   },

@@ -11,6 +11,7 @@ import type {
   WorldState,
 } from "../types.ts";
 import { createFamily, createRelationship, relationshipIdFor } from "./relationships.ts";
+import { foodSecurityForAgent } from "./food.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [],
@@ -122,6 +123,7 @@ export const stepAgents = (
     const nextAge = agent.age + years;
     const oldAgeRisk = nextAge >= agent.lifespan ? 1 : Math.max(0, (nextAge / agent.lifespan - 0.82) * 0.12);
     const needRisk = Math.max(0, 0.5 - (agent.needs.food ?? 0)) * 0.02;
+    const foodSecurity = foodSecurityForAgent(state, agent);
     const [mortalityRoll] = randomFloat(forkRandom(state.random, `mortality:${agent.id}:${nextAge}`));
     if (mortalityRoll < oldAgeRisk + needRisk) {
       deadIds.add(agent.id);
@@ -131,9 +133,10 @@ export const stepAgents = (
     const migratedRegion = movedPopulations.get(String(agent.populationId));
     if (migratedRegion) agent.regionId = migratedRegion as AgentState["regionId"];
     agent.age = nextAge;
+    const foodRelief = years * 0.01 * Math.max(0, (foodSecurity - 0.75) / 0.25);
     agent.needs = {
       ...agent.needs,
-      food: clamp((agent.needs.food ?? 0.5) - years * 0.01),
+      food: clamp((agent.needs.food ?? 0.5) - years * 0.01 + foodRelief),
       belonging: clamp((agent.needs.belonging ?? 0.2) + years * 0.002),
     };
     agent.skills = {

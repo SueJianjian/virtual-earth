@@ -22,6 +22,8 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
       <div><dt>氧气</dt><dd>${format((metrics.oxygen ?? 0) * 100)}%</dd></div>
       <div><dt>家庭</dt><dd>${format(metrics.householdCount)}</dd></div>
       <div><dt>组织容量</dt><dd>${format(metrics.organizationCapacity)}</dd></div>
+      <div><dt>食物库存</dt><dd>${format(metrics.foodSurplus)}</dd></div>
+      <div><dt>食物保障</dt><dd>${format((metrics.foodSecurity ?? 0) * 100)}%</dd></div>
     </dl>
   `;
 };

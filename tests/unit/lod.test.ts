@@ -48,6 +48,7 @@ describe("conserved multi-scale state", () => {
     state.agents[2]!.knowledgeIds = ["knowledge:fire"];
     state.agents[2]!.beliefIds = ["belief:ancestors"];
     state.relationships.push(createRelationship("parent", state.agents[0]!.id, state.agents[2]!.id, 2, 0.9));
+    state.resources = [{ id: "resource:food:world", resourceId: "food", regionId: region, amount: 1, cap: 10, originEventId: "event:food" }];
     const delta = summarizeRegion(state, region);
     const summary = delta.lodEffects?.[0];
     expect(summary?.operation).toBe("upsert-summary");
@@ -58,6 +59,8 @@ describe("conserved multi-scale state", () => {
     expect(summary.summary.relationshipRecords.map((relationship) => relationship.id)).toEqual(state.relationships.map((relationship) => relationship.id));
     expect(summary.summary.lineage).toMatchObject({ descendantCount: 1, generationDepth: 2, knowledgeCarrierCount: 1, beliefCarrierCount: 1 });
     expect(summary.summary.lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1 });
+    expect(summary.summary.foodBalance).toBe(1);
+    expect(summary.summary.foodPerAgent).toBe(0.25);
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "remove")).toHaveLength(state.agents.length);
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "remove")).toHaveLength(state.relationships.length);
   });

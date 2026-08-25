@@ -25,6 +25,9 @@ describe("world persistence", () => {
     world.lod.summaries = [summarizeRegionState(world, "region:0:0" as never, "aggregate")];
     const legacy = JSON.parse(serializeWorld(world)) as { world: { lod: { summaries: Array<{ lineage?: unknown }> } } };
     delete legacy.world.lod.summaries[0]?.lineage;
+    delete (legacy.world.lod.summaries[0] as { foodBalance?: number; foodPerAgent?: number; foodSecurity?: number }).foodBalance;
+    delete (legacy.world.lod.summaries[0] as { foodBalance?: number; foodPerAgent?: number; foodSecurity?: number }).foodPerAgent;
+    delete (legacy.world.lod.summaries[0] as { foodBalance?: number; foodPerAgent?: number; foodSecurity?: number }).foodSecurity;
 
     const restored = deserializeWorld(JSON.stringify(legacy));
 
@@ -35,5 +38,6 @@ describe("world persistence", () => {
       beliefCarrierCount: 0,
       relationshipCounts: {},
     });
+    expect(restored.lod.summaries[0]).toMatchObject({ foodBalance: 0, foodPerAgent: 0, foodSecurity: 0 });
   });
 });

@@ -13,6 +13,7 @@ const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext =>
     meanTemperature: 0.5, meanHumidity: 0.6, waterCoverage: 0.4, nutrientLevel: 0.5, biomass: 0.3, oxygen: 0.1,
     populationCount: 80, cognitivePotential: 4, knowledgeDiversity: 5, beliefDiversity: 0, householdCount: 4, settlementDensity: 2,
     tradeVolume: 0, foodSurplus: 0, organizationCapacity: 20, resourceBalance: 0,
+    foodSecurity: 0,
   },
 });
 

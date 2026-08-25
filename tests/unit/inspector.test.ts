@@ -55,6 +55,9 @@ describe("region lineage inspector", () => {
       generationDepth: 2,
       knowledgeCarrierCount: 1,
       beliefCarrierCount: 1,
+      foodBalance: 0,
+      foodPerAgent: 0,
+      foodSecurity: 0,
     });
     expect(lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1, caregiver: 1, sibling: 1 });
     expect(lineage.families[0]?.memberCount).toBe(4);

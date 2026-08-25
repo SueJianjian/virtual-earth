@@ -21,6 +21,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("region:");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("知识承继");
+  await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("食物保障");
   await page.getByRole("button", { name: "单步推进" }).click();
   await expect(page.locator("#world-year")).toContainText("1 年");
   await page.getByRole("button", { name: "4×", exact: true }).click();
@@ -32,7 +33,9 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   await page.goto("/");
   await expect(page.locator("#world-map")).toBeVisible();
   await expect(page.locator(".right-rail")).toBeVisible();
+  await expect(page.locator("#simulation-status")).toHaveAttribute("data-state", "paused");
   await page.locator("#world-map").click({ position: { x: 120, y: 100 } });
+  await expect(page.locator("#inspector")).toContainText("region:");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);

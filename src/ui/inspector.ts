@@ -17,6 +17,9 @@ export type InspectorLineage = RegionLineageSummary & {
   population: number;
   relationshipCount: number;
   families: Array<{ id: string; memberCount: number }>;
+  foodBalance: number;
+  foodPerAgent: number;
+  foodSecurity: number;
   source: "aggregate" | "micro";
 };
 
@@ -30,6 +33,9 @@ export const lineageForSnapshot = (snapshot: WorldSnapshot): InspectorLineage =>
       population: summary.population,
       relationshipCount: summary.relationshipCount,
       families: summary.organizations.filter((organization) => organization.type === "family").map((family) => ({ id: family.id, memberCount: family.memberCount })),
+      foodBalance: summary.foodBalance,
+      foodPerAgent: summary.foodPerAgent,
+      foodSecurity: summary.foodSecurity,
       source: "aggregate",
     };
   }
@@ -42,6 +48,9 @@ export const lineageForSnapshot = (snapshot: WorldSnapshot): InspectorLineage =>
     population: agents.length,
     relationshipCount: relationships.length,
     families: projection?.organizations.filter((organization) => organization.type === "family").map((family) => ({ id: family.id, memberCount: family.memberIds.length })) ?? [],
+    foodBalance: summary?.foodBalance ?? 0,
+    foodPerAgent: summary?.foodPerAgent ?? 0,
+    foodSecurity: summary?.foodSecurity ?? 0,
     source: "micro",
   };
 };
@@ -78,6 +87,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
         ${relationshipLabels.map(([kind, label]) => `<span><i data-kind="${kind}"></i>${label}<strong>${format(lineage.relationshipCounts[kind] ?? 0)}</strong></span>`).join("")}
       </div>
       <div class="inheritance-note"><span>信念承继</span><strong>${format(lineage.beliefCarrierCount)} 名后代</strong></div>
+      <div class="food-security"><span>食物保障</span><strong>${format(lineage.foodBalance)} 单位 · 人均 ${format(lineage.foodPerAgent)} · ${(lineage.foodSecurity * 100).toFixed(0)}%</strong></div>
       <ol class="family-list" aria-label="区域家庭">${familyRows || "<li class=\"family-empty\">尚未形成稳定家庭</li>"}</ol>
     </section>
   `;

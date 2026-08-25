@@ -1,6 +1,7 @@
 import { hashString } from "../random.ts";
 import type { Distribution, OrganizationSummary, RegionId, RegionSummary, RelationshipState, WorldDelta, WorldState } from "../types.ts";
 import { summarizeLineage } from "./lineage.ts";
+import { meanFoodSecurity } from "../agents/food.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
 const distribution = (values: number[]): Distribution => ({ bins: values.reduce<Record<string, number>>((bins, value) => { const key = String(Math.max(0, Math.min(9, Math.floor(value * 10)))); bins[key] = (bins[key] ?? 0) + 1; return bins; }, {}) });
@@ -18,6 +19,9 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
   const relationshipRecords: RelationshipState[] = state.relationships.filter((relationship) => agentIds.includes(relationship.fromId) && agentIds.includes(relationship.toId)).map((relationship) => structuredClone(relationship));
   const relationshipIds = relationshipRecords.map((relationship) => relationship.id).sort();
   const lineage = summarizeLineage(agents, relationshipRecords);
+  const foodBalance = state.resources.filter((resource) => resource.resourceId === "food" && resource.regionId === regionId).reduce((sum, resource) => sum + resource.amount, 0);
+  const foodPerAgent = foodBalance / Math.max(1, agents.length);
+  const foodSecurity = meanFoodSecurity({ resources: state.resources, organizations, agents });
   const canonical = { regionId, mode, agents: agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: agent.parentIds, skills: agent.skills, knowledgeIds: agent.knowledgeIds, beliefIds: agent.beliefIds })).sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, lineage, resources: state.resources.filter((resource) => resource.regionId === regionId) };
   return {
     regionId,
@@ -34,6 +38,9 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     relationshipDigest: hashString(JSON.stringify(relationshipIds)).toString(16),
     relationshipRecords,
     lineage,
+    foodBalance,
+    foodPerAgent,
+    foodSecurity,
     resources: structuredClone(state.resources.filter((resource) => resource.regionId === regionId)),
     migrationRate: regionEvents.filter((event) => event.kind === "agent-migration").length / Math.max(1, agents.length),
     historyIds,

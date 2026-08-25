@@ -88,6 +88,8 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .relationship-breakdown strong { color: var(--ink); font-family: Georgia, serif; font-size: 12px; font-weight: 500; }
 .inheritance-note { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; color: var(--muted); font-size: 9px; }
 .inheritance-note strong { color: #c8cfca; font-weight: 500; }
+.food-security { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+.food-security strong { color: #d6b84b; font-weight: 500; text-align: right; }
 .family-list { margin: 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .family-list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 .family-list li strong { color: #c8cfca; font-weight: 500; }

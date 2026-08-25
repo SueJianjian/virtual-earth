@@ -1,5 +1,5 @@
 import { stepWorld, metricsFor } from "../sim/engine.ts";
-import { focusRegion } from "../sim/lod/index.ts";
+import { focusRegion, summarizeRegionState } from "../sim/lod/index.ts";
 import { deserializeWorld, serializeWorld } from "../persistence/serialize.ts";
 import { createWorld, worldDigest } from "../sim/world.ts";
 import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
@@ -33,7 +33,12 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
 
   const snapshot = (): WorldSnapshot => {
     const observation = state.observation;
-    const selectedRegion = observation.focusRegionId ? state.lod.summaries.find((summary) => summary.regionId === observation.focusRegionId) : undefined;
+    const storedSummary = observation.focusRegionId ? state.lod.summaries.find((summary) => summary.regionId === observation.focusRegionId) : undefined;
+    const selectedRegion = observation.focusRegionId
+      ? storedSummary?.mode === "aggregate"
+        ? storedSummary
+        : summarizeRegionState(state, observation.focusRegionId, storedSummary?.mode ?? "micro")
+      : undefined;
     const projection = observation.focusRegionId ? focusRegion(state, observation.focusRegionId).projection : observation.projection;
     return {
       tick: state.tick,

@@ -183,6 +183,7 @@ export type StateMetric =
   | "settlementDensity"
   | "tradeVolume"
   | "foodSurplus"
+  | "foodSecurity"
   | "organizationCapacity"
   | "resourceBalance";
 
@@ -309,6 +310,9 @@ export type RegionSummary = {
   relationshipDigest: string;
   relationshipRecords: RelationshipState[];
   lineage: RegionLineageSummary;
+  foodBalance: number;
+  foodPerAgent: number;
+  foodSecurity: number;
   resources: ResourceLedgerEntry[];
   migrationRate: number;
   historyIds: string[];

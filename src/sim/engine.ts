@@ -7,6 +7,7 @@ import { cultureStage } from "./culture/index.ts";
 import { societyStage } from "./society/index.ts";
 import { lodStage } from "./lod/index.ts";
 import { worldviewStage } from "./worldview/index.ts";
+import { meanFoodSecurity } from "./agents/food.ts";
 import { worldDigest } from "./world.ts";
 import type {
   EntityEffect,
@@ -72,6 +73,7 @@ export const metricsFor = (state: WorldState): Record<StateMetric, number> => ({
   foodSurplus: state.resources
     .filter((resource) => resource.resourceId === "food")
     .reduce((sum, resource) => sum + resource.amount, 0),
+  foodSecurity: meanFoodSecurity(state),
   organizationCapacity: state.organizations.reduce((sum, organization) => sum + organization.memberIds.length, 0),
   resourceBalance: state.resources.reduce((sum, resource) => sum + resource.amount, 0),
 });
