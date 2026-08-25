@@ -52,6 +52,24 @@ export const stepEnvironment = (
     );
   }
   delta.chemistryChanges = calculateChemistry(state);
+  const width = state.fields.elevation.width;
+  for (const event of input.externalEvents) {
+    const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
+    const match = /^region:(\d+):(\d+)$/.exec(region);
+    const x = Math.max(0, Math.min(width - 1, Number(match?.[1] ?? 0)));
+    const y = Math.max(0, Math.min(state.fields.elevation.height - 1, Number(match?.[2] ?? 0)));
+    const index = y * width + x;
+    const intensity = Math.max(0, Math.min(1, Number(event.payload.amount ?? event.probability)));
+    const addField = (field: "elevation" | "temperature" | "humidity" | "water" | "nutrients" | "biomass", value: number) => delta.fieldChanges.push({ field, index, operation: "add", value, causeRuleId: `user-${event.kind}` });
+    const addChemistry = (field: "carbon" | "nitrogen" | "phosphorus" | "organics" | "oxygen", value: number) => delta.chemistryChanges.push({ field, index, operation: "add", value, causeRuleId: `user-${event.kind}` });
+    if (event.kind === "raise-terrain") addField("elevation", intensity * 0.15);
+    else if (event.kind === "lower-terrain") addField("elevation", -intensity * 0.15);
+    else if (event.kind === "heat" || event.kind === "volcano" || event.kind === "meteor") addField("temperature", intensity * 0.18);
+    else if (event.kind === "cool" || event.kind === "cold-snap" || event.kind === "volcanic-winter") addField("temperature", -intensity * 0.18);
+    else if (event.kind === "add-rain") addField("humidity", intensity * 0.2);
+    else if (event.kind === "add-minerals" || event.kind === "earthquake") addField("nutrients", intensity * 0.2);
+    else if (event.kind === "add-organics" || event.kind === "seed-life") addChemistry("organics", intensity * 0.2);
+  }
   return delta;
 };
 

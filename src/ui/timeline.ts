@@ -7,6 +7,10 @@ const labelFor = (event: WorldEvent): string => ({
   "organization-formation": "组织形成",
   "agent-birth": "个体出生",
   "agent-death": "个体死亡",
+  "add-water": "用户增加水量",
+  heat: "用户升温",
+  volcano: "用户火山事件",
+  "add-organics": "用户增加有机物",
 }[event.kind] ?? event.kind);
 
 export const renderTimeline = (element: HTMLElement, events: WorldEvent[]): void => {
@@ -17,7 +21,7 @@ export const renderTimeline = (element: HTMLElement, events: WorldEvent[]): void
       <article class="timeline-item">
         <time>第 ${event.tick} 步</time>
         <strong>${labelFor(event)}</strong>
-        <span>${event.ruleId} · 概率 ${(event.probability * 100).toFixed(1)}%</span>
+        <span>${event.source === "user" ? "用户事件" : event.ruleId} · 概率 ${(event.probability * 100).toFixed(1)}%</span>
       </article>
     `).join("");
 };

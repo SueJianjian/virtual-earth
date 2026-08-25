@@ -7,6 +7,8 @@ import { layerLabels, type MapLayer } from "./ui/layers.ts";
 import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
 import { renderInspector } from "./ui/inspector.ts";
 import { renderTimeline } from "./ui/timeline.ts";
+import { bindTimeControls, downloadSave } from "./ui/controls.ts";
+import { createGodEvent, godToolLabels, type GodTool } from "./ui/god-mode.ts";
 
 const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("Application root was not found");
@@ -24,6 +26,9 @@ app.innerHTML = `
         <button id="play-button" class="icon-button primary" type="button" title="开始模拟" aria-label="开始模拟">▶</button>
         <button id="pause-button" class="icon-button" type="button" title="暂停模拟" aria-label="暂停模拟">Ⅱ</button>
         <button id="step-button" class="icon-button" type="button" title="单步推进" aria-label="单步推进">›</button>
+      </div>
+      <div class="speed-control" aria-label="模拟速度">
+        ${([1, 4, 16, 64] as const).map((speed, index) => `<button type="button" data-speed="${speed}" class="speed-button${index === 0 ? " active" : ""}">${speed}×</button>`).join("")}
       </div>
       <output id="simulation-status" class="connection-status" aria-live="polite">正在连接模拟核心</output>
     </header>
@@ -43,6 +48,10 @@ app.innerHTML = `
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
         <section class="rail-section inspector-section"><header><span>02</span><h2>区域检查</h2></header><div id="inspector"></div></section>
         <section class="rail-section timeline-section"><header><span>03</span><h2>演化记录</h2></header><div id="timeline"></div></section>
+        <section class="rail-section god-section"><header><span>04</span><h2>上帝模式</h2></header>
+          <div class="god-controls"><select id="god-tool" aria-label="选择世界事件">${(Object.entries(godToolLabels) as Array<[GodTool, string]>).map(([id, label]) => `<option value="${id}">${label}</option>`).join("")}</select><button id="god-apply" type="button">施加事件</button></div>
+          <div class="file-controls"><button id="save-button" type="button">保存世界</button><label for="load-input">加载世界</label><input id="load-input" type="file" accept="application/json" /></div>
+        </section>
       </aside>
     </main>
   </div>
@@ -80,6 +89,7 @@ const digest = query<HTMLElement>("#digest-label");
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
 let events: WorldEvent[] = [];
+let userEventOrdinal = 0;
 
 const map = createMapCanvas(canvas, (nextSelection) => {
   selection = nextSelection;
@@ -97,9 +107,19 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     query<HTMLElement>("#legend-label").textContent = layer === "natural" ? "海洋" : "低";
   });
 });
-query<HTMLButtonElement>("#play-button").addEventListener("click", () => client.send({ type: "start" }));
-query<HTMLButtonElement>("#pause-button").addEventListener("click", () => client.send({ type: "pause" }));
-query<HTMLButtonElement>("#step-button").addEventListener("click", () => client.send({ type: "step", count: 1 }));
+bindTimeControls(document, client);
+query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
+  const regionId = selection?.regionId ?? "region:0:0" as never;
+  const tool = query<HTMLSelectElement>("#god-tool").value as GodTool;
+  userEventOrdinal += 1;
+  client.send({ type: "applyEvent", event: createGodEvent(`user:${tool}:${snapshot?.tick ?? 0}:${userEventOrdinal}`, tool, regionId, 0.5, 1) });
+});
+query<HTMLButtonElement>("#save-button").addEventListener("click", () => client.send({ type: "save" }));
+query<HTMLInputElement>("#load-input").addEventListener("change", async (event) => {
+  const input = event.currentTarget as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) client.send({ type: "load", payload: await file.text() });
+});
 
 const applyMessage = (message: WorkerMessage): void => {
   if (message.type === "error") {
@@ -110,6 +130,11 @@ const applyMessage = (message: WorkerMessage): void => {
   if (message.type === "events") {
     events = [...events, ...message.events].filter((event, index, all) => all.findIndex((candidate) => candidate.id === event.id) === index);
     renderTimeline(timeline, events);
+    return;
+  }
+  if (message.type === "saved") {
+    downloadSave(message.payload);
+    status.textContent = `已保存 ${message.digest.slice(0, 8)}`;
     return;
   }
   if (message.type !== "snapshot") return;

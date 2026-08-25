@@ -21,6 +21,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("region:");
   await page.getByRole("button", { name: "单步推进" }).click();
   await expect(page.locator("#world-year")).toContainText("1 年");
+  await page.getByRole("button", { name: "4×", exact: true }).click();
+  await expect(page.getByRole("button", { name: "4×", exact: true })).toHaveClass(/active/);
 });
 
 test("keeps the map and panels usable on a narrow viewport", async ({ page }) => {
