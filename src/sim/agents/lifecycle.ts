@@ -69,7 +69,7 @@ export const eligibleAgentCount = (
 ): number => {
   const cognitive = species.traits.cognitivePotential ?? 0;
   if (population.count < 4 || cognitive < 0.3 || oxygen < 0.005 || biomass < 0.001) return 0;
-  return Math.min(64, Math.ceil(Math.sqrt(population.count) * cognitive * 0.55));
+  return Math.min(64, Math.ceil(Math.sqrt(population.count) * cognitive * 1.5));
 };
 
 const addRelationship = (
@@ -148,6 +148,16 @@ export const stepAgents = (
       const family = createFamily([first.id, second.id], first.regionId);
       if (!delta.entityEffects.some((effect) => effect.collection === "organizations" && effect.id === family.id)) {
         delta.entityEffects.push({ collection: "organizations", operation: "create", id: family.id, value: family });
+        delta.eventDrafts.push({
+          kind: "family-formation",
+          ruleId: "family-formation",
+          sourceIds: [first.id, second.id],
+          probability: clamp(affinity * 0.45),
+          roll: 0,
+          evidence: { affinity, members: family.memberIds.length },
+          payload: { familyId: family.id, memberIds: family.memberIds },
+          source: "natural",
+        });
       }
     }
   }

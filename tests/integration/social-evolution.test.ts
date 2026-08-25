@@ -11,4 +11,16 @@ describe("social evolution integration", () => {
     expect(result.state.organizations).toEqual([]);
     expect(result.state.agents).toEqual([]);
   });
+
+  it("forms relationships and families when an eligible population persists", () => {
+    let state = createWorld(123, { width: 16, height: 8 });
+    for (let index = 0; index < 950; index += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    }
+
+    expect(state.agents.length).toBeGreaterThanOrEqual(2);
+    expect(state.relationships.some((relationship) => relationship.kind === "partner")).toBe(true);
+    expect(state.organizations.some((organization) => organization.type === "family")).toBe(true);
+    expect(state.events.some((event) => event.kind === "family-formation")).toBe(true);
+  });
 });
