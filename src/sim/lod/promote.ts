@@ -1,5 +1,5 @@
 import { hashString } from "../random.ts";
-import type { EntityId, HotspotReason, OrganizationState, RegionId, WorldDelta, WorldState } from "../types.ts";
+import type { HotspotReason, RegionId, WorldDelta, WorldState } from "../types.ts";
 import { projectRegion } from "./expand.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });

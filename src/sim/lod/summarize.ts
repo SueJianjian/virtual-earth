@@ -1,5 +1,5 @@
 import { hashString } from "../random.ts";
-import type { Distribution, EntityEffect, OrganizationSummary, RegionId, RegionSummary, WorldDelta, WorldState } from "../types.ts";
+import type { Distribution, OrganizationSummary, RegionId, RegionSummary, WorldDelta, WorldState } from "../types.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
 const distribution = (values: number[]): Distribution => ({ bins: values.reduce<Record<string, number>>((bins, value) => { const key = String(Math.max(0, Math.min(9, Math.floor(value * 10)))); bins[key] = (bins[key] ?? 0) + 1; return bins; }, {}) });

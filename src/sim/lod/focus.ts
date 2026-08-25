@@ -1,5 +1,5 @@
 import { hashString } from "../random.ts";
-import type { AgentState, OrganizationState, ObservationState, RegionId, RegionProjection, RelationshipState, RegionSummary, WorldState } from "../types.ts";
+import type { ObservationState, RegionId, RegionProjection, WorldState } from "../types.ts";
 import { projectRegion } from "./expand.ts";
 
 const copy = <T>(value: T): T => structuredClone(value);
