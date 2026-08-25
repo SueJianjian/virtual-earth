@@ -179,13 +179,27 @@ export type StateMetric =
   | "resourceBalance";
 
 export type RuleContext = {
-  state: Readonly<WorldState>;
+  state: Readonly<Omit<WorldState, "tick" | "years" | "observation">>;
   random: RandomState;
   metrics: Record<StateMetric, number>;
   regionId?: RegionId;
 };
 
-export type RuleApplicationContext = RuleContext & { tick: number };
+export type StatePredicate = {
+  subject: "field" | "chemistry" | "population" | "culture" | "organization" | "resource";
+  metric: StateMetric;
+  operator: ">=" | "<=" | "==";
+  value: number;
+};
+
+export type EmergenceRule = {
+  id: string;
+  predicates: StatePredicate[];
+  evaluate(context: RuleContext): RuleDecision;
+  apply(context: RuleApplicationContext): RuleOutcome;
+};
+
+export type RuleApplicationContext = RuleContext;
 
 export type RuleDecision = {
   eligible: boolean;
