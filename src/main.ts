@@ -37,7 +37,7 @@ app.innerHTML = `
       <div class="segmented-control">
         ${layers.map(([id, label], index) => `<button type="button" data-layer="${id}" class="layer-button${index === 0 ? " active" : ""}">${label}</button>`).join("")}
       </div>
-      <div class="legend" aria-label="当前图层图例"><i></i><span id="legend-label">海洋</span><b></b><span>高地</span></div>
+      <div class="legend" aria-label="当前图层图例"><i></i><span id="legend-low">海洋</span><b></b><span id="legend-high">高地</span></div>
     </nav>
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
@@ -87,6 +87,8 @@ const status = query<HTMLOutputElement>("#simulation-status");
 const year = query<HTMLElement>("#world-year");
 const phase = query<HTMLElement>("#phase-label");
 const digest = query<HTMLElement>("#digest-label");
+const legendLow = query<HTMLElement>("#legend-low");
+const legendHigh = query<HTMLElement>("#legend-high");
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
 let events: WorldEvent[] = [];
@@ -105,7 +107,9 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     const layer = button.dataset.layer as MapLayer;
     map.setLayer(layer);
     document.querySelectorAll("[data-layer]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
-    query<HTMLElement>("#legend-label").textContent = layer === "natural" ? "海洋" : "低";
+    const legend: [string, string] = layer === "natural" ? ["海洋", "高地"] : layer === "foodSecurity" ? ["低保障", "高保障"] : ["低", "高"];
+    legendLow.textContent = legend[0];
+    legendHigh.textContent = legend[1];
   });
 });
 bindTimeControls(document, client);

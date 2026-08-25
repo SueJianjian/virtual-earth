@@ -19,6 +19,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.getByRole("button", { name: "温度" })).toHaveClass(/active/);
   await page.getByRole("button", { name: "食物保障" }).click();
   await expect(page.getByRole("button", { name: "食物保障" })).toHaveClass(/active/);
+  await expect(page.locator("#legend-low")).toHaveText("低保障");
+  await expect(page.locator("#legend-high")).toHaveText("高保障");
   await canvas.click({ position: { x: 120, y: 100 } });
   await expect(page.locator("#inspector")).toContainText("region:");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
