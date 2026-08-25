@@ -122,8 +122,9 @@ export const stepAgents = (
   for (const agent of agents.values()) {
     const nextAge = agent.age + years;
     const oldAgeRisk = nextAge >= agent.lifespan ? 1 : Math.max(0, (nextAge / agent.lifespan - 0.82) * 0.12);
-    const needRisk = Math.max(0, 0.5 - (agent.needs.food ?? 0)) * 0.02;
     const foodSecurity = foodSecurityForAgent(state, agent);
+    const hungerRisk = Math.max(0, 0.5 - (agent.needs.food ?? 0)) * 0.02;
+    const needRisk = hungerRisk * (1 - foodSecurity * 0.2);
     const [mortalityRoll] = randomFloat(forkRandom(state.random, `mortality:${agent.id}:${nextAge}`));
     if (mortalityRoll < oldAgeRisk + needRisk) {
       deadIds.add(agent.id);
