@@ -25,6 +25,28 @@ const emptyDelta = (): WorldDelta => ({
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const asEntityId = (value: string): EntityId => value as EntityId;
 
+const inheritFromParents = (
+  child: AgentState,
+  first: AgentState,
+  second: AgentState,
+  random: WorldState["random"],
+): AgentState => {
+  const transmissionRate = clamp(0.25 + ((first.skills.communication ?? 0) + (second.skills.communication ?? 0)) * 0.3, 0.25, 0.9);
+  const inheritedIds = (kind: "knowledge" | "belief", firstIds: string[], secondIds: string[]): string[] => {
+    const shared = new Set(firstIds.filter((id) => secondIds.includes(id)));
+    return [...new Set([...firstIds, ...secondIds])].sort().filter((id) => {
+      if (shared.has(id)) return true;
+      const [roll] = randomFloat(forkRandom(random, `inherit:${kind}:${child.id}:${id}`));
+      return roll < transmissionRate;
+    });
+  };
+  return {
+    ...child,
+    knowledgeIds: inheritedIds("knowledge", first.knowledgeIds, second.knowledgeIds),
+    beliefIds: inheritedIds("belief", first.beliefIds, second.beliefIds),
+  };
+};
+
 export const createAgent = (
   population: PopulationState,
   species: SpeciesState,
@@ -191,18 +213,27 @@ export const stepAgents = (
     const population = state.populations.find((candidate) => candidate.regionId === first.regionId);
     const species = population ? state.species.find((candidate) => candidate.id === population.speciesId) : undefined;
     if (!population || !species) continue;
-    const child = createAgent(population, species, agents.size, `birth:${family.id}:${state.tick}`, [first.id, second.id]);
+    const child = inheritFromParents(
+      createAgent(population, species, agents.size, `birth:${family.id}:${state.tick}`, [first.id, second.id]),
+      first,
+      second,
+      state.random,
+    );
     if (agents.has(child.id)) continue;
     agents.set(child.id, child);
-    delta.entityEffects.push({ collection: "agents", operation: "create", id: child.id, value: child });
+    const siblings = (familyMembers.get(family.id) ?? family.memberIds)
+      .map((memberId) => agents.get(memberId))
+      .filter((member): member is AgentState => Boolean(member && member.id !== first.id && member.id !== second.id && member.parentIds.includes(first.id) && member.parentIds.includes(second.id)))
+      .sort((left, right) => left.id.localeCompare(right.id));
     const childRelationships = [
       createRelationship("parent", first.id, child.id, state.tick + 1, 0.9),
       createRelationship("parent", second.id, child.id, state.tick + 1, 0.9),
       createRelationship("caregiver", first.id, child.id, state.tick + 1, 0.8),
+      createRelationship("caregiver", second.id, child.id, state.tick + 1, 0.8),
+      ...siblings.map((sibling) => createRelationship("sibling", sibling.id, child.id, state.tick + 1, 0.85)),
     ];
     for (const relationship of childRelationships) {
       relationshipMap.set(relationship.id, relationship);
-      delta.relationshipEffects.push({ operation: "create", relationship });
     }
     delta.entityEffects.push({
       collection: "organizations",
@@ -217,8 +248,8 @@ export const stepAgents = (
       sourceIds: [first.id, second.id, family.id],
       probability,
       roll,
-      evidence: { fertility, foodSecurity, familyMembers: family.memberIds.length },
-      payload: { agentId: child.id, familyId: family.id },
+      evidence: { fertility, foodSecurity, familyMembers: family.memberIds.length, inheritedKnowledge: child.knowledgeIds.length, inheritedBeliefs: child.beliefIds.length, siblings: siblings.length },
+      payload: { agentId: child.id, familyId: family.id, parentIds: child.parentIds },
       source: "natural",
     });
   }

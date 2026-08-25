@@ -48,6 +48,9 @@ event count and the final authoritative digest.
 - Organization rules are independent for clan, tribe, settlement, city, state,
   federation and empire. Higher-order organizations retain child organization
   IDs and recruit current local members during governance.
+- Children can inherit knowledge and beliefs from both parents. Births preserve
+  parent, caregiver and sibling links so long-running worlds retain
+  deterministic, auditable family lineages.
 - LOD summaries preserve region resources, organization history, source agent
   IDs and relationship records for deterministic read-only projections.
 - The same seed and commands reproduce the same digest and event history.

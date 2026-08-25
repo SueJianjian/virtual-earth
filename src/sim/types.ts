@@ -63,6 +63,7 @@ export type RelationshipState = {
     | "parent"
     | "partner"
     | "caregiver"
+    | "sibling"
     | "friend"
     | "rival"
     | "teacher"

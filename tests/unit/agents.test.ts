@@ -82,11 +82,17 @@ describe("agent emergence and lifecycle", () => {
     second.traits.fertility = 1;
     first.needs.food = 1;
     second.needs.food = 1;
+    first.knowledgeIds = ["knowledge:fire"];
+    second.knowledgeIds = ["knowledge:fire", "knowledge:tools"];
+    first.beliefIds = ["belief:ancestors"];
+    second.beliefIds = ["belief:seasons"];
+    const olderChild = createAgent(parentPopulation, species, 2, "older-child", [first.id, second.id]);
+    olderChild.age = 8;
     const relationship = createRelationship("partner", first.id, second.id, 0, 1);
     const family: OrganizationState = {
       id: "family:test" as OrganizationState["id"],
       type: "family" as const,
-      memberIds: [first.id, second.id],
+      memberIds: [first.id, second.id, olderChild.id],
       childOrganizationIds: [],
       regionId: parentPopulation.regionId,
       resources: {},
@@ -95,7 +101,7 @@ describe("agent emergence and lifecycle", () => {
     const deltas = worlds.map((world) => {
       world.species = [species];
       world.populations = [parentPopulation];
-      world.agents = [first, second];
+      world.agents = [first, second, olderChild];
       world.relationships = [relationship];
       world.organizations = [family];
       return stepAgents(world, emptyDelta(), 1);
@@ -103,7 +109,21 @@ describe("agent emergence and lifecycle", () => {
     expect(deltas.some((delta) => delta.entityEffects.some((effect) => effect.collection === "agents" && effect.operation === "create"))).toBe(true);
     expect(deltas.some((delta) => delta.eventDrafts.some((event) => event.kind === "agent-birth"))).toBe(true);
     const bornDelta = deltas.find((delta) => delta.eventDrafts.some((event) => event.kind === "agent-birth"));
-    expect(bornDelta?.entityEffects.some((effect) => effect.collection === "organizations" && effect.operation === "update" && effect.value?.memberIds.length === 3)).toBe(true);
+    const birthEvent = bornDelta?.eventDrafts.find((event) => event.kind === "agent-birth");
+    const childId = birthEvent?.payload.agentId;
+    const childEffect = bornDelta?.entityEffects.find((effect) => effect.collection === "agents" && effect.id === childId && effect.value);
+    const child = childEffect?.collection === "agents" ? childEffect.value : undefined;
+    expect(child?.parentIds).toEqual([first.id, second.id]);
+    expect(child?.knowledgeIds).toContain("knowledge:fire");
+    expect(child?.knowledgeIds.every((id) => first.knowledgeIds.includes(id) || second.knowledgeIds.includes(id))).toBe(true);
+    expect(birthEvent?.evidence.inheritedKnowledge).toBe(child?.knowledgeIds.length);
+    expect(birthEvent?.evidence.siblings).toBe(1);
+    expect(bornDelta?.relationshipEffects.filter((effect) => effect.operation === "create" && effect.relationship.kind === "caregiver" && effect.relationship.toId === childId)).toHaveLength(2);
+    expect(bornDelta?.relationshipEffects).toContainEqual(expect.objectContaining({
+      operation: "create",
+      relationship: expect.objectContaining({ kind: "sibling", fromId: olderChild.id, toId: childId }),
+    }));
+    expect(bornDelta?.entityEffects.some((effect) => effect.collection === "organizations" && effect.operation === "update" && effect.value?.memberIds.length === 4)).toBe(true);
   });
 
   it("moves agents with their migrated population delta", () => {
