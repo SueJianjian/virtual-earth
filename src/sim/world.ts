@@ -9,6 +9,7 @@ import type {
   WorldOptions,
   WorldState,
 } from "./types.ts";
+import { createWorldviewState } from "./worldview/registry.ts";
 
 const DEFAULT_WIDTH = 96;
 const DEFAULT_HEIGHT = 48;
@@ -100,11 +101,7 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
     cultures: [],
     organizations: [],
     resources: [],
-    worldview: {
-      enabledPackIds: [...(options.enabledPackIds ?? [])],
-      discoveredRuleIds: [],
-      entities: [],
-    },
+    worldview: createWorldviewState(options.enabledPackIds ?? []),
     events: [],
     lod: emptyLod,
     observation: emptyObservation,

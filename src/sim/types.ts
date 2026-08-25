@@ -215,7 +215,7 @@ export type RuleDecision = {
   reason: string;
 };
 
-export type RuleOutcome<T = unknown, D extends WorldDelta = WorldDelta> = {
+export type RuleOutcome<T = unknown, D extends Partial<WorldDelta> = WorldDelta> = {
   status: "applied" | "skipped";
   value?: T;
   delta: D;
@@ -249,6 +249,24 @@ export type SocietyContext = RuleContext & {
   candidateMemberIds: EntityId[];
 };
 export type WorldviewContext = RuleContext & { enabledPackIds: string[] };
+export type MotifDefinition = { id: string; tags: string[]; predicates: StatePredicate[] };
+export type ResourceDefinition = { id: string; cap: number; sinks: string[]; sources: string[] };
+export type EventTemplate = { id: string; kind: string; payloadKeys: string[] };
+export type WorldviewRule = {
+  id: string;
+  predicates: StatePredicate[];
+  evaluate(context: WorldviewContext): RuleDecision;
+  apply(context: RuleApplicationContext): RuleOutcome<WorldviewEffect, WorldviewDelta>;
+};
+export type WorldviewPack = {
+  id: string;
+  version: 1;
+  label: string;
+  motifs: MotifDefinition[];
+  resources: ResourceDefinition[];
+  rules: WorldviewRule[];
+  templates: EventTemplate[];
+};
 export type WorldEventInput = {
   id: string;
   kind: string;

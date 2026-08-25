@@ -6,6 +6,7 @@ import { agentsStage } from "./agents/index.ts";
 import { cultureStage } from "./culture/index.ts";
 import { societyStage } from "./society/index.ts";
 import { lodStage } from "./lod/index.ts";
+import { worldviewStage } from "./worldview/index.ts";
 import { worldDigest } from "./world.ts";
 import type {
   EntityEffect,
@@ -259,6 +260,7 @@ const installDefaultStages = (): void => {
   if (!stageRegistry.has(cultureStage.id)) registerSimulationStage(cultureStage);
   if (!stageRegistry.has(societyStage.id)) registerSimulationStage(societyStage);
   if (!stageRegistry.has(lodStage.id)) registerSimulationStage(lodStage);
+  if (!stageRegistry.has(worldviewStage.id)) registerSimulationStage(worldviewStage);
 };
 
 export const stepWorld = (state: WorldState, input: StepInput): { state: WorldState; events: WorldState["events"]; digest: string } => {
