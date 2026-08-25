@@ -139,6 +139,15 @@ const applyMessage = (message: WorkerMessage): void => {
   }
   if (message.type !== "snapshot") return;
   snapshot = message.snapshot;
+  if (message.snapshot.focusRegionId) {
+    const match = /^region:(\d+):(\d+)$/.exec(message.snapshot.focusRegionId);
+    if (match) {
+      const x = Number(match[1] ?? 0);
+      const y = Number(match[2] ?? 0);
+      selection = { x, y, index: y * message.snapshot.fields.elevation.width + x, regionId: message.snapshot.focusRegionId };
+    }
+  }
+  map.setSelection(selection);
   map.update(snapshot);
   renderStatusPanel(statusPanel, snapshot);
   renderInspector(inspector, snapshot, selection);

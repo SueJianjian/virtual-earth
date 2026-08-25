@@ -1,5 +1,5 @@
 import { hashString } from "../random.ts";
-import type { OrganizationId, OrganizationState, OrganizationType, RegionId, SocietyContext } from "../types.ts";
+import type { OrganizationId, OrganizationState, OrganizationType, RegionId, SocietyContext, WorldState } from "../types.ts";
 
 export const organizationIdFor = (
   type: OrganizationType,
@@ -36,10 +36,20 @@ export const organizationCapacity = (
     federation: 100_000,
     empire: 500_000,
   };
-  const resourceFactor = Math.max(0.1, Math.min(1, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + 1) / 10));
+  const ledgerResources = context.state.resources
+    .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
+    .reduce((sum, resource) => sum + resource.amount, 0);
+  const resourceFactor = Math.max(0.1, Math.min(1.5, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + ledgerResources + 1) / 10));
   const socialFactor = Math.max(0.25, Math.min(1.5, context.candidateMemberIds.length / Math.max(1, organization.memberIds.length)));
   return Math.max(minimumMembersFor(organization.type), Math.floor(base[organization.type] * resourceFactor * socialFactor));
 };
+
+export const organizationResourceTotal = (
+  state: Pick<WorldState, "resources">,
+  organization: OrganizationState,
+): number => state.resources
+  .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
+  .reduce((sum, resource) => sum + resource.amount, 0);
 
 export const minimumMembersFor = (type: OrganizationType): number => ({
   family: 2,

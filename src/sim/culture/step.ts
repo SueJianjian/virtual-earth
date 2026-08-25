@@ -1,4 +1,4 @@
-import { forkRandom, randomChance } from "../random.ts";
+import { forkRandom, randomChance, randomFloat } from "../random.ts";
 import type { CultureDelta, EntityEffect, WorldDelta, WorldState } from "../types.ts";
 import { createKnowledge, knowledgeKindsFor } from "./knowledge.ts";
 
@@ -46,13 +46,14 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
         transmissionRate: Math.max(0.05, Math.min(1, members.reduce((sum, agent) => sum + (agent.traits.sociality ?? 0), 0) / members.length * 0.6)),
       };
       cultures.set(culture.id, culture);
+      const [roll] = randomFloat(forkRandom(state.random, `culture:${regionId}:${members.length}`));
       delta.entityEffects.push({ collection: "cultures", operation: "create", id: culture.id, value: culture });
       delta.eventDrafts.push({
         kind: "culture-emergence",
         ruleId: "collective-learning",
         sourceIds: sortedIds,
         probability: 1,
-        roll: 0,
+        roll,
         evidence: { memberCount: members.length, regionId },
         payload: { cultureId: culture.id },
         source: "natural",

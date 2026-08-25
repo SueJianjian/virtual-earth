@@ -44,5 +44,8 @@ describe("social evolution integration", () => {
 
     expect(state.organizations.some((organization) => organization.status === "active" && organization.type === "city" && organization.memberIds.length >= 30)).toBe(true);
     expect(state.events.some((event) => event.kind === "organization-formation" && event.payload.type === "city")).toBe(true);
+    expect(state.events.some((event) => event.kind === "organization-trade")).toBe(true);
+    expect(state.resources.filter((resource) => resource.resourceId === "food").reduce((sum, resource) => sum + resource.amount, 0)).toBeGreaterThan(0);
+    expect(state.organizations.some((organization) => organization.type === "city" && organization.childOrganizationIds.length > 0)).toBe(true);
   }, 15_000);
 });

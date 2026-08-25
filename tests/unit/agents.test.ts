@@ -105,4 +105,27 @@ describe("agent emergence and lifecycle", () => {
     const bornDelta = deltas.find((delta) => delta.eventDrafts.some((event) => event.kind === "agent-birth"));
     expect(bornDelta?.entityEffects.some((effect) => effect.collection === "organizations" && effect.operation === "update" && effect.value?.memberIds.length === 3)).toBe(true);
   });
+
+  it("moves agents with their migrated population delta", () => {
+    const world = createWorld(25, { width: 8, height: 8 });
+    const species = createSpecies("migrant", "consumer");
+    const first = createAgent({ ...population, speciesId: species.id }, species, 0, "migration");
+    world.species = [species];
+    world.populations = [{ ...population, speciesId: species.id }];
+    world.agents = [first];
+    const ecology = emptyDelta();
+    ecology.entityEffects.push({
+      collection: "populations",
+      operation: "update",
+      id: population.id,
+      value: { ...population, speciesId: species.id, regionId: "region:1:0" as PopulationState["regionId"] },
+    });
+
+    const delta = stepAgents(world, ecology, 1);
+    expect(delta.entityEffects).toContainEqual(expect.objectContaining({
+      collection: "agents",
+      operation: "update",
+      value: expect.objectContaining({ regionId: "region:1:0" }),
+    }));
+  });
 });

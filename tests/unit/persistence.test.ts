@@ -9,7 +9,7 @@ describe("world persistence", () => {
     const restored = deserializeWorld(serializeWorld(world));
     expect(restored.fields.elevation.values).toBeInstanceOf(Float32Array);
     expect(worldDigest(restored)).toBe(worldDigest(world));
-    expect(restored.observation).toEqual({});
+    expect(restored.observation).toEqual({ focusRegionId: "region:1:1" });
     expect(restored.worldview.enabledPackIds).toEqual(["cultivation.path"]);
   });
 

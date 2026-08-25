@@ -1,3 +1,4 @@
+import { forkRandom, randomFloat } from "../random.ts";
 import { attemptAbiogenesis, attemptTrophicSpecies } from "./species.ts";
 import { nextPopulationCount, populationCellIndex, suitability } from "./populations.ts";
 import type {
@@ -32,6 +33,17 @@ const mergeDelta = (target: WorldDelta, source: WorldDelta): void => {
   target.resourceTransactions.push(...source.resourceTransactions);
   target.worldviewEffects.push(...source.worldviewEffects);
   target.eventDrafts.push(...source.eventDrafts);
+};
+
+const neighborRegion = (regionId: string, width: number, height: number): string | undefined => {
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  if (!match) return undefined;
+  const x = Number(match[1] ?? 0);
+  const y = Number(match[2] ?? 0);
+  if (x + 1 < width) return `region:${x + 1}:${y}`;
+  if (x > 0) return `region:${x - 1}:${y}`;
+  if (y + 1 < height) return `region:${x}:${y + 1}`;
+  return y > 0 ? `region:${x}:${y - 1}` : undefined;
 };
 
 export const stepEcology = (state: WorldState, context: RuleContext): EcologyDelta => {
@@ -72,11 +84,37 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       ? nutrients
       : Math.min(1, producerFood * (species.role === "consumer" ? 0.2 : 0.12));
     const count = nextPopulationCount(population, species, suitabilityScore, food);
+    let nextRegionId = population.regionId;
+    const candidateRegionId = neighborRegion(population.regionId, state.fields.elevation.width, state.fields.elevation.height);
+    if (suitabilityScore < 0.35 && candidateRegionId) {
+      const candidateMatch = /^region:(\d+):(\d+)$/.exec(candidateRegionId);
+      const candidateIndex = candidateMatch
+        ? Number(candidateMatch[2] ?? 0) * state.fields.elevation.width + Number(candidateMatch[1] ?? 0)
+        : index;
+      const candidateTemperature = state.fields.temperature.values[candidateIndex] ?? metrics.meanTemperature;
+      const candidateHumidity = state.fields.humidity.values[candidateIndex] ?? metrics.meanHumidity;
+      const candidateSuitability = suitability(species, candidateTemperature, candidateHumidity);
+      const migrationProbability = Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * 0.35));
+      const [roll] = randomFloat(forkRandom(state.random, `migration:${population.id}:${state.tick}`));
+      if (candidateSuitability > suitabilityScore + 0.1 && roll < migrationProbability) {
+        nextRegionId = candidateRegionId as typeof population.regionId;
+        delta.eventDrafts.push({
+          kind: "population-migration",
+          ruleId: "ecology:local-migration",
+          sourceIds: [population.id],
+          probability: migrationProbability,
+          roll,
+          evidence: { fromRegion: population.regionId, toRegion: candidateRegionId, suitability: suitabilityScore, destinationSuitability: candidateSuitability, mobility: species.traits.mobility ?? 0 },
+          payload: { populationId: population.id, fromRegion: population.regionId, toRegion: candidateRegionId },
+          source: "natural",
+        });
+      }
+    }
     delta.entityEffects.push({
       collection: "populations",
       operation: count <= 0.001 ? "remove" : "update",
       id: population.id,
-      ...(count > 0.001 ? { value: { ...population, count, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
+      ...(count > 0.001 ? { value: { ...population, regionId: nextRegionId, count, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
     });
     if (species.role === "producer") {
       delta.fieldChanges.push({
@@ -86,6 +124,19 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         value: Math.min(0.03, count * 0.000001),
         causeRuleId: "producer-growth",
       });
+      const foodAmount = Math.max(0, Math.min(4, count * suitabilityScore * 0.002));
+      if (foodAmount > 0.001) {
+        delta.resourceTransactions.push({
+          id: `resource:food:production:${state.tick}:${population.id}`,
+          resourceId: "food",
+          regionId: population.regionId,
+          amount: foodAmount,
+          operation: "mint",
+          source: "environment",
+          sourceId: population.id,
+          causeRuleId: "ecology:producer-food",
+        });
+      }
     }
   }
   return delta;

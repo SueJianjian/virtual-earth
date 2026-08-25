@@ -1,4 +1,4 @@
-import { forkRandom, hashString, randomChance } from "../random.ts";
+import { forkRandom, hashString, randomFloat } from "../random.ts";
 import type {
   OrganizationState,
   OrganizationType,
@@ -36,6 +36,17 @@ const eligibilityFor = (context: SocietyContext, type: OrganizationType): Eligib
   return { eligible: members.length >= 200 && activeOrganizations.filter((organization) => organization.type === "state").length >= 2 && knowledge >= 4, probability: Math.min(0.12, 0.005 + cooperation * 0.05), evidence };
 };
 
+const childTypesFor = (type: OrganizationType): OrganizationType[] => {
+  if (type === "clan") return ["family"];
+  if (type === "tribe") return ["family", "clan"];
+  if (type === "settlement") return ["family", "clan", "tribe"];
+  if (type === "city") return ["settlement", "tribe", "clan"];
+  if (type === "state") return ["city", "settlement"];
+  if (type === "federation") return ["state", "city"];
+  if (type === "empire") return ["state", "federation"];
+  return [];
+};
+
 export const attemptOrganizationFormation = (
   context: SocietyContext,
   type: OrganizationType,
@@ -43,9 +54,14 @@ export const attemptOrganizationFormation = (
   const eligibility = eligibilityFor(context, type);
   if (!eligibility.eligible) return { status: "skipped", delta: emptyDelta() };
   const sortedMembers = [...context.candidateMemberIds].sort();
-  const [success] = randomChance(forkRandom(context.random, `organization:${type}:${context.regionId}:${hashString(sortedMembers.join(":")).toString(16)}`), eligibility.probability);
-  if (!success) return { status: "skipped", delta: emptyDelta() };
-  const organization = createOrganization(type, context.regionId, sortedMembers);
+  const [roll] = randomFloat(forkRandom(context.random, `organization:${type}:${context.regionId}:${hashString(sortedMembers.join(":")).toString(16)}`));
+  if (roll >= eligibility.probability) return { status: "skipped", delta: emptyDelta() };
+  const childTypes = new Set(childTypesFor(type));
+  const childOrganizationIds = context.state.organizations
+    .filter((organization) => organization.regionId === context.regionId && organization.status === "active" && childTypes.has(organization.type))
+    .map((organization) => organization.id)
+    .sort();
+  const organization = createOrganization(type, context.regionId, sortedMembers, childOrganizationIds);
   const delta = emptyDelta();
   delta.entityEffects.push({ collection: "organizations", operation: "create", id: organization.id, value: organization });
   delta.eventDrafts.push({
@@ -53,9 +69,9 @@ export const attemptOrganizationFormation = (
     ruleId: `formation-${type}`,
     sourceIds: sortedMembers,
     probability: eligibility.probability,
-    roll: 0,
+    roll,
     evidence: { ...eligibility.evidence, eligible: true },
-    payload: { organizationId: organization.id, type },
+    payload: { organizationId: organization.id, type, childOrganizationIds },
     source: "natural",
   });
   return { status: "applied", value: organization, delta };

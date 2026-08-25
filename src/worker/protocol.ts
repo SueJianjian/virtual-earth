@@ -14,6 +14,7 @@ export type WorldSnapshot = {
   tick: number;
   years: number;
   digest: string;
+  focusRegionId?: RegionId;
   fields: WorldState["fields"];
   metrics: Record<string, number>;
   selectedRegion?: RegionSummary;

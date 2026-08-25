@@ -66,8 +66,12 @@ export const metricsFor = (state: WorldState): Record<StateMetric, number> => ({
   beliefDiversity: state.cultures.reduce((sum, culture) => sum + culture.beliefIds.length, 0),
   householdCount: state.organizations.filter((organization) => organization.type === "family").length,
   settlementDensity: state.organizations.filter((organization) => organization.type === "settlement" || organization.type === "city").length,
-  tradeVolume: 0,
-  foodSurplus: 0,
+  tradeVolume: state.events
+    .filter((event) => event.kind === "organization-trade")
+    .reduce((sum, event) => sum + Number(event.payload.amount ?? 0), 0),
+  foodSurplus: state.resources
+    .filter((resource) => resource.resourceId === "food")
+    .reduce((sum, resource) => sum + resource.amount, 0),
   organizationCapacity: state.organizations.reduce((sum, organization) => sum + organization.memberIds.length, 0),
   resourceBalance: state.resources.reduce((sum, resource) => sum + resource.amount, 0),
 });
@@ -140,6 +144,7 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
     const existing = findEntry(transaction.resourceId, transaction.regionId, holderId);
     if (existing) {
       existing.amount = Math.max(0, Math.min(existing.cap, existing.amount + amount));
+      existing.originEventId = originEventId;
       return;
     }
     if (amount < 0) throw new Error(`Insufficient resource balance: ${transaction.id}`);
@@ -270,7 +275,7 @@ export const stepWorld = (state: WorldState, input: StepInput): { state: WorldSt
   const priorDeltas = new Map<string, WorldDelta>();
   const merged = emptyDelta();
   for (const stage of listSimulationStages()) {
-    const delta = stage.run(structuredClone(previous), { ...input, externalEvents: acceptedExternalEvents }, priorDeltas);
+    const delta = stage.run(previous, { ...input, externalEvents: acceptedExternalEvents }, priorDeltas);
     priorDeltas.set(stage.id, delta);
     merged.fieldChanges.push(...delta.fieldChanges);
     merged.chemistryChanges.push(...delta.chemistryChanges);

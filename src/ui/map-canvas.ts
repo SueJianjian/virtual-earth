@@ -64,6 +64,7 @@ export const createMapCanvas = (
   return {
     update: (next: WorldSnapshot) => { snapshot = next; render(); },
     setLayer: (next: MapLayer) => { layer = next; render(); },
+    setSelection: (next: CellSelection | undefined) => { selection = next; render(); },
     getLayer: () => layer,
   };
 };

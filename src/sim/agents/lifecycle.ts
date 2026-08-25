@@ -1,4 +1,4 @@
-import { forkRandom, hashString, randomChance } from "../random.ts";
+import { forkRandom, hashString, randomFloat } from "../random.ts";
 import type {
   AgentsDelta,
   AgentState,
@@ -88,15 +88,26 @@ export const stepAgents = (
   const years = Math.max(0, elapsedYears);
   const agents = new Map(state.agents.map((agent) => [agent.id, structuredClone(agent)]));
   const deadIds = new Set<EntityId>();
+  const deathRolls: number[] = [];
+  const movedPopulations = new Map<string, string>();
+  for (const effect of _ecology.entityEffects) {
+    if (effect.collection === "populations" && effect.operation === "update" && effect.value) {
+      const previous = state.populations.find((population) => population.id === effect.id);
+      if (previous && previous.regionId !== effect.value.regionId) movedPopulations.set(String(effect.id), effect.value.regionId);
+    }
+  }
   for (const agent of agents.values()) {
     const nextAge = agent.age + years;
     const oldAgeRisk = nextAge >= agent.lifespan ? 1 : Math.max(0, (nextAge / agent.lifespan - 0.82) * 0.12);
     const needRisk = Math.max(0, 0.5 - (agent.needs.food ?? 0)) * 0.02;
-    const [dies] = randomChance(forkRandom(state.random, `mortality:${agent.id}:${nextAge}`), oldAgeRisk + needRisk);
-    if (dies) {
+    const [mortalityRoll] = randomFloat(forkRandom(state.random, `mortality:${agent.id}:${nextAge}`));
+    if (mortalityRoll < oldAgeRisk + needRisk) {
       deadIds.add(agent.id);
+      deathRolls.push(mortalityRoll);
       continue;
     }
+    const migratedRegion = movedPopulations.get(String(agent.populationId));
+    if (migratedRegion) agent.regionId = migratedRegion as AgentState["regionId"];
     agent.age = nextAge;
     agent.needs = {
       ...agent.needs,
@@ -121,8 +132,8 @@ export const stepAgents = (
     for (let ordinal = existing.length; ordinal < target; ordinal += 1) {
       const candidate = createAgent(population, species, ordinal, `${state.seed}:${state.tick}`);
       const probability = clamp(0.12 + (species.traits.cognitivePotential ?? 0) * 0.5);
-      const [accepted] = randomChance(forkRandom(state.random, `emergence:${candidate.id}`), probability);
-      if (accepted && !agents.has(candidate.id)) agents.set(candidate.id, candidate);
+      const [roll] = randomFloat(forkRandom(state.random, `emergence:${candidate.id}`));
+      if (roll < probability && !agents.has(candidate.id)) agents.set(candidate.id, candidate);
     }
   }
 
@@ -140,8 +151,9 @@ export const stepAgents = (
     const relationId = relationshipIdFor("partner", first.id, second.id);
     if (relationshipMap.has(relationId)) continue;
     const affinity = ((first.traits.sociality ?? 0) + (second.traits.sociality ?? 0) + (first.traits.cooperation ?? 0) + (second.traits.cooperation ?? 0)) / 4;
-    const [accepted] = randomChance(forkRandom(state.random, `partner:${first.id}:${second.id}`), clamp(affinity * 0.45));
-    if (!accepted) continue;
+    const probability = clamp(affinity * 0.45);
+    const [roll] = randomFloat(forkRandom(state.random, `partner:${first.id}:${second.id}`));
+    if (roll >= probability) continue;
     addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, state.tick + 1, affinity));
     const hasFamily = state.organizations.some((organization) => organization.type === "family" && organization.memberIds.includes(first.id) && organization.memberIds.includes(second.id));
     if (!hasFamily) {
@@ -152,8 +164,8 @@ export const stepAgents = (
           kind: "family-formation",
           ruleId: "family-formation",
           sourceIds: [first.id, second.id],
-          probability: clamp(affinity * 0.45),
-          roll: 0,
+          probability,
+          roll,
           evidence: { affinity, members: family.memberIds.length },
           payload: { familyId: family.id, memberIds: family.memberIds },
           source: "natural",
@@ -174,8 +186,8 @@ export const stepAgents = (
     const fertility = ((first.traits.fertility ?? 0) + (second.traits.fertility ?? 0)) / 2;
     const foodSecurity = ((first.needs.food ?? 0) + (second.needs.food ?? 0)) / 2;
     const probability = clamp(fertility * 0.16 + foodSecurity * 0.08);
-    const [born] = randomChance(forkRandom(state.random, `birth:${family.id}:${state.tick}`), probability);
-    if (!born) continue;
+    const [roll] = randomFloat(forkRandom(state.random, `birth:${family.id}:${state.tick}`));
+    if (roll >= probability) continue;
     const population = state.populations.find((candidate) => candidate.regionId === first.regionId);
     const species = population ? state.species.find((candidate) => candidate.id === population.speciesId) : undefined;
     if (!population || !species) continue;
@@ -204,7 +216,7 @@ export const stepAgents = (
       ruleId: "family-reproduction",
       sourceIds: [first.id, second.id, family.id],
       probability,
-      roll: 0,
+      roll,
       evidence: { fertility, foodSecurity, familyMembers: family.memberIds.length },
       payload: { agentId: child.id, familyId: family.id },
       source: "natural",
@@ -261,7 +273,7 @@ export const stepAgents = (
       ruleId: "agent-lifecycle",
       sourceIds: [...deadIds],
       probability: 1,
-      roll: 0,
+      roll: deathRolls.reduce((sum, value) => sum + value, 0) / Math.max(1, deathRolls.length),
       evidence: { deaths: deadIds.size },
       payload: { agentIds: [...deadIds] },
       source: "natural",

@@ -6,7 +6,7 @@ const encode = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(encode);
   if (value && typeof value === "object") {
     return Object.keys(value as Record<string, unknown>).reduce<Record<string, unknown>>((result, key) => {
-      if (key !== "observation") result[key] = encode((value as Record<string, unknown>)[key]);
+      result[key] = encode((value as Record<string, unknown>)[key]);
       return result;
     }, {});
   }
@@ -46,10 +46,19 @@ const validateWorld = (value: unknown): WorldState => {
   const requiredArrays: Array<keyof WorldState> = ["species", "populations", "agents", "knowledge", "relationships", "cultures", "organizations", "resources", "events"];
   if (!requiredArrays.every((key) => Array.isArray(world[key]))) throw new Error("Save contains invalid entity collections");
   if (!world.worldview || !world.lod) throw new Error("Save is missing worldview or LOD state");
-  return { ...world, observation: {} } as WorldState;
+  const lod = world.lod as WorldState["lod"];
+  const summaries = lod.summaries.map((summary) => ({
+    ...summary,
+    agentIds: Array.isArray((summary as Partial<WorldState["lod"]["summaries"][number]>).agentIds) ? (summary as Partial<WorldState["lod"]["summaries"][number]>).agentIds! : [],
+    relationshipRecords: Array.isArray((summary as Partial<WorldState["lod"]["summaries"][number]>).relationshipRecords) ? (summary as Partial<WorldState["lod"]["summaries"][number]>).relationshipRecords! : [],
+  }));
+  const focusRegionId = world.observation && typeof world.observation === "object" && typeof (world.observation as { focusRegionId?: unknown }).focusRegionId === "string"
+    ? (world.observation as { focusRegionId: WorldState["observation"]["focusRegionId"] }).focusRegionId
+    : undefined;
+  return { ...world, lod: { ...lod, summaries }, observation: focusRegionId ? { focusRegionId } : {} } as WorldState;
 };
 
-export const serializeWorld = (state: WorldState): string => JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, world: encode({ ...state, observation: {} }) });
+export const serializeWorld = (state: WorldState): string => JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, world: encode({ ...state, observation: state.observation.focusRegionId ? { focusRegionId: state.observation.focusRegionId } : {} }) });
 
 export const deserializeWorld = (input: string): WorldState => {
   let parsed: unknown;

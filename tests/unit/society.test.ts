@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createOrganization, organizationCapacity } from "../../src/sim/society/organization.ts";
 import { attemptOrganizationFormation } from "../../src/sim/society/formation.ts";
 import { governOrganization } from "../../src/sim/society/governance.ts";
+import { stepSociety } from "../../src/sim/society/step.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createWorld } from "../../src/sim/world.ts";
-import type { SocietyContext } from "../../src/sim/types.ts";
+import type { SocietyContext, WorldState } from "../../src/sim/types.ts";
 
 const makeContext = (seed: number, count: number): SocietyContext => {
   const state = createWorld(seed, { width: 8, height: 8 });
@@ -45,7 +46,7 @@ describe("emergent society", () => {
     const outcomes = Array.from({ length: 48 }, (_, index) => attemptOrganizationFormation(makeContext(50 + index, 12), "tribe"));
     const formed = outcomes.find((outcome) => outcome.status === "applied");
     expect(formed?.value?.type).toBe("tribe");
-    expect(formed?.value?.childOrganizationIds).toEqual([]);
+    expect(formed?.value?.childOrganizationIds.length).toBeGreaterThan(0);
   });
 
   it("reduces capacity with scarce resources and collapses after member loss", () => {
@@ -76,5 +77,69 @@ describe("emergent society", () => {
     expect(governOrganization(context.state, settlement).entityEffects).toContainEqual(
       expect.objectContaining({ value: expect.objectContaining({ status: "collapsed" }) }),
     );
+  });
+
+  it("keeps high-order organizations supplied by local members", () => {
+    const context = makeContext(73, 36);
+    const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds.slice(0, 2));
+    const delta = governOrganization(context.state, city);
+    expect(delta.entityEffects).toContainEqual(expect.objectContaining({
+      operation: "update",
+      value: expect.objectContaining({ memberIds: expect.arrayContaining(context.candidateMemberIds) }),
+    }));
+  });
+
+  it("records allocation, trade, and consumption through the resource ledger", () => {
+    const context = makeContext(74, 12);
+    const left = createOrganization("settlement", "region:0:0" as never, context.candidateMemberIds.slice(0, 8));
+    const right = createOrganization("settlement", "region:0:0" as never, context.candidateMemberIds.slice(4, 12));
+    const state = structuredClone(context.state) as WorldState;
+    state.organizations = [left, right];
+    state.resources = [{
+      id: "resource:food:world",
+      resourceId: "food",
+      regionId: "region:0:0" as never,
+      amount: 2,
+      cap: 10,
+      originEventId: "event:food",
+    }];
+
+    const delta = stepSociety(state, { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] }, { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
+    expect(delta.resourceTransactions.some((transaction) => transaction.operation === "transfer")).toBe(true);
+    expect(delta.resourceTransactions.some((transaction) => transaction.operation === "consume")).toBe(true);
+    expect(delta.eventDrafts.some((event) => event.kind === "organization-trade")).toBe(true);
+  });
+
+  it("can produce a deterministic organization conflict from eligible peers", () => {
+    const outcomes = Array.from({ length: 96 }, (_, seed) => {
+      const context = makeContext(90 + seed, 60);
+      const state = structuredClone(context.state) as WorldState;
+      state.organizations = [
+        createOrganization("city", "region:0:0" as never, context.candidateMemberIds.slice(0, 30)),
+        createOrganization("city", "region:0:0" as never, context.candidateMemberIds.slice(30, 60)),
+      ];
+      return stepSociety(state, { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] }, { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
+    });
+    const conflict = outcomes.find((delta) => delta.eventDrafts.some((event) => event.kind === "organization-conflict"));
+    expect(conflict?.relationshipEffects).toContainEqual(expect.objectContaining({ relationship: expect.objectContaining({ kind: "rival" }) }));
+    expect(conflict?.eventDrafts.find((event) => event.kind === "organization-conflict")?.roll).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps state, federation, and empire formation as independent evidence-based rules", () => {
+    const outcomes = (type: "state" | "federation" | "empire") => Array.from({ length: 96 }, (_, seed) => {
+      const context = makeContext(190 + seed, 220);
+      const state = structuredClone(context.state) as WorldState;
+      state.cultures[0]!.knowledgeIds = ["knowledge:1", "knowledge:2", "knowledge:3", "knowledge:4"];
+      const ids = context.candidateMemberIds;
+      state.organizations = type === "state"
+        ? [createOrganization("settlement", "region:0:0" as never, ids.slice(0, 30)), createOrganization("settlement", "region:0:0" as never, ids.slice(30, 60))]
+        : type === "federation"
+          ? [createOrganization("city", "region:0:0" as never, ids.slice(0, 30)), createOrganization("city", "region:0:0" as never, ids.slice(30, 60)), createOrganization("city", "region:0:0" as never, ids.slice(60, 90))]
+          : [createOrganization("state", "region:0:0" as never, ids.slice(0, 80)), createOrganization("state", "region:0:0" as never, ids.slice(80, 160))];
+      return attemptOrganizationFormation({ ...context, state }, type);
+    });
+    expect(outcomes("state").some((outcome) => outcome.status === "applied")).toBe(true);
+    expect(outcomes("federation").some((outcome) => outcome.status === "applied")).toBe(true);
+    expect(outcomes("empire").some((outcome) => outcome.status === "applied")).toBe(true);
   });
 });

@@ -50,6 +50,8 @@ describe("conserved multi-scale state", () => {
     if (summary?.operation !== "upsert-summary") return;
     expect(summary.summary.population).toBe(state.agents.length);
     expect(summary.summary.relationshipCount).toBe(state.relationships.length);
+    expect(summary.summary.agentIds).toHaveLength(state.agents.length);
+    expect(summary.summary.relationshipRecords.map((relationship) => relationship.id)).toEqual(state.relationships.map((relationship) => relationship.id));
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "remove")).toHaveLength(state.agents.length);
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "remove")).toHaveLength(state.relationships.length);
   });

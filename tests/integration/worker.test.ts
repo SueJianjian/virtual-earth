@@ -53,4 +53,18 @@ describe("simulation worker runtime", () => {
     restored.dispatch({ type: "load", payload: saved.payload });
     expect(worldDigest(restored.getState())).toBe(saved.digest);
   });
+
+  it("restores a read-only focus without changing the authoritative digest", () => {
+    const runtime = createSimulationRuntime(createWorld(135, { width: 8, height: 8 }));
+    runtime.dispatch({ type: "focusRegion", regionId: "region:2:3" as never });
+    const before = worldDigest(runtime.getState());
+    const saved = runtime.dispatch({ type: "save" })[0];
+    expect(saved?.type).toBe("saved");
+    if (saved?.type !== "saved") return;
+    const restored = createSimulationRuntime(createWorld(1, { width: 8, height: 8 }));
+    const messages = restored.dispatch({ type: "load", payload: saved.payload });
+    expect(messages[0]).toMatchObject({ type: "snapshot", snapshot: { focusRegionId: "region:2:3" } });
+    expect(worldDigest(restored.getState())).toBe(before);
+    expect(restored.getState().observation.projection?.readOnly).toBe(true);
+  });
 });

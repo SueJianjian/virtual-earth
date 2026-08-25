@@ -26,23 +26,41 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
     });
   }
   const relationships: RelationshipState[] = [];
-  const relationshipCount = Math.min(summary.relationshipCount, agents.length > 1 ? agents.length * 2 : 0);
-  for (let index = 0; index < relationshipCount; index += 1) {
-    const first = agents[index % agents.length];
-    const second = agents[(index + 1) % agents.length];
-    if (!first || !second) continue;
-    const relation: RelationshipState = {
-      id: `relationship:projection:${hashString(`${summary.canonicalDigest}:${index}`).toString(16)}`,
-      fromId: first.id,
-      toId: second.id,
-      kind: index < summary.householdCount ? "partner" : "friend",
-      strength: 0.4,
-      createdTick: version,
-      sourceEventId: `projection:${summary.canonicalDigest}`,
-    };
-    relationships.push(relation);
-    first.relationshipIds.push(relation.id);
-    second.relationshipIds.push(relation.id);
+  const sourceAgentIds = [...summary.agentIds].sort();
+  const projectedIdFor = new Map<string, EntityId>();
+  for (let index = 0; index < sourceAgentIds.length; index += 1) {
+    const projected = agents[index];
+    if (projected) projectedIdFor.set(sourceAgentIds[index]!, projected.id);
+  }
+  if (summary.relationshipRecords.length > 0) {
+    for (const source of summary.relationshipRecords) {
+      const fromId = projectedIdFor.get(source.fromId);
+      const toId = projectedIdFor.get(source.toId);
+      if (!fromId || !toId) continue;
+      const relation: RelationshipState = { ...source, fromId, toId };
+      relationships.push(relation);
+      agents.find((agent) => agent.id === fromId)?.relationshipIds.push(relation.id);
+      agents.find((agent) => agent.id === toId)?.relationshipIds.push(relation.id);
+    }
+  } else {
+    const relationshipCount = Math.min(summary.relationshipCount, agents.length > 1 ? agents.length * 2 : 0);
+    for (let index = 0; index < relationshipCount; index += 1) {
+      const first = agents[index % agents.length];
+      const second = agents[(index + 1) % agents.length];
+      if (!first || !second) continue;
+      const relation: RelationshipState = {
+        id: `relationship:projection:${hashString(`${summary.canonicalDigest}:${index}`).toString(16)}`,
+        fromId: first.id,
+        toId: second.id,
+        kind: index < summary.householdCount ? "partner" : "friend",
+        strength: 0.4,
+        createdTick: version,
+        sourceEventId: `projection:${summary.canonicalDigest}`,
+      };
+      relationships.push(relation);
+      first.relationshipIds.push(relation.id);
+      second.relationshipIds.push(relation.id);
+    }
   }
   const organizations: OrganizationState[] = [];
   for (const summaryOrganization of summary.organizations) {

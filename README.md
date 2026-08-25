@@ -39,6 +39,17 @@ event count and the final authoritative digest.
 - Abiogenesis, trophic species, individuals, families and organizations are
   conditional probabilistic outcomes. No fixed tick or stage name creates an
   entity.
+- Mobile populations can migrate toward better adjacent habitats, with agent
+  locations following the population delta and a causal migration event.
+- Producer populations mint food through the resource ledger. Society rules
+  allocate, trade and consume food with conservation checks and auditable
+  transactions; organization conflict, fragmentation and dissolution remain in
+  the event history.
+- Organization rules are independent for clan, tribe, settlement, city, state,
+  federation and empire. Higher-order organizations retain child organization
+  IDs and recruit current local members during governance.
+- LOD summaries preserve region resources, organization history, source agent
+  IDs and relationship records for deterministic read-only projections.
 - The same seed and commands reproduce the same digest and event history.
   Different seeds may remain sterile, diverge, stagnate, fragment or collapse.
 - Mythology and cultivation packs provide potential rules only. They do not

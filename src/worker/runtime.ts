@@ -38,6 +38,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       tick: state.tick,
       years: state.years,
       digest: worldDigest(state),
+      ...(observation.focusRegionId ? { focusRegionId: observation.focusRegionId } : {}),
       fields: cloneFields(state.fields),
       metrics: metricsFor(state),
       ...(selectedRegion ? { selectedRegion } : {}),
@@ -79,6 +80,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
         return [{ type: "saved", payload, digest: worldDigest(state) }];
       }
       const candidate = deserializeWorld(command.payload);
+      if (candidate.observation.focusRegionId) candidate.observation = focusRegion(candidate, candidate.observation.focusRegionId);
       state = candidate;
       paused = true;
       return messages();

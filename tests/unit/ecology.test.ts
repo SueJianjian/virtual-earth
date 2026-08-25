@@ -74,4 +74,49 @@ describe("emergent ecology", () => {
 
     expect(next.populations[0]?.count ?? 0).toBeLessThan(100);
   });
+
+  it("records producer food as an auditable environment transaction", () => {
+    const state = initializeEnvironment(createWorld(5, { width: 8, height: 8 }));
+    const species = {
+      id: "species:producer" as never,
+      role: "producer" as const,
+      traits: { energyUse: 0.1, reproduction: 0.2, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 0.1, cognitivePotential: 0 },
+    };
+    state.fields.temperature.values.fill(0.5);
+    state.fields.humidity.values.fill(0.5);
+    state.fields.nutrients.values.fill(1);
+    state.species.push(species);
+    state.populations.push({ id: "population:producer" as never, speciesId: species.id, regionId: "region:0:0" as never, count: 100, energy: 1 });
+
+    const delta = stepEcology(state, ecologyContext(state));
+    expect(delta.resourceTransactions).toContainEqual(expect.objectContaining({
+      resourceId: "food",
+      operation: "mint",
+      source: "environment",
+      causeRuleId: "ecology:producer-food",
+    }));
+  });
+
+  it("migrates a mobile population toward a better adjacent habitat", () => {
+    const outcomes = Array.from({ length: 64 }, (_, seed) => {
+      const state = initializeEnvironment(createWorld(20 + seed, { width: 8, height: 8 }));
+      const species = {
+        id: `species:migrant:${seed}` as never,
+        role: "producer" as const,
+        traits: { energyUse: 0.1, reproduction: 0.2, temperatureOptimum: 1, humidityOptimum: 1, mobility: 1, cognitivePotential: 0 },
+      };
+      state.fields.temperature.values.fill(0);
+      state.fields.humidity.values.fill(0);
+      state.fields.temperature.values[1] = 1;
+      state.fields.humidity.values[1] = 1;
+      state.species.push(species);
+      state.populations.push({ id: `population:migrant:${seed}` as never, speciesId: species.id, regionId: "region:0:0" as never, count: 100, energy: 1 });
+      return stepEcology(state, ecologyContext(state));
+    });
+
+    expect(outcomes.some((delta) => delta.eventDrafts.some((event) => event.kind === "population-migration"))).toBe(true);
+    const event = outcomes.flatMap((delta) => delta.eventDrafts).find((candidate) => candidate.kind === "population-migration");
+    expect(event?.evidence).toMatchObject({ fromRegion: "region:0:0", toRegion: "region:1:0" });
+    expect(event?.roll).toBeGreaterThanOrEqual(0);
+  });
 });
