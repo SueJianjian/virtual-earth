@@ -4,6 +4,7 @@ import { stepEnvironment } from "./environment/index.ts";
 import { stepEcology } from "./ecology/index.ts";
 import { agentsStage } from "./agents/index.ts";
 import { cultureStage } from "./culture/index.ts";
+import { societyStage } from "./society/index.ts";
 import { worldDigest } from "./world.ts";
 import type {
   EntityEffect,
@@ -242,6 +243,7 @@ const installDefaultStages = (): void => {
   }
   if (!stageRegistry.has(agentsStage.id)) registerSimulationStage(agentsStage);
   if (!stageRegistry.has(cultureStage.id)) registerSimulationStage(cultureStage);
+  if (!stageRegistry.has(societyStage.id)) registerSimulationStage(societyStage);
 };
 
 export const stepWorld = (state: WorldState, input: StepInput): { state: WorldState; events: WorldState["events"]; digest: string } => {

@@ -41,7 +41,7 @@ describe("rule engine and event ledger", () => {
     const world = createWorld(12, { width: 8, height: 8 });
     const result = stepWorld(world, { elapsedYears: 100, externalEvents: [] });
 
-    expect(listSimulationStages().map((stage) => stage.id)).toEqual(["environment", "ecology", "agents", "culture"]);
+    expect(listSimulationStages().map((stage) => stage.id)).toEqual(["environment", "ecology", "agents", "culture", "society"]);
     expect(result.state.tick).toBe(1);
     expect(result.state.years).toBe(100);
     expect(result.state.worldview.entities).toHaveLength(0);
@@ -93,6 +93,6 @@ describe("rule engine and event ledger", () => {
       }),
     });
     stepWorld(createWorld(14, { width: 8, height: 8 }), { elapsedYears: 1, externalEvents: [] });
-    expect(listSimulationStages().map((stage) => stage.id)).toEqual(["environment", "ecology", "agents", "extension", "culture"]);
+    expect(listSimulationStages().map((stage) => stage.id)).toEqual(["environment", "ecology", "agents", "extension", "culture", "society"]);
   });
 });
