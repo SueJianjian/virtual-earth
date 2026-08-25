@@ -15,8 +15,12 @@
 - 每个自主事件必须包含规则 ID、种子随机抽样、条件证据、来源实体、时间和位置；固定种子重跑时事件顺序和关键状态必须一致。
 - 个体、家庭、组织和超自然实体使用稳定 ID；形成、扩张、分裂、合并、迁徙、征服和消亡都保留事件历史。
 - 多尺度展开/汇总必须保持人口、资源、成员关系和关键历史的一致性，不得用精度切换凭空创造或删除人口。
+- 区域模拟模式是权威状态的一部分：`aggregate` 区域由统计状态演化，`micro` 区域由真实个体演化；用户聚焦只生成确定性的只读投影，不改变模式、不消耗模拟随机数、不写回世界。
+- 只有自然热点规则才能触发 `aggregate <-> micro`，模式切换必须有可复现事件、来源、条件证据和守恒校验；同一世界是否被用户观察不得改变权威 digest。
 - 神话包以公共文化母题和原创数据结构表达，不复制现代作品文本、角色设定、图片或受限制资源；无明确许可证的 GitHub 项目只作概念参考。
+- 世界观包只能提交受限效果和发现候选，不能提交任意路径 patch 或直接创建成熟实体；核心 reducer 必须重新验证条件、概率、来源和资源闭环。
 - 上帝模式只能提交世界事件，不允许 UI 直接修改模拟状态或直接宣布实体、文明、神迹、飞升成功。
+- 规则前置条件使用结构化状态谓词，不能引用派生阶段标签、绝对 tick 或唯一时间阈值；阶段标签只存在于 UI 读模型。
 - 地图和模拟核心解耦；模拟核心不依赖 DOM、Canvas、React 或浏览器全局对象。
 - 15 分钟是第一个生态/文化里程碑，不是模拟终点；测试必须支持继续运行、停滞、退化和灭亡。
 - 所有数值字段必须有明确边界；每个时间步执行水、能量、资源和人口守恒/边界检查。
@@ -143,38 +147,62 @@ export type WorldOptions = { width?: number; height?: number; enabledPackIds?: s
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
 export type OrganizationType = "family" | "clan" | "tribe" | "settlement" | "city" | "state" | "federation" | "empire";
-export type PhaseLabel = "primordial" | "oceanic" | "chemical" | "ecological" | "sapient" | "social" | "mythic" | "cultivation";
 export type HotspotReason = "user-focus" | "city" | "war" | "cultivation" | "mythic-event" | "disaster" | "rapid-change";
-export type WorldPatch = { target: string; operation: "set" | "add" | "remove"; value: unknown };
-export type WorldDelta = { patches: WorldPatch[]; events: WorldEvent[] };
-export type RuleContext = { state: Readonly<WorldState>; random: RandomState; tick: number; regionId?: RegionId };
+export type RegionMode = "aggregate" | "micro";
+export type FieldName = "elevation" | "temperature" | "humidity" | "water" | "nutrients" | "biomass";
+export type FieldChange = { field: FieldName; index: number; operation: "set" | "add"; value: number; causeRuleId: string };
+export type RelationshipState = { id: string; fromId: EntityId; toId: EntityId; kind: "parent" | "partner" | "caregiver" | "friend" | "rival" | "teacher" | "student"; strength: number; createdTick: number; sourceEventId: string };
+export type RelationshipEffect = { operation: "create" | "update" | "remove"; relationship: RelationshipState };
+export type EntityEffect =
+  | { collection: "species"; operation: "create" | "update" | "remove"; id: EntityId; value?: SpeciesState }
+  | { collection: "populations"; operation: "create" | "update" | "remove"; id: EntityId; value?: PopulationState }
+  | { collection: "agents"; operation: "create" | "update" | "remove"; id: EntityId; value?: AgentState }
+  | { collection: "cultures"; operation: "create" | "update" | "remove"; id: EntityId; value?: CultureState }
+  | { collection: "organizations"; operation: "create" | "update" | "remove"; id: OrganizationId; value?: OrganizationState }
+  | { collection: "worldviewEntities"; operation: "create" | "update" | "remove"; id: EntityId; value?: WorldviewEntityState };
+export type ResourceLedgerEntry = { id: string; resourceId: string; regionId: RegionId; holderId?: string; amount: number; cap: number; originEventId: string };
+export type ResourceTransaction = { id: string; resourceId: string; regionId: RegionId; amount: number; operation: "mint" | "transfer" | "consume" | "destroy"; source: "environment" | "culture" | "worldview" | "user"; sourceId: string; fromHolderId?: string; toHolderId?: string; causeRuleId: string };
+export type WorldEventDraft = { kind: string; ruleId: string; position?: [number, number]; sourceIds: string[]; probability: number; roll: number; evidence: Record<string, number | string | boolean>; payload: Record<string, unknown>; source: "natural" | "user" };
+export type WorldDelta = { fieldChanges: FieldChange[]; entityEffects: EntityEffect[]; relationshipEffects: RelationshipEffect[]; resourceTransactions: ResourceTransaction[]; worldviewEffects: WorldviewEffect[]; eventDrafts: WorldEventDraft[] };
+export type StateMetric = "meanTemperature" | "meanHumidity" | "waterCoverage" | "nutrientLevel" | "biomass" | "oxygen" | "populationCount" | "cognitivePotential" | "knowledgeDiversity" | "beliefDiversity" | "householdCount" | "settlementDensity" | "tradeVolume" | "foodSurplus" | "organizationCapacity" | "resourceBalance";
+export type RuleContext = { state: Readonly<WorldState>; random: RandomState; metrics: Record<StateMetric, number>; regionId?: RegionId };
+export type RuleApplicationContext = RuleContext & { tick: number };
 export type RuleDecision = { eligible: boolean; probability: number; evidence: Record<string, number | string | boolean>; reason: string };
-export type RuleOutcome<T = unknown> = { status: "applied" | "skipped"; value?: T; delta: WorldDelta; events: WorldEvent[] };
+export type RuleOutcome<T = unknown, D extends WorldDelta = WorldDelta> = { status: "applied" | "skipped"; value?: T; delta: D };
 export type EnvironmentInput = { solarFlux: number; externalEvents: WorldEvent[] };
 export type EnvironmentDelta = WorldDelta;
 export type EcologyDelta = WorldDelta;
 export type AgentsDelta = WorldDelta;
 export type CultureDelta = WorldDelta;
 export type SocietyDelta = WorldDelta;
-export type WorldviewDelta = WorldDelta;
+export type WorldviewDelta = Pick<WorldDelta, "worldviewEffects" | "resourceTransactions" | "eventDrafts">;
 export type StepInput = { elapsedYears: number; externalEvents: WorldEvent[] };
 export type StepResult = { state: WorldState; events: WorldEvent[]; digest: string };
 export type AgentContext = RuleContext & { candidateIds: EntityId[] };
 export type SocietyContext = RuleContext & { regionId: RegionId; candidateMemberIds: EntityId[] };
 export type WorldviewContext = RuleContext & { enabledPackIds: string[] };
-export type WorldEventInput = { kind: string; regionId: RegionId; intensity: number; duration: number; source: "user" | "natural" };
-export type RegionSummary = { regionId: RegionId; version: number; population: number; households: number; resources: Record<string, number>; organizationCounts: Record<OrganizationType, number>; historyIds: string[]; random: RandomState };
-export type LodState = { summaries: RegionSummary[]; expandedRegionIds: RegionId[]; hotspotReasons: Record<string, HotspotReason[]> };
+export type WorldEventInput = { id: string; kind: string; regionId: RegionId; intensity: number; duration: number; source: "user"; payload: Record<string, string | number | boolean> };
+export type Distribution = { bins: Record<string, number> };
+export type OrganizationSummary = { id: OrganizationId; type: OrganizationType; memberCount: number; childIds: OrganizationId[]; resourceIds: string[]; historyIds: string[] };
+export type RegionSummary = { regionId: RegionId; version: number; mode: RegionMode; population: number; populationByAge: Distribution; skillHistogram: Distribution; cultureHistogram: Distribution; householdCount: number; organizations: OrganizationSummary[]; relationshipDigest: string; resources: ResourceLedgerEntry[]; migrationRate: number; historyIds: string[]; random: RandomState; canonicalDigest: string };
+export type RegionProjection = { regionId: RegionId; sourceRevision: number; readOnly: true; generatedFromDigest: string; agents: AgentState[]; relationships: RelationshipState[]; organizations: OrganizationState[] };
+export type LodState = { summaries: RegionSummary[]; canonicalMicroRegionIds: RegionId[] };
+export type ObservationState = { focusRegionId?: RegionId; projection?: RegionProjection };
 export type SpeciesState = { id: EntityId; role: SpeciesRole; traits: Record<string, number>; parentId?: EntityId };
 export type PopulationState = { id: EntityId; speciesId: EntityId; regionId: RegionId; count: number; energy: number };
 export type AgentState = { id: EntityId; populationId: EntityId; regionId: RegionId; age: number; traits: Record<string, number>; relationshipIds: string[] };
-export type FamilyState = { id: OrganizationId; memberIds: EntityId[]; resourceShare: number; historyIds: string[] };
 export type CultureState = { id: EntityId; regionId: RegionId; knowledgeIds: string[]; beliefIds: string[]; transmissionRate: number };
 export type OrganizationState = { id: OrganizationId; type: OrganizationType; memberIds: EntityId[]; childOrganizationIds: OrganizationId[]; regionId: RegionId; resources: Record<string, number>; status: "active" | "migrating" | "fragmenting" | "collapsed" };
 export type WorldviewEntityState = { id: EntityId; packId: string; kind: string; regionId: RegionId; influence: number; resourceBalances: Record<string, number> };
-export type WorldviewState = { enabledPackIds: string[]; discoveredRuleIds: string[]; entities: WorldviewEntityState[]; resources: Record<string, number> };
+export type WorldviewEffect =
+  | { kind: "discover-motif"; packId: string; motifId: string; regionId: RegionId; evidence: Record<string, number | string | boolean> }
+  | { kind: "propagate-belief"; packId: string; beliefId: string; regionId: RegionId; sourceIds: EntityId[]; strength: number }
+  | { kind: "propose-entity"; packId: string; entityKind: "deity" | "sect" | "cultivation-path"; regionId: RegionId; evidence: Record<string, number | string | boolean>; probability: number }
+  | { kind: "resource-transaction"; transaction: ResourceTransaction };
+export type WorldviewState = { enabledPackIds: string[]; discoveredRuleIds: string[]; entities: WorldviewEntityState[] };
+export type SimulationStage = { id: string; order: number; run(state: Readonly<WorldState>, input: StepInput, priorDeltas: ReadonlyMap<string, WorldDelta>): WorldDelta };
 export type WorldEvent = {
-  id: string; tick: number; kind: string; ruleId: string; position?: [number, number];
+  id: string; tick: number; kind: string; ruleId: string; position?: [number, number]; source: "natural" | "user";
   sourceIds: string[]; probability: number; roll: number;
   evidence: Record<string, number | string | boolean>; payload: Record<string, unknown>;
 };
@@ -183,13 +211,13 @@ export type WorldState = {
   fields: { elevation: Grid; temperature: Grid; humidity: Grid; water: Grid; nutrients: Grid; biomass: Grid };
   chemistry: { carbon: Grid; nitrogen: Grid; phosphorus: Grid; organics: Grid; oxygen: Grid };
   species: SpeciesState[]; populations: PopulationState[];
-  agents: AgentState[]; families: FamilyState[]; cultures: CultureState[];
-  organizations: OrganizationState[]; worldview: WorldviewState;
-  events: WorldEvent[]; lod: LodState;
+  agents: AgentState[]; relationships: RelationshipState[]; cultures: CultureState[];
+  organizations: OrganizationState[]; resources: ResourceLedgerEntry[]; worldview: WorldviewState;
+  events: WorldEvent[]; lod: LodState; observation: ObservationState;
 };
 ```
 
-All module-specific deltas use `WorldDelta` and are applied by reducers in `src/sim/engine.ts`; modules may add narrow helper types but may not invent incompatible replacements for these shared contracts. `WorldEventInput` is the only input accepted from UI tools.
+All module-specific deltas use `WorldDelta` and are applied by typed reducers in `src/sim/engine.ts`; modules may add narrow helper types but may not invent incompatible replacements for these shared contracts. `WorldEventInput` is the only input accepted from UI tools, and its `id` is the single deduplication key. The engine is the only component that turns `eventDrafts` into final `WorldEvent` records.
 
 - [ ] **Step 2: Implement serializable deterministic randomness**
 
@@ -197,11 +225,11 @@ Use a small integer PRNG with explicit state, for example `xorshift32`, and impl
 
 - [ ] **Step 3: Implement blank-world construction**
 
-`createWorld` creates deterministic terrain-sized grids, empty `species`, `populations`, `agents`, `families`, `cultures`, `organizations` and `worldview.entities`, plus bounded inorganic chemistry. It must not call a helper that creates a deity, cultivation sect, human, family or city.
+`createWorld` creates deterministic terrain-sized grids, empty `species`, `populations`, `agents`, `relationships`, `cultures`, `organizations` and `worldview.entities`, plus bounded inorganic chemistry. The single top-level `resources` ledger starts empty; `ResourceDefinition` describes only possible sources/sinks and never grants initial supernatural resources. It must not call a helper that creates a deity, cultivation sect, human, family or city.
 
 - [ ] **Step 4: Test deterministic and blank invariants**
 
-Test that two worlds with the same seed have identical `worldDigest`, different seeds produce different terrain digests, `createWorld(1)` has zero agents and organizations, and all field values are finite and bounded.
+Test that two worlds with the same seed have identical `worldDigest`, different seeds produce different terrain digests, `createWorld(1)` has zero species, populations, agents, relationships, cultures, organizations, worldview entities and top-level resource ledger entries, and all field values are finite and bounded. Export `assertBlankWorld(state)` and reuse it after enabling all five worldview packs and after the first several steps in a deliberately ineligible world.
 
 - [ ] **Step 5: Commit the core state contract**
 
@@ -311,24 +339,24 @@ git commit -m "feat: add emergent ecology rules"
 - Create: `tests/integration/autonomy.test.ts`
 
 **Interfaces:**
-- Produces: `type EmergenceRule = { id: string; evaluate(context: RuleContext): RuleDecision; apply(context: RuleContext): RuleOutcome }`。
+- Produces: `type StatePredicate = { subject: "field" | "chemistry" | "population" | "culture" | "organization" | "resource"; metric: StateMetric; operator: ">=" | "<=" | "=="; value: number }` and `type EmergenceRule = { id: string; predicates: StatePredicate[]; evaluate(context: RuleContext): RuleDecision; apply(context: RuleApplicationContext): RuleOutcome }`。
 - Produces: `stepWorld(state: WorldState, input: StepInput): StepResult`。
-- Produces: `derivePhase(state: WorldState): PhaseLabel`，只用于显示。
+- Produces: `derivePhase(state: WorldState): DisplayPhase`，只用于显示。
 - Produces: `registerSimulationStage(stage: SimulationStage): void`，后续模块通过它接入调度顺序。
 
 - [ ] **Step 1: 实现条件证据和规则决策类型**
 
-`RuleDecision` 必须包含 `eligible`、`probability`、`evidence` 和 `reason`；`RuleOutcome` 必须包含 `events` 和可应用的 delta。规则不能读取当前时间作为唯一触发条件。
+在 `src/sim/events/phase.ts` 定义 `DisplayPhase = "primordial" | "oceanic" | "chemical" | "ecological" | "sapient" | "social" | "mythic" | "cultivation"`，并且只从当前状态计算。`RuleDecision` 必须包含 `eligible`、`probability`、`evidence` 和 `reason`；`RuleOutcome` 只包含 typed delta，不携带第二份事件数组。`StatePredicate` 只能引用白名单状态指标，不允许 `phase`、`tick`、`years` 或仅时间阈值。规则评估上下文不暴露时间；引擎在应用结果时才把当前 tick 写入事件草稿。
 
-在 `src/sim/types.ts` 增加 `SimulationStage = { id: string; order: number; run(state: Readonly<WorldState>, input: StepInput, priorDeltas: ReadonlyMap<string, WorldDelta>): WorldDelta }`。阶段注册表按 `order` 排序并拒绝重复 ID；Task 5 只注册 environment 和 ecology，Task 6 到 Task 9 在各自完成后注册 agents/culture、society、lod 和 worldview。阶段只能读取 previous snapshot 和只读的前序 delta，不能修改其他阶段的输入。
+在 `src/sim/types.ts` 增加 `SimulationStage = { id: string; order: number; run(state: Readonly<WorldState>, input: StepInput, priorDeltas: ReadonlyMap<string, WorldDelta>): WorldDelta }`。阶段注册表按 `order` 排序并拒绝重复 ID；Task 5 只注册 environment 和 ecology，Task 6 到 Task 9 在各自完成后注册 agents/culture、society、lod 和 worldview。阶段只能读取 previous snapshot 和只读的前序 delta，不能修改其他阶段的输入。`registerSimulationStage` 校验规则/阶段 ID 不能包含 `phase` 或时间门槛标记。
 
 - [ ] **Step 2: 实现事件账本**
 
-`appendEvent` 为每个事件生成稳定 ID，保存规则 ID、roll、条件证据、来源实体和位置；事件按 `(tick, id)` 排序，重复事件 ID 不得重复应用。账本提供 `eventsSince(tick)` 和 `digest()`。
+`appendEvent` 只接受一个已带 ID 的 `WorldEvent`；自然事件 ID 由 `ruleId + tick + sourceIds + roll` 的稳定哈希产生，用户事件直接使用 `WorldEventInput.id`。事件按 `(tick, id)` 排序，重复事件 ID 不得重复应用。账本提供 `eventsSince(tick)` 和 `digest()`；`WorldDelta` 的 `eventDrafts` 由引擎一次性物化并追加，任何规则不得另外写事件数组。
 
 - [ ] **Step 3: 实现可扩展的单步调度器**
 
-`stepWorld` 按注册表中的 `order` 调用当前阶段，并让每个阶段基于同一 previous snapshot 和只读前序 delta 产生自己的 delta；Task 5 的最小构建只运行 environment 和 ecology，后续任务通过 `registerSimulationStage` 接入 agents/culture、society、lod 和 worldview。最后统一合并 delta、边界检查、追加事件和更新 tick。不要在 `stepWorld` 中写 `if (tick === 500) createCity()` 这类按固定时间创建实体的逻辑。
+`stepWorld` 按注册表中的 `order` 调用当前阶段，并让每个阶段基于同一 previous snapshot 和只读前序 delta 产生自己的 delta；Task 5 的最小构建只运行 environment 和 ecology，后续任务通过 `registerSimulationStage` 接入 agents/culture、society、lod 和 worldview。最后由 typed reducers 校验 field/entity/relationship/resource/worldview effects，统一物化 event drafts、执行资源交易和边界检查，再更新 tick。不要在 `stepWorld` 中写 `if (tick === 500) createCity()` 这类按固定时间创建实体的逻辑。
 
 - [ ] **Step 4: 让阶段标签成为派生指标**
 
@@ -336,7 +364,7 @@ git commit -m "feat: add emergent ecology rules"
 
 - [ ] **Step 5: 编写自主性集成测试**
 
-测试同一种子运行 N 步产生相同 digest；不同种子产生不同事件摘要；初始事件账本没有神祇、宗门或城市；删除资源后组织可能退化；人为固定某个阶段标签不能生成实体；随机种子不会因为墙钟时间变化。
+测试同一种子运行 N 步产生相同 digest；不同种子产生不同事件摘要；初始事件账本没有神祇、宗门或城市；删除资源后组织可能退化；修改派生阶段标签或 tick 但保持权威状态相同不能改变形成资格或结果；随机种子不会因为墙钟时间变化；所有资源变化都能在资源交易账本中找到来源和去向。
 
 - [ ] **Step 6: 提交调度核心**
 
@@ -359,7 +387,7 @@ git commit -m "feat: add rule driven simulation engine"
 **Interfaces:**
 - Produces: `stepAgents(state: WorldState, ecology: EcologyDelta): AgentsDelta`。
 - Produces: `stepCulture(state: WorldState, agents: AgentsDelta): CultureDelta`。
-- Produces: `createFamilyIfEligible(context: AgentContext): RuleOutcome<FamilyState>`。
+- Produces: `createFamilyIfEligible(context: AgentContext): RuleOutcome<OrganizationState>`，返回 `OrganizationState.type = "family"`，不再维护第二套 `families` 数组。
 
 - [ ] **Step 1: 定义个体生命周期**
 
@@ -367,7 +395,7 @@ git commit -m "feat: add rule driven simulation engine"
 
 - [ ] **Step 2: 实现关系边和家庭形成**
 
-关系边包含类型、强度、创建 tick 和来源事件。只有亲缘、照护、资源共享或互助条件达到阈值时，家庭形成规则才有资格抽样；家庭成员死亡、迁移或资源崩溃会触发重组或解体。
+关系边统一存放在 `WorldState.relationships`，包含类型、强度、创建 tick 和来源事件；个体上的 `relationshipIds` 只是索引缓存。只有亲缘、照护、资源共享或互助条件达到阈值时，家庭组织形成规则才有资格抽样；家庭成员死亡、迁移或资源崩溃会触发重组或解体，不创建第二套家庭实体。
 
 - [ ] **Step 3: 实现知识和文化传播**
 
@@ -375,7 +403,7 @@ git commit -m "feat: add rule driven simulation engine"
 
 - [ ] **Step 4: 测试自主出现与死亡**
 
-使用合成智能种群测试个体能出生和死亡、家庭只在条件满足后形成、资源不足会降低出生和提高迁移/死亡、知识可以通过关系传播；使用空初始世界测试不会凭空出现个体。
+使用合成智能种群测试个体能出生和死亡、家庭组织只在条件满足后形成、资源不足会降低出生和提高迁移/死亡、知识可以通过关系传播；使用空初始世界测试不会凭空出现个体、关系或家庭组织。测试同一关系只能在 `relationships` 集合中拥有一个权威记录。
 
 - [ ] **Step 5: 提交个体文化切片**
 
@@ -435,29 +463,30 @@ git commit -m "feat: add emergent social organizations"
 - Create: `tests/integration/lod-conservation.test.ts`
 
 **Interfaces:**
-- Produces: `setHotspot(state: WorldState, region: RegionId, reason: HotspotReason): WorldState`。
-- Produces: `expandRegion(snapshot: RegionSummary, seed: number): ExpandedRegion`。
-- Produces: `summarizeRegion(region: ExpandedRegion): RegionSummary`。
+- Produces: `focusRegion(state: WorldState, region: RegionId): ObservationState`，只生成只读投影，不修改或返回新的权威 `WorldState`。
+- Produces: `projectRegion(summary: RegionSummary, version: number): RegionProjection`，只使用摘要中的 canonical digest 和稳定区域随机状态，不消耗模拟随机流。
+- Produces: `promoteRegion(state: WorldState, region: RegionId, reason: HotspotReason): WorldDelta`，仅供自然热点规则调用，负责可审计的 `aggregate -> micro` 模式切换。
+- Produces: `summarizeRegion(state: WorldState, region: RegionId): WorldDelta`，仅供自然退热点规则调用，负责可审计的 `micro -> aggregate` 模式切换。
 
 - [ ] **Step 1: 定义区域摘要与展开状态**
 
-摘要保存人口按年龄/技能/文化分布、家庭数量、组织图摘要、资源库存、迁徙率和关键历史；展开状态保存个体、家庭、关系和成员组织。两者都保存 region ID、版本和随机流状态。
+摘要是 `aggregate` 模式的权威状态，保存人口按年龄/技能/文化分布、家庭组织签名、组织成员摘要、关系 digest、资源账本条目、迁徙率、稳定历史 ID、canonical digest 和区域随机流。`micro` 模式的权威状态保存 `AgentState`、`RelationshipState`、family-type `OrganizationState`、其他组织和对应资源交易。`RegionProjection` 只是只读视图，不进入世界状态。
 
 - [ ] **Step 2: 实现热点选择**
 
-用户关注、城市、战争、宗门、神迹、灾害和快速人口/资源变化都可提升热点分数；分数只决定模拟精度，不改变实体生成概率和世界规则。
+城市、战争、宗门、神迹、灾害和快速人口/资源变化由世界规则提升热点分数并可能触发模式切换；用户关注只更新 `ObservationState`，不改变模拟精度、不改变随机流、不改变生成概率。
 
 - [ ] **Step 3: 实现确定性展开**
 
-使用摘要分布和区域专属随机流生成个体时，先分配稳定 ID，再按年龄、技能、家庭和组织约束匹配关系；相同摘要、seed 和版本必须得到相同展开结果。`src/sim/lod` 导出并注册 `order = 60` 的 `lod` 阶段。
+自然热点触发 `promoteRegion` 时，使用摘要、canonical digest、区域随机状态和版本重建稳定个体 ID、家庭关系和组织成员；同一权威状态只能得到同一 micro 状态。`focusRegion` 调用 `projectRegion` 时不得写回任何实体，也不能消费 `WorldState.random`。`src/sim/lod` 导出并注册 `order = 60` 的 `lod` 阶段。
 
 - [ ] **Step 4: 实现守恒汇总**
 
-`summarizeRegion` 聚合个体人口、资源、家庭、组织和事件，不丢失关键历史；汇总前后校验人口总数、资源总量、家庭成员数和关系端点数。
+自然退热点时，`summarizeRegion` 聚合权威个体人口、资源交易、家庭组织、组织成员和关系边，不丢失关键历史；汇总前后校验人口总数、资源总量、组织成员数、关系边 ID、随机状态和 canonical digest。用户取消聚焦不得调用它。
 
 - [ ] **Step 5: 测试切换不变量**
 
-展开再汇总应恢复原摘要的容差范围；摘要→展开→继续模拟→汇总不得改变人口/资源总量；不同热点原因不应改变随机世界的固定规则结果，只改变观察精度。
+只读 projection 的创建前后，权威 `worldDigest`、随机状态、人口、资源和事件账本完全一致；自然 `aggregate -> micro -> aggregate` 切换在相同规则流下恢复摘要的容差范围；模式切换期间人口、资源、组织成员、关系边和关键历史守恒；不同用户聚焦原因不应改变规则结果，只改变观察投影。
 
 - [ ] **Step 6: 提交多尺度切片**
 
@@ -488,14 +517,14 @@ git commit -m "feat: add conserved multi scale simulation"
 
 - [ ] **Step 1: 定义体系包契约**
 
-体系包只能读取上下文并提交 `WorldEvent`/delta，不得直接写入其他模块数组。规则必须声明出现条件、资源闭环、传播机制、冲突/融合规则和失败条件。
+体系包只能读取上下文并返回 `WorldviewEffect[]`，不得直接写入其他模块数组，也不得返回 `WorldPatch`/任意字符串路径。规则必须声明结构化状态谓词、资源闭环、传播机制、冲突/融合规则和失败条件。`propose-entity` 只能提交发现候选，核心 reducer 负责再次验证后才允许实体形成。
 
 ```ts
-export type MotifDefinition = { id: string; tags: string[]; prerequisites: string[] };
-export type ResourceDefinition = { id: string; initial: number; cap: number; sinks: string[]; sources: string[] };
+export type MotifDefinition = { id: string; tags: string[]; predicates: StatePredicate[] };
+export type ResourceDefinition = { id: string; cap: number; sinks: string[]; sources: string[] };
 export type WorldviewRule = {
-  id: string; prerequisites: string[]; evaluate(context: WorldviewContext): RuleDecision;
-  apply(context: WorldviewContext): RuleOutcome<WorldviewEntityState>;
+  id: string; predicates: StatePredicate[]; evaluate(context: WorldviewContext): RuleDecision;
+  apply(context: RuleApplicationContext): RuleOutcome<WorldviewEffect, WorldviewDelta>;
 };
 export type EventTemplate = { id: string; kind: string; payloadKeys: string[] };
 export type WorldviewPack = {
@@ -506,7 +535,7 @@ export type WorldviewPack = {
 
 - [ ] **Step 2: 实现注册表和空初始状态**
 
-注册五个示范包，但 `createWorldviewState` 只保存启用包 ID、已发现规则和空实体/组织列表；开局不得调用创建神祇、宗门、功法或修士的构造器。`src/sim/worldview` 导出并注册 `order = 70` 的 `worldview` 阶段。
+注册五个示范包，但 `createWorldviewState` 只保存启用包 ID、已发现规则、空实体列表和空资源账本；`ResourceDefinition` 不提供初始余额，开局资源必须为零或来自环境/文化规则。开局不得调用创建神祇、宗门、功法或修士的构造器。`src/sim/worldview` 导出并注册 `order = 70` 的 `worldview` 阶段。
 
 - [ ] **Step 3: 添加四个神话母题包**
 
@@ -518,7 +547,7 @@ export type WorldviewPack = {
 
 - [ ] **Step 5: 测试体系自主性与互操作**
 
-启用全部包创建世界时，实体列表仍为空；在合成条件下可生成一次可追踪发现事件；相同种子可复现、不同种子可不出现；体系资源耗尽时可衰退/消亡；神话包和修真包可通过事件互相影响但不能直接改对方内部状态。
+启用全部包创建世界并运行首个时间步时，物种、种群、个体、关系、组织、体系实体和体系资源账本仍遵守空初始约束；在合成条件下可生成一次可追踪发现候选，但只有核心 reducer 验证通过才形成实体；相同种子可复现、不同种子可不出现；体系资源耗尽时可衰退/消亡；神话包和修真包只能通过受限效果和资源交易互相影响，不能直接改对方内部状态。测试资源总量、来源和去向守恒。
 
 - [ ] **Step 6: 提交体系切片**
 
@@ -541,13 +570,13 @@ git commit -m "feat: add emergent mythology and cultivation packs"
 - Create: `tests/integration/worker.test.ts`
 
 **Interfaces:**
-- Produces: `WorkerCommand = { type: "start" } | { type: "pause" } | { type: "step"; count: number } | { type: "setSpeed"; multiplier: 1 | 4 | 16 | 64 } | { type: "applyEvent"; eventId: string; event: WorldEventInput } | { type: "focusRegion"; regionId: RegionId } | { type: "save" } | { type: "load"; payload: string }`。
+- Produces: `WorkerCommand = { type: "start" } | { type: "pause" } | { type: "step"; count: number } | { type: "setSpeed"; multiplier: 1 | 4 | 16 | 64 } | { type: "applyEvent"; event: WorldEventInput } | { type: "focusRegion"; regionId: RegionId } | { type: "save" } | { type: "load"; payload: string }`。
 - Produces: `WorkerMessage = { type: "snapshot"; snapshot: WorldSnapshot } | { type: "events"; events: WorldEvent[] } | { type: "error"; code: string; message: string } | { type: "saved"; payload: string; digest: string }`。
 - Produces: `serializeWorld(state: WorldState): string` 和 `deserializeWorld(input: string): WorldState`。
 
 - [ ] **Step 1: 定义严格消息协议**
 
-在 `src/worker/protocol.ts` 同时定义 `WorldSnapshot = { tick: number; years: number; digest: string; fields: WorldState["fields"]; metrics: Record<string, number>; selectedRegion?: RegionSummary }` 和 `WorkerClient = { send(command: WorkerCommand): void; subscribe(listener: (message: WorkerMessage) => void): () => void }`。所有控制命令使用可判别联合类型，事件命令携带唯一 event ID；Worker 不接收 DOM 对象或回调。重复 event ID 返回 `duplicate` 而不是再次应用。
+在 `src/worker/protocol.ts` 同时定义 `WorldSnapshot = { tick: number; years: number; digest: string; fields: WorldState["fields"]; metrics: Record<string, number>; selectedRegion?: RegionSummary; projection?: RegionProjection }` 和 `WorkerClient = { send(command: WorkerCommand): void; subscribe(listener: (message: WorkerMessage) => void): () => void }`。所有控制命令使用可判别联合类型，`WorldEventInput.id` 是唯一事件 ID 来源；Worker 不接收 DOM 对象或回调。重复 event ID 返回 `duplicate` 而不是再次应用。`focusRegion` 只返回只读 projection，不能调用 promotion/summarization 或改变权威 digest。
 
 - [ ] **Step 2: 实现 Worker 模拟循环**
 
@@ -555,7 +584,7 @@ Worker 维护唯一 `WorldState` 和 speed/paused 状态，按固定逻辑时间
 
 - [ ] **Step 3: 实现 JSON 编解码**
 
-将 TypedArray 编码为普通数组或 base64 字段，保留 version、seed、random、稳定 ID、LOD 状态、事件证据和体系状态；加载时拒绝未知版本并保留当前世界。
+将 TypedArray 编码为普通数组或 base64 字段，保留 version、seed、random、稳定 ID、LOD 权威模式、区域摘要/微观状态、资源账本、事件证据和体系状态；观察 projection 只保存来源 digest 或直接丢弃并按摘要重建，不能作为权威状态保存；加载时拒绝未知版本并保留当前世界。
 
 - [ ] **Step 4: 测试暂停、恢复、保存和加载**
 
@@ -629,7 +658,7 @@ git commit -m "feat: add world map and observation panels"
 - Modify: `tests/e2e/world-render.spec.ts`
 
 **Interfaces:**
-- Produces: `GodTool = "raise-terrain" | "lower-terrain" | "add-water" | "add-rain" | "heat" | "cool" | "volcano" | "earthquake" | "meteor" | "add-minerals" | "add-organics" | "seed-life" | "drought" | "flood" | "cold-snap" | "volcanic-winter"` and `createGodEvent(tool: GodTool, region: RegionId, intensity: number, duration: number): WorldEventInput`。
+- Produces: `GodTool = "raise-terrain" | "lower-terrain" | "add-water" | "add-rain" | "heat" | "cool" | "volcano" | "earthquake" | "meteor" | "add-minerals" | "add-organics" | "seed-life" | "drought" | "flood" | "cold-snap" | "volcanic-winter"` and `createGodEvent(id: string, tool: GodTool, region: RegionId, intensity: number, duration: number): WorldEventInput`。
 - Consumes: `WorkerClient.send(command: WorkerCommand): void`。
 
 - [ ] **Step 1: 实现时间控制**
@@ -642,7 +671,7 @@ git commit -m "feat: add world map and observation panels"
 
 - [ ] **Step 3: 实现上帝模式事件工具**
 
-地形、水文、气候、地质、资源、生命和灾害工具只创建 `WorldEventInput`；事件带位置、强度、持续时间、来源 `user` 和唯一 ID，由环境/生态/社会规则产生后续影响。UI 不得直接调用 `state.fields.water.values[index] = 1`。
+地形、水文、气候、地质、资源、生命和灾害工具只创建带稳定 `id` 的 `WorldEventInput`；事件带位置、强度、持续时间、来源 `user`，由环境/生态/社会规则产生后续影响。UI 不得直接调用 `state.fields.water.values[index] = 1`。
 
 - [ ] **Step 4: 测试干预的连锁影响**
 
