@@ -38,7 +38,7 @@ export const organizationCapacity = (
   };
   const resourceFactor = Math.max(0.1, Math.min(1, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + 1) / 10));
   const socialFactor = Math.max(0.25, Math.min(1.5, context.candidateMemberIds.length / Math.max(1, organization.memberIds.length)));
-  return Math.floor(base[organization.type] * resourceFactor * socialFactor);
+  return Math.max(minimumMembersFor(organization.type), Math.floor(base[organization.type] * resourceFactor * socialFactor));
 };
 
 export const minimumMembersFor = (type: OrganizationType): number => ({

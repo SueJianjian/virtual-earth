@@ -58,4 +58,23 @@ describe("emergent society", () => {
     const delta = governOrganization(reducedState, organization);
     expect(delta.entityEffects).toContainEqual(expect.objectContaining({ operation: "update", value: expect.objectContaining({ status: "collapsed" }) }));
   });
+
+  it("preserves enough baseline capacity for a valid organization", () => {
+    const context = makeContext(71, 4);
+    const family = createOrganization("family", "region:0:0" as never, context.candidateMemberIds.slice(0, 2));
+
+    expect(organizationCapacity(family, context)).toBeGreaterThanOrEqual(2);
+    expect(governOrganization(context.state, family).entityEffects).not.toContainEqual(
+      expect.objectContaining({ value: expect.objectContaining({ status: "fragmenting" }) }),
+    );
+  });
+
+  it("collapses an organization below its type-specific member floor", () => {
+    const context = makeContext(72, 4);
+    const settlement = createOrganization("settlement", "region:0:0" as never, context.candidateMemberIds);
+
+    expect(governOrganization(context.state, settlement).entityEffects).toContainEqual(
+      expect.objectContaining({ value: expect.objectContaining({ status: "collapsed" }) }),
+    );
+  });
 });

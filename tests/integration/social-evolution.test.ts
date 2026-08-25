@@ -23,4 +23,16 @@ describe("social evolution integration", () => {
     expect(state.organizations.some((organization) => organization.type === "family")).toBe(true);
     expect(state.events.some((event) => event.kind === "family-formation")).toBe(true);
   });
+
+  it("rebuilds active higher-order organizations after earlier groups collapse", () => {
+    let state = createWorld(123, { width: 16, height: 8 });
+    for (let index = 0; index < 1_100; index += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    }
+
+    const activeOrganizations = state.organizations.filter((organization) => organization.status === "active");
+    expect(activeOrganizations.some((organization) => organization.type === "tribe" && organization.memberIds.length >= 6)).toBe(true);
+    expect(activeOrganizations.some((organization) => organization.type === "settlement" && organization.memberIds.length >= 8)).toBe(true);
+    expect(state.events.filter((event) => event.kind === "organization-formation").length).toBeGreaterThan(1);
+  });
 });

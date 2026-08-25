@@ -217,7 +217,7 @@ export const stepAgents = (
       collection: "organizations",
       operation: "update",
       id: family.id,
-      value: { ...family, memberIds: members, status: members.length < 2 ? "collapsed" : family.status },
+      value: { ...family, memberIds: members, status: members.length < 2 ? "collapsed" : "active" },
     });
   }
 

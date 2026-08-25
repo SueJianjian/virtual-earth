@@ -36,7 +36,11 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
     ids.push(agent.id);
     regions.set(agent.regionId, ids);
   }
-  const existing = new Set(state.organizations.map((organization) => `${organization.type}:${organization.regionId}`));
+  const existing = new Set(
+    state.organizations
+      .filter((organization) => organization.status !== "collapsed")
+      .map((organization) => `${organization.type}:${organization.regionId}`),
+  );
   const types: OrganizationType[] = ["clan", "tribe", "settlement", "city", "state", "federation", "empire"];
   for (const [regionId, memberIds] of [...regions.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     for (const type of types) {

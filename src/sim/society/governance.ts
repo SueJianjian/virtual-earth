@@ -1,6 +1,6 @@
 import { forkRandom, randomChance } from "../random.ts";
 import type { OrganizationState, RelationshipState, WorldDelta, WorldState } from "../types.ts";
-import { organizationCapacity } from "./organization.ts";
+import { minimumMembersFor, organizationCapacity } from "./organization.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -12,9 +12,10 @@ export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "ye
   const members = organization.memberIds.filter((id) => state.agents.some((agent) => agent.id === id));
   const context = { state, random: state.random, metrics: {} as never, regionId: organization.regionId, candidateMemberIds: members };
   const capacity = organizationCapacity(organization, context);
+  const minimumMembers = minimumMembersFor(organization.type);
   const resourceTotal = Object.values(organization.resources).reduce((sum, value) => sum + value, 0);
-  const stable = members.length >= 2 && members.length <= capacity && resourceTotal >= 0;
-  const status = stable ? "active" : members.length < 2 ? "collapsed" : "fragmenting";
+  const stable = members.length >= minimumMembers && members.length <= capacity && resourceTotal >= 0;
+  const status = stable ? "active" : members.length < minimumMembers ? "collapsed" : "fragmenting";
   if (members.length !== organization.memberIds.length || status !== organization.status) {
     delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: { ...organization, memberIds: members, status } });
   }
