@@ -78,6 +78,7 @@ describe("simulation worker runtime", () => {
     const runtime = createSimulationRuntime(state);
     const snapshot = runtime.dispatch({ type: "focusRegion", regionId: region })[0];
     expect(snapshot?.type === "snapshot" && snapshot.snapshot.selectedRegion).toMatchObject({ foodBalance: 2, foodPerAgent: 0.2, foodSecurity: 0.4 });
+    expect(snapshot?.type === "snapshot" && snapshot.snapshot.foodSecurityByRegion?.[region]).toBe(0.4);
   });
 
   it("restores saves and preserves the current world on load errors", () => {

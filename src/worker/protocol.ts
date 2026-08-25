@@ -17,6 +17,7 @@ export type WorldSnapshot = {
   focusRegionId?: RegionId;
   fields: WorldState["fields"];
   metrics: Record<string, number>;
+  foodSecurityByRegion?: Record<string, number>;
   selectedRegion?: RegionSummary;
   projection?: RegionProjection;
 };

@@ -7,6 +7,27 @@ import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 import type { WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
+const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
+  const foodBalances = new Map<string, number>();
+  for (const resource of state.resources) {
+    if (resource.resourceId !== "food") continue;
+    foodBalances.set(resource.regionId, (foodBalances.get(resource.regionId) ?? 0) + resource.amount);
+  }
+  const agentCounts = new Map<string, number>();
+  for (const agent of state.agents) agentCounts.set(agent.regionId, (agentCounts.get(agent.regionId) ?? 0) + 1);
+  const populationCounts = new Map<string, number>();
+  for (const population of state.populations) populationCounts.set(population.regionId, (populationCounts.get(population.regionId) ?? 0) + population.count);
+  const summaryCounts = new Map<string, number>(state.lod.summaries.map((summary): [string, number] => [summary.regionId, summary.population]));
+  const result: Record<string, number> = {};
+  for (let y = 0; y < state.fields.elevation.height; y += 1) {
+    for (let x = 0; x < state.fields.elevation.width; x += 1) {
+      const regionId = `region:${x}:${y}`;
+      const populationCount = agentCounts.get(regionId) || summaryCounts.get(regionId) || populationCounts.get(regionId) || 0;
+      result[regionId] = foodSecurityFromBalance(foodBalances.get(regionId) ?? 0, populationCount);
+    }
+  }
+  return result;
+};
 const eventFromInput = (state: WorldState, input: WorldEventInput): WorldEvent => ({
   id: input.id,
   tick: state.tick,
@@ -62,6 +83,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       ...(observation.focusRegionId ? { focusRegionId: observation.focusRegionId } : {}),
       fields: cloneFields(state.fields),
       metrics: metricsFor(state),
+      foodSecurityByRegion: foodSecurityByRegion(state),
       ...(selectedRegion ? { selectedRegion } : {}),
       ...(projection ? { projection: structuredClone(projection) } : {}),
     };
