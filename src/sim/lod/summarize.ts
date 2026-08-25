@@ -1,5 +1,6 @@
 import { hashString } from "../random.ts";
 import type { Distribution, OrganizationSummary, RegionId, RegionSummary, RelationshipState, WorldDelta, WorldState } from "../types.ts";
+import { summarizeLineage } from "./lineage.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
 const distribution = (values: number[]): Distribution => ({ bins: values.reduce<Record<string, number>>((bins, value) => { const key = String(Math.max(0, Math.min(9, Math.floor(value * 10)))); bins[key] = (bins[key] ?? 0) + 1; return bins; }, {}) });
@@ -16,7 +17,8 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
   const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({ id: organization.id, type: organization.type, memberCount: organization.memberIds.length, childIds: [...organization.childOrganizationIds], resourceIds: Object.keys(organization.resources).sort(), historyIds: regionEvents.filter((event) => event.sourceIds.includes(organization.id) || event.payload.organizationId === organization.id).map((event) => event.id).sort() }));
   const relationshipRecords: RelationshipState[] = state.relationships.filter((relationship) => agentIds.includes(relationship.fromId) && agentIds.includes(relationship.toId)).map((relationship) => structuredClone(relationship));
   const relationshipIds = relationshipRecords.map((relationship) => relationship.id).sort();
-  const canonical = { regionId, mode, agents: agents.map((agent) => ({ id: agent.id, age: agent.age, skills: agent.skills, knowledgeIds: agent.knowledgeIds })).sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, resources: state.resources.filter((resource) => resource.regionId === regionId) };
+  const lineage = summarizeLineage(agents, relationshipRecords);
+  const canonical = { regionId, mode, agents: agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: agent.parentIds, skills: agent.skills, knowledgeIds: agent.knowledgeIds, beliefIds: agent.beliefIds })).sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, lineage, resources: state.resources.filter((resource) => resource.regionId === regionId) };
   return {
     regionId,
     version: state.tick,
@@ -31,6 +33,7 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     relationshipCount: relationshipIds.length,
     relationshipDigest: hashString(JSON.stringify(relationshipIds)).toString(16),
     relationshipRecords,
+    lineage,
     resources: structuredClone(state.resources.filter((resource) => resource.regionId === regionId)),
     migrationRate: regionEvents.filter((event) => event.kind === "agent-migration").length / Math.max(1, agents.length),
     historyIds,

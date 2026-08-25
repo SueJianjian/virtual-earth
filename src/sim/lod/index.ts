@@ -2,6 +2,7 @@ import type { SimulationStage } from "../types.ts";
 import { stepLod } from "./step.ts";
 
 export { focusRegion, projectMicroRegion } from "./focus.ts";
+export { summarizeLineage } from "./lineage.ts";
 export { projectRegion } from "./expand.ts";
 export { promoteRegion } from "./promote.ts";
 export { summarizeRegion, summarizeRegionState } from "./summarize.ts";

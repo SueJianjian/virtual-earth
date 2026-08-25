@@ -47,11 +47,24 @@ const validateWorld = (value: unknown): WorldState => {
   if (!requiredArrays.every((key) => Array.isArray(world[key]))) throw new Error("Save contains invalid entity collections");
   if (!world.worldview || !world.lod) throw new Error("Save is missing worldview or LOD state");
   const lod = world.lod as WorldState["lod"];
-  const summaries = lod.summaries.map((summary) => ({
-    ...summary,
-    agentIds: Array.isArray((summary as Partial<WorldState["lod"]["summaries"][number]>).agentIds) ? (summary as Partial<WorldState["lod"]["summaries"][number]>).agentIds! : [],
-    relationshipRecords: Array.isArray((summary as Partial<WorldState["lod"]["summaries"][number]>).relationshipRecords) ? (summary as Partial<WorldState["lod"]["summaries"][number]>).relationshipRecords! : [],
-  }));
+  const summaries = lod.summaries.map((summary) => {
+    const partial = summary as Partial<WorldState["lod"]["summaries"][number]>;
+    const agentIds = Array.isArray(partial.agentIds) ? partial.agentIds : [];
+    const relationshipRecords = Array.isArray(partial.relationshipRecords) ? partial.relationshipRecords : [];
+    const relationshipCounts = relationshipRecords.reduce<WorldState["lod"]["summaries"][number]["lineage"]["relationshipCounts"]>((counts, relationship) => {
+      counts[relationship.kind] = (counts[relationship.kind] ?? 0) + 1;
+      return counts;
+    }, {});
+    const descendantIds = new Set(relationshipRecords.filter((relationship) => relationship.kind === "parent").map((relationship) => relationship.toId));
+    const lineage = partial.lineage ?? {
+      descendantCount: descendantIds.size,
+      generationDepth: agentIds.length === 0 ? 0 : descendantIds.size > 0 ? 2 : 1,
+      knowledgeCarrierCount: 0,
+      beliefCarrierCount: 0,
+      relationshipCounts,
+    };
+    return { ...summary, agentIds, relationshipRecords, lineage };
+  });
   const focusRegionId = world.observation && typeof world.observation === "object" && typeof (world.observation as { focusRegionId?: unknown }).focusRegionId === "string"
     ? (world.observation as { focusRegionId: WorldState["observation"]["focusRegionId"] }).focusRegionId
     : undefined;

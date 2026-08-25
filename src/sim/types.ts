@@ -287,6 +287,13 @@ export type OrganizationSummary = {
   resourceIds: string[];
   historyIds: string[];
 };
+export type RegionLineageSummary = {
+  descendantCount: number;
+  generationDepth: number;
+  knowledgeCarrierCount: number;
+  beliefCarrierCount: number;
+  relationshipCounts: Partial<Record<RelationshipState["kind"], number>>;
+};
 export type RegionSummary = {
   regionId: RegionId;
   version: number;
@@ -301,6 +308,7 @@ export type RegionSummary = {
   relationshipCount: number;
   relationshipDigest: string;
   relationshipRecords: RelationshipState[];
+  lineage: RegionLineageSummary;
   resources: ResourceLedgerEntry[];
   migrationRate: number;
   historyIds: string[];

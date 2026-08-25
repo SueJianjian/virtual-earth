@@ -34,6 +34,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
   const snapshot = (): WorldSnapshot => {
     const observation = state.observation;
     const selectedRegion = observation.focusRegionId ? state.lod.summaries.find((summary) => summary.regionId === observation.focusRegionId) : undefined;
+    const projection = observation.focusRegionId ? focusRegion(state, observation.focusRegionId).projection : observation.projection;
     return {
       tick: state.tick,
       years: state.years,
@@ -42,7 +43,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       fields: cloneFields(state.fields),
       metrics: metricsFor(state),
       ...(selectedRegion ? { selectedRegion } : {}),
-      ...(observation.projection ? { projection: structuredClone(observation.projection) } : {}),
+      ...(projection ? { projection: structuredClone(projection) } : {}),
     };
   };
   const messages = (): WorkerMessage[] => [{ type: "snapshot", snapshot: snapshot(), paused, speed }];

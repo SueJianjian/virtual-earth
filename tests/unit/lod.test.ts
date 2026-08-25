@@ -44,6 +44,10 @@ describe("conserved multi-scale state", () => {
 
   it("summarizes population and relationships without losing the source counts", () => {
     const state = populatedWorld();
+    state.agents[2]!.parentIds = [state.agents[0]!.id, state.agents[1]!.id];
+    state.agents[2]!.knowledgeIds = ["knowledge:fire"];
+    state.agents[2]!.beliefIds = ["belief:ancestors"];
+    state.relationships.push(createRelationship("parent", state.agents[0]!.id, state.agents[2]!.id, 2, 0.9));
     const delta = summarizeRegion(state, region);
     const summary = delta.lodEffects?.[0];
     expect(summary?.operation).toBe("upsert-summary");
@@ -52,6 +56,8 @@ describe("conserved multi-scale state", () => {
     expect(summary.summary.relationshipCount).toBe(state.relationships.length);
     expect(summary.summary.agentIds).toHaveLength(state.agents.length);
     expect(summary.summary.relationshipRecords.map((relationship) => relationship.id)).toEqual(state.relationships.map((relationship) => relationship.id));
+    expect(summary.summary.lineage).toMatchObject({ descendantCount: 1, generationDepth: 2, knowledgeCarrierCount: 1, beliefCarrierCount: 1 });
+    expect(summary.summary.lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1 });
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "remove")).toHaveLength(state.agents.length);
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "remove")).toHaveLength(state.relationships.length);
   });

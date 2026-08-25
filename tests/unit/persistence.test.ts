@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deserializeWorld, serializeWorld } from "../../src/persistence/serialize.ts";
+import { summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 
 describe("world persistence", () => {
@@ -17,5 +18,22 @@ describe("world persistence", () => {
     expect(() => deserializeWorld("not-json")).toThrow("valid JSON");
     expect(() => deserializeWorld(JSON.stringify({ schemaVersion: 2, world: {} }))).toThrow("Unsupported");
     expect(() => deserializeWorld(JSON.stringify({ schemaVersion: 1, world: {} }))).toThrow("missing required fields");
+  });
+
+  it("adds conservative lineage defaults to older region summaries", () => {
+    const world = createWorld(121, { width: 8, height: 8 });
+    world.lod.summaries = [summarizeRegionState(world, "region:0:0" as never, "aggregate")];
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { lod: { summaries: Array<{ lineage?: unknown }> } } };
+    delete legacy.world.lod.summaries[0]?.lineage;
+
+    const restored = deserializeWorld(JSON.stringify(legacy));
+
+    expect(restored.lod.summaries[0]?.lineage).toEqual({
+      descendantCount: 0,
+      generationDepth: 0,
+      knowledgeCarrierCount: 0,
+      beliefCarrierCount: 0,
+      relationshipCounts: {},
+    });
   });
 });

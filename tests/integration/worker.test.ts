@@ -39,6 +39,14 @@ describe("simulation worker runtime", () => {
     expect(worldDigest(runtime.getState())).toBe(before);
   });
 
+  it("refreshes the focused projection after authoritative steps", () => {
+    const runtime = createSimulationRuntime(createWorld(136, { width: 8, height: 8 }));
+    const focused = runtime.dispatch({ type: "focusRegion", regionId: "region:1:1" as never })[0];
+    const stepped = runtime.dispatch({ type: "step", count: 1 })[0];
+    expect(focused?.type === "snapshot" && focused.snapshot.projection?.sourceRevision).toBe(0);
+    expect(stepped?.type === "snapshot" && stepped.snapshot.projection?.sourceRevision).toBe(1);
+  });
+
   it("restores saves and preserves the current world on load errors", () => {
     const runtime = createSimulationRuntime(createWorld(133, { width: 8, height: 8 }));
     runtime.dispatch({ type: "step", count: 2 });

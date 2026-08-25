@@ -53,6 +53,9 @@ event count and the final authoritative digest.
   deterministic, auditable family lineages.
 - LOD summaries preserve region resources, organization history, source agent
   IDs and relationship records for deterministic read-only projections.
+- The region inspector exposes household lineages, generation depth, kinship
+  composition and descendant knowledge or belief carriers in both live micro
+  projections and conserved aggregate summaries.
 - The same seed and commands reproduce the same digest and event history.
   Different seeds may remain sterile, diverge, stagnate, fragment or collapse.
 - Mythology and cultivation packs provide potential rules only. They do not
