@@ -5,6 +5,7 @@ import { stepEcology } from "./ecology/index.ts";
 import { agentsStage } from "./agents/index.ts";
 import { cultureStage } from "./culture/index.ts";
 import { societyStage } from "./society/index.ts";
+import { lodStage } from "./lod/index.ts";
 import { worldDigest } from "./world.ts";
 import type {
   EntityEffect,
@@ -221,6 +222,19 @@ const applyDelta = (state: WorldState, delta: WorldDelta): void => {
     .map((effect) => effect.transaction);
   applyResourceTransactions(state, [...delta.resourceTransactions, ...worldviewTransactions]);
   applyWorldviewEffects(state, delta.worldviewEffects);
+  for (const effect of delta.lodEffects ?? []) {
+    const index = state.lod.summaries.findIndex((summary) => summary.regionId === (effect.operation === "upsert-summary" ? effect.summary.regionId : effect.regionId));
+    if (effect.operation === "remove-summary") {
+      if (index >= 0) state.lod.summaries.splice(index, 1);
+      state.lod.canonicalMicroRegionIds = state.lod.canonicalMicroRegionIds.filter((regionId) => regionId !== effect.regionId);
+    } else if (index >= 0) {
+      state.lod.summaries[index] = effect.summary;
+      if (effect.summary.mode === "micro" && !state.lod.canonicalMicroRegionIds.includes(effect.summary.regionId)) state.lod.canonicalMicroRegionIds.push(effect.summary.regionId);
+    } else {
+      state.lod.summaries.push(effect.summary);
+      if (effect.summary.mode === "micro" && !state.lod.canonicalMicroRegionIds.includes(effect.summary.regionId)) state.lod.canonicalMicroRegionIds.push(effect.summary.regionId);
+    }
+  }
 };
 
 const installDefaultStages = (): void => {
@@ -244,6 +258,7 @@ const installDefaultStages = (): void => {
   if (!stageRegistry.has(agentsStage.id)) registerSimulationStage(agentsStage);
   if (!stageRegistry.has(cultureStage.id)) registerSimulationStage(cultureStage);
   if (!stageRegistry.has(societyStage.id)) registerSimulationStage(societyStage);
+  if (!stageRegistry.has(lodStage.id)) registerSimulationStage(lodStage);
 };
 
 export const stepWorld = (state: WorldState, input: StepInput): { state: WorldState; events: WorldState["events"]; digest: string } => {
@@ -262,6 +277,7 @@ export const stepWorld = (state: WorldState, input: StepInput): { state: WorldSt
     merged.resourceTransactions.push(...delta.resourceTransactions);
     merged.worldviewEffects.push(...delta.worldviewEffects);
     merged.eventDrafts.push(...delta.eventDrafts);
+    if (delta.lodEffects) merged.lodEffects = [...(merged.lodEffects ?? []), ...delta.lodEffects];
   }
   const next = structuredClone(previous);
   applyDelta(next, merged);

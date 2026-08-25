@@ -1,0 +1,18 @@
+import type { SimulationStage } from "../types.ts";
+import { stepLod } from "./step.ts";
+
+export { focusRegion, projectMicroRegion } from "./focus.ts";
+export { projectRegion } from "./expand.ts";
+export { promoteRegion } from "./promote.ts";
+export { summarizeRegion, summarizeRegionState } from "./summarize.ts";
+
+export const lodStage: SimulationStage = {
+  id: "lod",
+  order: 60,
+  run: (state, _input, priorDeltas) => stepLod(
+    state,
+    priorDeltas.get("culture") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
+    priorDeltas.get("society") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
+    priorDeltas.get("agents") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
+  ),
+};

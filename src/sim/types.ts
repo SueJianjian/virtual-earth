@@ -164,6 +164,7 @@ export type WorldDelta = {
   resourceTransactions: ResourceTransaction[];
   worldviewEffects: WorldviewEffect[];
   eventDrafts: WorldEventDraft[];
+  lodEffects?: LodEffect[];
 };
 
 export type StateMetric =
@@ -297,6 +298,9 @@ export type LodState = {
   summaries: RegionSummary[];
   canonicalMicroRegionIds: RegionId[];
 };
+export type LodEffect =
+  | { operation: "upsert-summary"; summary: RegionSummary }
+  | { operation: "remove-summary"; regionId: RegionId };
 export type ObservationState = {
   focusRegionId?: RegionId;
   projection?: RegionProjection;
