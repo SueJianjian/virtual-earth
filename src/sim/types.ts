@@ -40,6 +40,21 @@ export type FieldChange = {
   causeRuleId: string;
 };
 
+export type ChemistryFieldName =
+  | "carbon"
+  | "nitrogen"
+  | "phosphorus"
+  | "organics"
+  | "oxygen";
+
+export type ChemistryChange = {
+  field: ChemistryFieldName;
+  index: number;
+  operation: "set" | "add";
+  value: number;
+  causeRuleId: string;
+};
+
 export type RelationshipState = {
   id: string;
   fromId: EntityId;
@@ -137,6 +152,7 @@ export type WorldEventDraft = {
 
 export type WorldDelta = {
   fieldChanges: FieldChange[];
+  chemistryChanges: ChemistryChange[];
   entityEffects: EntityEffect[];
   relationshipEffects: RelationshipEffect[];
   resourceTransactions: ResourceTransaction[];
