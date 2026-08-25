@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
-import { focusRegion, projectRegion, promoteRegion, summarizeRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
+import { focusRegion, projectRegion, promoteRegion, stepLod, summarizeRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
@@ -68,4 +68,79 @@ describe("conserved multi-scale state", () => {
       expect(delta.lodEffects[0].summary.organizations.map((organization) => organization.type)).toContain("family");
     }
   });
+
+  it("naturally summarizes a quiet micro region", () => {
+    const state = populatedWorld();
+    state.agents = [];
+    state.relationships = [];
+    state.organizations = [];
+    state.lod.summaries = [summarizeRegionState(state, region, "micro")];
+    const delta = stepLod(state, { elapsedYears: 1, externalEvents: [] }, emptyDelta(), emptyDelta(), emptyDelta());
+
+    expect(delta.lodEffects?.[0]?.operation).toBe("upsert-summary");
+    expect(delta.lodEffects?.[0]?.operation === "upsert-summary" && delta.lodEffects[0].summary.mode).toBe("aggregate");
+    expect(delta.eventDrafts[0]?.kind).toBe("region-summarized");
+  });
+
+  it("promotes an aggregate region only after a recent natural event", () => {
+    const state = populatedWorld();
+    const summary = summarizeRegionState(state, region, "aggregate");
+    state.lod.summaries = [summary];
+    state.agents = [];
+    state.organizations = [];
+    state.events = [{
+      id: "event:natural-hotspot",
+      tick: state.tick,
+      kind: "river-change",
+      ruleId: "hydrology:river-change",
+      source: "natural",
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: { regionId: region },
+      payload: { regionId: region },
+    }];
+
+    const delta = stepLod(state, { elapsedYears: 1, externalEvents: [] }, emptyDelta(), emptyDelta(), emptyDelta());
+    expect(delta.eventDrafts[0]?.kind).toBe("region-promoted");
+    expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "create")).toHaveLength(summary.population);
+    expect(delta.lodEffects?.[0]?.operation === "upsert-summary" && delta.lodEffects[0].summary.mode).toBe("micro");
+  });
+
+  it("keeps population and relationship counts stable across explicit summarize and promote", () => {
+    const source = populatedWorld();
+    const aggregate = summarizeRegionState(source, region, "aggregate");
+    const expanded = { ...source, agents: [], relationships: [], organizations: [], lod: { ...source.lod, summaries: [aggregate] } };
+    expanded.events = [{
+      id: "event:round-trip",
+      tick: expanded.tick,
+      kind: "rapid-change",
+      ruleId: "natural:rapid-change",
+      source: "natural",
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: { regionId: region },
+      payload: { regionId: region },
+    }];
+
+    const promotion = stepLod(expanded, { elapsedYears: 1, externalEvents: [] }, emptyDelta(), emptyDelta(), emptyDelta());
+    const promotedAgents = promotion.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "create");
+    const promotedRelationships = promotion.relationshipEffects.filter((effect) => effect.operation === "create");
+    expect(promotedAgents).toHaveLength(aggregate.population);
+    expect(promotedRelationships).toHaveLength(aggregate.relationshipCount);
+
+    expect(projectRegion(aggregate, aggregate.version).agents).toHaveLength(aggregate.population);
+    expect(projectRegion(aggregate, aggregate.version).relationships).toHaveLength(aggregate.relationshipCount);
+  });
+});
+
+const emptyDelta = () => ({
+  fieldChanges: [],
+  chemistryChanges: [],
+  entityEffects: [],
+  relationshipEffects: [],
+  resourceTransactions: [],
+  worldviewEffects: [],
+  eventDrafts: [],
 });
