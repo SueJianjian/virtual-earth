@@ -18,6 +18,20 @@ const emptyDelta = (): EnvironmentDelta => ({
   eventDrafts: [],
 });
 
+const isEmpty = (values: Float32Array): boolean =>
+  values.every((value) => value <= 0);
+
+const terrainNutrients = (state: WorldState): Float32Array => {
+  const nutrients = new Float32Array(state.fields.elevation.values.length);
+  for (let index = 0; index < nutrients.length; index += 1) {
+    nutrients[index] = Math.max(
+      0,
+      Math.min(1, (1 - (state.fields.elevation.values[index] ?? 0)) * 0.32),
+    );
+  }
+  return nutrients;
+};
+
 export const initializeEnvironment = (state: WorldState): WorldState => {
   const next = structuredClone(state);
   const water = initializeTerrainWater(next);
@@ -28,12 +42,7 @@ export const initializeEnvironment = (state: WorldState): WorldState => {
   next.fields.water.values.set(water);
   next.fields.temperature.values.set(climate.temperature);
   next.fields.humidity.values.set(climate.humidity);
-  for (let index = 0; index < next.fields.elevation.values.length; index += 1) {
-    next.fields.nutrients.values[index] = Math.max(
-      0,
-      Math.min(1, (1 - (next.fields.elevation.values[index] ?? 0)) * 0.32),
-    );
-  }
+  next.fields.nutrients.values.set(terrainNutrients(next));
   return next;
 };
 
@@ -42,16 +51,36 @@ export const stepEnvironment = (
   input: EnvironmentInput,
 ): EnvironmentDelta => {
   const delta = emptyDelta();
-  const climate = calculateClimate(state, input.solarFlux);
-  const water = simulateWater(state, input.externalEvents);
+  const isBlankStart = state.tick === 0 && isEmpty(state.fields.water.values);
+  const needsNutrients = state.tick === 0 && isEmpty(state.fields.nutrients.values);
+  const workingState = structuredClone(state);
+  if (isBlankStart) {
+    workingState.fields.water.values.set(initializeTerrainWater(workingState));
+  }
+  if (needsNutrients) {
+    workingState.fields.nutrients.values.set(terrainNutrients(workingState));
+  }
+  const climate = calculateClimate(workingState, input.solarFlux);
+  workingState.fields.temperature.values.set(climate.temperature);
+  workingState.fields.humidity.values.set(climate.humidity);
+  const water = simulateWater(workingState, input.externalEvents);
   for (let index = 0; index < water.length; index += 1) {
     delta.fieldChanges.push(
       { field: "temperature", index, operation: "set", value: climate.temperature[index] ?? 0, causeRuleId: "climate-field" },
       { field: "humidity", index, operation: "set", value: climate.humidity[index] ?? 0, causeRuleId: "climate-field" },
       { field: "water", index, operation: "set", value: water[index] ?? 0, causeRuleId: "hydrology-cycle" },
     );
+    if (needsNutrients) {
+      delta.fieldChanges.push({
+        field: "nutrients",
+        index,
+        operation: "set",
+        value: workingState.fields.nutrients.values[index] ?? 0,
+        causeRuleId: "terrain-nutrients",
+      });
+    }
   }
-  delta.chemistryChanges = calculateChemistry(state);
+  delta.chemistryChanges = calculateChemistry(workingState);
   const width = state.fields.elevation.width;
   for (const event of input.externalEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");

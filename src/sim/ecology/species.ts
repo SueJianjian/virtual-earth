@@ -21,6 +21,29 @@ const emptyDelta = (): WorldDelta => ({
 
 const asEntityId = (value: string): EntityId => value as EntityId;
 
+const originRegionFor = (
+  state: RuleContext["state"],
+  species: SpeciesState,
+): PopulationState["regionId"] => {
+  let bestIndex = 0;
+  let bestScore = -Infinity;
+  for (let index = 0; index < state.fields.elevation.values.length; index += 1) {
+    const water = state.fields.water.values[index] ?? 0;
+    const nutrients = state.fields.nutrients.values[index] ?? 0;
+    const temperature = state.fields.temperature.values[index] ?? 0;
+    const humidity = state.fields.humidity.values[index] ?? 0;
+    const temperatureFit = Math.max(0, 1 - Math.abs(temperature - (species.traits.temperatureOptimum ?? 0.5)) * 1.7);
+    const humidityFit = Math.max(0, 1 - Math.abs(humidity - (species.traits.humidityOptimum ?? 0.5)) * 1.2);
+    const score = water * (0.4 + nutrients) * temperatureFit * humidityFit;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  const width = state.fields.elevation.width;
+  return `region:${bestIndex % width}:${Math.floor(bestIndex / width)}` as never;
+};
+
 export const createSpecies = (
   seed: string,
   role: SpeciesRole,
@@ -65,7 +88,7 @@ export const attemptAbiogenesis = (
   const population: PopulationState = {
     id: asEntityId(`population:${hashString(`${species.id}:origin`).toString(16)}`),
     speciesId: species.id,
-    regionId: "region:origin" as never,
+    regionId: originRegionFor(state, species),
     count: 1,
     energy: 0.25,
   };
@@ -100,8 +123,21 @@ export const attemptTrophicSpecies = (
 
   const parent = context.state.species.find((species) => species.role === "producer");
   const species = createSpecies(`trophic:${role}:${roll}`, role, parent?.id);
+  const parentPopulation = parent
+    ? context.state.populations.find((population) => population.speciesId === parent.id)
+    : undefined;
+  const population: PopulationState = {
+    id: asEntityId(`population:${hashString(`${species.id}:origin`).toString(16)}`),
+    speciesId: species.id,
+    regionId: parentPopulation?.regionId ?? "region:origin" as never,
+    count: Math.max(1, Math.min(1_000, foodAvailability * (role === "consumer" ? 0.4 : 0.25))),
+    energy: Math.max(0.1, Math.min(1, foodAvailability)),
+  };
   const delta = emptyDelta();
-  delta.entityEffects.push({ collection: "species", operation: "create", id: species.id, value: species });
+  delta.entityEffects.push(
+    { collection: "species", operation: "create", id: species.id, value: species },
+    { collection: "populations", operation: "create", id: population.id, value: population },
+  );
   delta.eventDrafts.push({
     kind: "species-emergence",
     ruleId: `trophic-${role}-emergence`,
@@ -109,7 +145,7 @@ export const attemptTrophicSpecies = (
     probability,
     roll,
     evidence: { foodAvailability, populationCount: context.metrics.populationCount },
-    payload: { speciesId: species.id, role },
+    payload: { speciesId: species.id, populationId: population.id, role },
     source: "natural",
   });
   return { status: "applied", value: species, delta };

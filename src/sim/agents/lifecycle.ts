@@ -68,7 +68,7 @@ export const eligibleAgentCount = (
   biomass: number,
 ): number => {
   const cognitive = species.traits.cognitivePotential ?? 0;
-  if (population.count < 4 || cognitive < 0.45 || oxygen < 0.005 || biomass < 0.001) return 0;
+  if (population.count < 4 || cognitive < 0.3 || oxygen < 0.005 || biomass < 0.001) return 0;
   return Math.min(64, Math.floor(Math.sqrt(population.count) * cognitive * 0.55));
 };
 

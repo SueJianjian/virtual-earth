@@ -1,0 +1,47 @@
+# Virtual Earth
+
+Virtual Earth is a deterministic, rule-driven sandbox. It starts with an empty
+entity state and lets terrain, climate, chemistry, ecology, individuals,
+families, cultures and organizations emerge from local conditions and seeded
+randomness.
+
+## Run
+
+Requirements: Node.js 20 or newer.
+
+```powershell
+npm install
+npm run dev -- --host 127.0.0.1
+```
+
+Open the URL printed by Vite. The browser communicates with the simulation
+through a Web Worker. Controls submit commands or external events; they do not
+mutate authoritative state directly.
+
+## Verify
+
+```powershell
+npm run test
+npm run build
+npm run test:e2e
+npm run benchmark
+```
+
+The benchmark reports grid size, step count, average step time, entity counts,
+event count and the final authoritative digest.
+
+## Simulation rules
+
+- A new world contains no species, populations, agents, families, cultures,
+  organizations, mythology entities or cultivation entities.
+- Environment initialization is derived from generated terrain. Water and
+  nutrients then evolve through field deltas and chemistry changes.
+- Abiogenesis, trophic species, individuals, families and organizations are
+  conditional probabilistic outcomes. No fixed tick or stage name creates an
+  entity.
+- The same seed and commands reproduce the same digest and event history.
+  Different seeds may remain sterile, diverge, stagnate, fragment or collapse.
+- Mythology and cultivation packs provide potential rules only. They do not
+  pre-create deities, sects, techniques or cultivators.
+- Observation, focus and map layers are projections. They cannot change the
+  authoritative world.

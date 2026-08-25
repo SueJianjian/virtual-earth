@@ -48,10 +48,11 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     mergeDelta(delta, attemptAbiogenesis(ruleContext).delta);
   }
 
-  const producerFood = state.populations.reduce((sum, population) => {
-    const species = state.species.find((candidate) => candidate.id === population.speciesId);
-    return sum + (species?.role === "producer" ? population.count : 0);
-  }, 0) / Math.max(1, state.populations.length);
+  const producerPopulations = state.populations.filter((population) =>
+    state.species.find((species) => species.id === population.speciesId)?.role === "producer",
+  );
+  const producerFood = producerPopulations.reduce((sum, population) => sum + population.count, 0) /
+    Math.max(1, producerPopulations.length);
   if (!state.species.some((species) => species.role === "consumer")) {
     mergeDelta(delta, attemptTrophicSpecies(ruleContext, "consumer", producerFood).delta);
   }
@@ -67,7 +68,9 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     const humidity = state.fields.humidity.values[index] ?? metrics.meanHumidity;
     const nutrients = state.fields.nutrients.values[index] ?? metrics.nutrientLevel;
     const suitabilityScore = suitability(species, temperature, humidity);
-    const food = species.role === "producer" ? nutrients : Math.min(1, producerFood / 10);
+    const food = species.role === "producer"
+      ? nutrients
+      : Math.min(1, producerFood * (species.role === "consumer" ? 0.2 : 0.12));
     const count = nextPopulationCount(population, species, suitabilityScore, food);
     delta.entityEffects.push({
       collection: "populations",

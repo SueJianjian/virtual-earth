@@ -10,7 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "benchmark": "node --experimental-strip-types scripts/benchmark.ts"
   },
   "devDependencies": {
     "@playwright/test": "latest",
