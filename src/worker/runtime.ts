@@ -26,7 +26,7 @@ export type SimulationRuntime = {
   getSpeed(): 1 | 4 | 16 | 64;
 };
 
-export const createSimulationRuntime = (initial: WorldState = createWorld(1)): SimulationRuntime => {
+export const createSimulationRuntime = (initial: WorldState = createWorld(1, { enabledPackIds: ["cultivation.path", "mythology.chinese-motif", "mythology.greek-motif", "mythology.indian-motif", "mythology.norse-motif"] })): SimulationRuntime => {
   let state = structuredClone(initial);
   let paused = true;
   let speed: 1 | 4 | 16 | 64 = 1;

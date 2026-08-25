@@ -1,45 +1,128 @@
 import "./styles.css";
+import { createWorkerClient } from "./worker/client.ts";
+import type { WorkerMessage, WorldSnapshot } from "./worker/protocol.ts";
+import type { WorldEvent } from "./sim/types.ts";
+import { createMapCanvas, type CellSelection } from "./ui/map-canvas.ts";
+import { layerLabels, type MapLayer } from "./ui/layers.ts";
+import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
+import { renderInspector } from "./ui/inspector.ts";
+import { renderTimeline } from "./ui/timeline.ts";
 
 const app = document.querySelector<HTMLElement>("#app");
+if (!app) throw new Error("Application root was not found");
 
-if (!app) {
-  throw new Error("Application root was not found");
-}
-
+const layers = Object.entries(layerLabels) as Array<[MapLayer, string]>;
 app.innerHTML = `
-  <section class="shell">
+  <div class="app-shell">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">AUTONOMOUS WORLD LAB</p>
-        <h1>虚拟地球</h1>
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div><p>自主世界观测站</p><h1>虚拟地球</h1></div>
       </div>
-      <output id="simulation-status" class="status" aria-live="polite">正在初始化</output>
+      <div class="time-readout"><span>世界时间</span><strong id="world-year">0 年</strong></div>
+      <div class="transport" aria-label="模拟控制">
+        <button id="play-button" class="icon-button primary" type="button" title="开始模拟" aria-label="开始模拟">▶</button>
+        <button id="pause-button" class="icon-button" type="button" title="暂停模拟" aria-label="暂停模拟">Ⅱ</button>
+        <button id="step-button" class="icon-button" type="button" title="单步推进" aria-label="单步推进">›</button>
+      </div>
+      <output id="simulation-status" class="connection-status" aria-live="polite">正在连接模拟核心</output>
     </header>
-    <section class="workspace">
-      <div class="map-panel">
-        <canvas id="world-map" aria-label="虚拟地球地图"></canvas>
-        <div class="map-placeholder" aria-hidden="true">世界状态即将载入</div>
+    <nav class="layer-bar" aria-label="地图图层">
+      <span>图层</span>
+      <div class="segmented-control">
+        ${layers.map(([id, label], index) => `<button type="button" data-layer="${id}" class="layer-button${index === 0 ? " active" : ""}">${label}</button>`).join("")}
       </div>
-      <aside class="side-panel" aria-label="世界信息">
-        <p class="panel-label">当前观测</p>
-        <p class="metric-value">原始星球</p>
-        <p class="metric-note">模拟核心尚未启动</p>
+      <div class="legend" aria-label="当前图层图例"><i></i><span id="legend-label">海洋</span><b></b><span>高地</span></div>
+    </nav>
+    <main class="workspace">
+      <section class="map-workspace" aria-label="世界地图">
+        <canvas id="world-map" aria-label="虚拟地球网格地图"></canvas>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span></div>
+      </section>
+      <aside class="right-rail" aria-label="世界信息">
+        <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
+        <section class="rail-section inspector-section"><header><span>02</span><h2>区域检查</h2></header><div id="inspector"></div></section>
+        <section class="rail-section timeline-section"><header><span>03</span><h2>演化记录</h2></header><div id="timeline"></div></section>
       </aside>
-    </section>
-  </section>
+    </main>
+  </div>
 `;
 
-const canvas = document.querySelector<HTMLCanvasElement>("#world-map");
-if (!canvas) {
-  throw new Error("World map canvas was not found");
-}
-
-const resizeCanvas = (): void => {
-  const rect = canvas.getBoundingClientRect();
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.max(1, Math.floor(rect.width * pixelRatio));
-  canvas.height = Math.max(1, Math.floor(rect.height * pixelRatio));
+const query = <T extends Element>(selector: string): T => {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Missing UI element: ${selector}`);
+  return element;
 };
 
-resizeCanvas();
-window.addEventListener("resize", resizeCanvas);
+const emptySnapshot: WorldSnapshot = {
+  fields: {
+    elevation: { width: 1, height: 1, values: new Float32Array(1) },
+    temperature: { width: 1, height: 1, values: new Float32Array(1) },
+    humidity: { width: 1, height: 1, values: new Float32Array(1) },
+    water: { width: 1, height: 1, values: new Float32Array(1) },
+    nutrients: { width: 1, height: 1, values: new Float32Array(1) },
+    biomass: { width: 1, height: 1, values: new Float32Array(1) },
+  },
+  tick: 0,
+  years: 0,
+  digest: "",
+  metrics: {},
+};
+const client = createWorkerClient();
+const canvas = query<HTMLCanvasElement>("#world-map");
+const statusPanel = query<HTMLElement>("#status-panel");
+const inspector = query<HTMLElement>("#inspector");
+const timeline = query<HTMLElement>("#timeline");
+const status = query<HTMLOutputElement>("#simulation-status");
+const year = query<HTMLElement>("#world-year");
+const phase = query<HTMLElement>("#phase-label");
+const digest = query<HTMLElement>("#digest-label");
+let snapshot: WorldSnapshot | undefined;
+let selection: CellSelection | undefined;
+let events: WorldEvent[] = [];
+
+const map = createMapCanvas(canvas, (nextSelection) => {
+  selection = nextSelection;
+  if (snapshot) renderInspector(inspector, snapshot, selection);
+  client.send({ type: "focusRegion", regionId: nextSelection.regionId });
+});
+renderInspector(inspector, emptySnapshot);
+renderTimeline(timeline, []);
+
+document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const layer = button.dataset.layer as MapLayer;
+    map.setLayer(layer);
+    document.querySelectorAll("[data-layer]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
+    query<HTMLElement>("#legend-label").textContent = layer === "natural" ? "海洋" : "低";
+  });
+});
+query<HTMLButtonElement>("#play-button").addEventListener("click", () => client.send({ type: "start" }));
+query<HTMLButtonElement>("#pause-button").addEventListener("click", () => client.send({ type: "pause" }));
+query<HTMLButtonElement>("#step-button").addEventListener("click", () => client.send({ type: "step", count: 1 }));
+
+const applyMessage = (message: WorkerMessage): void => {
+  if (message.type === "error") {
+    status.textContent = message.message;
+    status.dataset.state = "error";
+    return;
+  }
+  if (message.type === "events") {
+    events = [...events, ...message.events].filter((event, index, all) => all.findIndex((candidate) => candidate.id === event.id) === index);
+    renderTimeline(timeline, events);
+    return;
+  }
+  if (message.type !== "snapshot") return;
+  snapshot = message.snapshot;
+  map.update(snapshot);
+  renderStatusPanel(statusPanel, snapshot);
+  renderInspector(inspector, snapshot, selection);
+  year.textContent = `${Math.floor(snapshot.years).toLocaleString("zh-CN")} 年`;
+  phase.textContent = phaseForSnapshot(snapshot);
+  digest.textContent = `状态 ${snapshot.digest.slice(0, 8)}`;
+  status.textContent = message.paused ? "模拟已暂停" : `${message.speed}× 自主演化中`;
+  status.dataset.state = message.paused ? "paused" : "running";
+};
+
+client.subscribe(applyMessage);
+client.send({ type: "pause" });
