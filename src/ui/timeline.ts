@@ -18,6 +18,7 @@ const labelFor = (event: WorldEvent): string => ({
 const qualifierFor = (event: WorldEvent): string => {
   if (event.kind === "population-migration" && event.evidence.foodDriven === true) return " · 食物驱动";
   if (event.kind === "organization-split" && Number(event.evidence.foodSecurity ?? 1) < 0.1) return " · 缺粮压力";
+  if (event.kind === "agent-death" && Number(event.evidence.hungerDeaths ?? 0) > 0) return " · 饥饿主导";
   return "";
 };
 

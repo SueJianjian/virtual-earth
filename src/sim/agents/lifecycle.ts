@@ -112,6 +112,7 @@ export const stepAgents = (
   const agents = new Map(state.agents.map((agent) => [agent.id, structuredClone(agent)]));
   const deadIds = new Set<EntityId>();
   const deathRolls: number[] = [];
+  const deathContexts: Array<{ foodSecurity: number; hungerRisk: number; oldAgeRisk: number }> = [];
   const movedPopulations = new Map<string, string>();
   for (const effect of _ecology.entityEffects) {
     if (effect.collection === "populations" && effect.operation === "update" && effect.value) {
@@ -129,6 +130,7 @@ export const stepAgents = (
     if (mortalityRoll < oldAgeRisk + needRisk) {
       deadIds.add(agent.id);
       deathRolls.push(mortalityRoll);
+      deathContexts.push({ foodSecurity, hungerRisk, oldAgeRisk });
       continue;
     }
     const migratedRegion = movedPopulations.get(String(agent.populationId));
@@ -310,7 +312,11 @@ export const stepAgents = (
       sourceIds: [...deadIds],
       probability: 1,
       roll: deathRolls.reduce((sum, value) => sum + value, 0) / Math.max(1, deathRolls.length),
-      evidence: { deaths: deadIds.size },
+      evidence: {
+        deaths: deadIds.size,
+        hungerDeaths: deathContexts.filter((context) => context.hungerRisk > context.oldAgeRisk).length,
+        meanFoodSecurity: deathContexts.reduce((sum, context) => sum + context.foodSecurity, 0) / Math.max(1, deathContexts.length),
+      },
       payload: { agentIds: [...deadIds] },
       source: "natural",
     });

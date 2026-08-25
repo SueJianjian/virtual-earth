@@ -21,9 +21,11 @@ describe("event timeline", () => {
     renderTimeline(element, [
       event("population-migration", { foodDriven: true }),
       event("organization-split", { foodSecurity: 0 }),
+      event("agent-death", { hungerDeaths: 1 }),
     ]);
 
     expect(element.innerHTML).toContain("人口迁移 · 食物驱动");
     expect(element.innerHTML).toContain("组织分裂 · 缺粮压力");
+    expect(element.innerHTML).toContain("个体死亡 · 饥饿主导");
   });
 });

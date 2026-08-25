@@ -118,8 +118,12 @@ describe("food security", () => {
     const { state, agents } = fixture();
     agents[0]!.age = agents[0]!.lifespan;
     agents[0]!.needs.food = 0;
+    agents[1]!.age = 0;
+    agents[1]!.needs.food = 0.5;
     state.organizations = [createOrganization("clan", agents[0]!.regionId, agents.map((agent) => agent.id))];
     state.resources = [{ id: "resource:food:clan", resourceId: "food", regionId: agents[0]!.regionId, holderId: state.organizations[0]!.id, amount: 10, cap: 10, originEventId: "event:food" }];
-    expect(stepAgents(state, emptyDelta(), 1).entityEffects).toContainEqual({ collection: "agents", operation: "remove", id: agents[0]!.id });
+    const boundaryDelta = stepAgents(state, emptyDelta(), 1);
+    expect(boundaryDelta.entityEffects).toContainEqual({ collection: "agents", operation: "remove", id: agents[0]!.id });
+    expect(boundaryDelta.eventDrafts.find((event) => event.kind === "agent-death")?.evidence).toMatchObject({ deaths: 1, hungerDeaths: 0, meanFoodSecurity: 1 });
   });
 });
