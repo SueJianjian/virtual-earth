@@ -25,6 +25,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("region:");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("知识承继");
+  await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("代际知识传承");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("食物保障");
   await page.getByRole("button", { name: "单步推进" }).click();
   await expect(page.locator("#world-year")).toContainText("1 年");

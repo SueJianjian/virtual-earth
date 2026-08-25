@@ -56,18 +56,25 @@ const validateWorld = (value: unknown): WorldState => {
       return counts;
     }, {});
     const descendantIds = new Set(relationshipRecords.filter((relationship) => relationship.kind === "parent").map((relationship) => relationship.toId));
-    const lineage = partial.lineage ?? {
+    const defaultLineage = {
       descendantCount: descendantIds.size,
       generationDepth: agentIds.length === 0 ? 0 : descendantIds.size > 0 ? 2 : 1,
       knowledgeCarrierCount: 0,
+      knowledgeInheritanceCount: 0,
       beliefCarrierCount: 0,
       relationshipCounts,
+    };
+    const lineage = {
+      ...(partial.lineage ?? defaultLineage),
+      knowledgeInheritanceCount: typeof partial.lineage?.knowledgeInheritanceCount === "number" ? partial.lineage.knowledgeInheritanceCount : 0,
     };
     return {
       ...summary,
       agentIds,
+      agentRecords: Array.isArray(partial.agentRecords) ? partial.agentRecords : [],
       relationshipRecords,
       lineage,
+      familyLineages: Array.isArray(partial.familyLineages) ? partial.familyLineages : [],
       foodBalance: typeof partial.foodBalance === "number" ? partial.foodBalance : 0,
       foodPerAgent: typeof partial.foodPerAgent === "number" ? partial.foodPerAgent : 0,
       foodSecurity: typeof partial.foodSecurity === "number" ? partial.foodSecurity : 0,

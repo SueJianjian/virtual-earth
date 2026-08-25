@@ -1,6 +1,6 @@
 import type { CellSelection } from "./map-canvas.ts";
 import { summarizeLineage } from "../sim/lod/lineage.ts";
-import type { RegionLineageSummary } from "../sim/types.ts";
+import type { FamilyLineageSummary, RegionLineageSummary } from "../sim/types.ts";
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
 const percent = (value: number | undefined): string => `${((value ?? 0) * 100).toFixed(1)}%`;
@@ -17,6 +17,7 @@ export type InspectorLineage = RegionLineageSummary & {
   population: number;
   relationshipCount: number;
   families: Array<{ id: string; memberCount: number }>;
+  familyLineages: FamilyLineageSummary[];
   foodBalance: number;
   foodPerAgent: number;
   foodSecurity: number;
@@ -33,6 +34,7 @@ export const lineageForSnapshot = (snapshot: WorldSnapshot): InspectorLineage =>
       population: summary.population,
       relationshipCount: summary.relationshipCount,
       families: summary.organizations.filter((organization) => organization.type === "family").map((family) => ({ id: family.id, memberCount: family.memberCount })),
+      familyLineages: summary.familyLineages ?? [],
       foodBalance: summary.foodBalance,
       foodPerAgent: summary.foodPerAgent,
       foodSecurity: summary.foodSecurity,
@@ -42,12 +44,26 @@ export const lineageForSnapshot = (snapshot: WorldSnapshot): InspectorLineage =>
   const agents = projection?.agents ?? [];
   const relationships = projection?.relationships ?? [];
   const lineage = summarizeLineage(agents, relationships);
+  const familyLineages = (projection?.organizations ?? [])
+    .filter((organization) => organization.type === "family")
+    .map((family) => {
+      const memberIds = new Set(family.memberIds);
+      const familyAgents = agents.filter((agent) => memberIds.has(agent.id));
+      const familyRelationships = relationships.filter((relationship) => memberIds.has(relationship.fromId) && memberIds.has(relationship.toId));
+      return {
+        id: family.id,
+        memberCount: family.memberIds.length,
+        relationshipCount: familyRelationships.length,
+        ...summarizeLineage(familyAgents, familyRelationships),
+      };
+    });
   return {
     ...lineage,
     householdCount: projection?.organizations.filter((organization) => organization.type === "family").length ?? 0,
     population: agents.length,
     relationshipCount: relationships.length,
     families: projection?.organizations.filter((organization) => organization.type === "family").map((family) => ({ id: family.id, memberCount: family.memberIds.length })) ?? [],
+    familyLineages,
     foodBalance: summary?.foodBalance ?? 0,
     foodPerAgent: summary?.foodPerAgent ?? 0,
     foodSecurity: summary?.foodSecurity ?? 0,
@@ -62,8 +78,18 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
   }
   const fields = snapshot.fields;
   const lineage = lineageForSnapshot(snapshot);
-  const familyRows = lineage.families.slice(0, 3).map((family, index) => `
-    <li><span>家庭 ${String(index + 1).padStart(2, "0")}</span><strong>${format(family.memberCount)} 名成员</strong></li>
+  const familyRows = (lineage.familyLineages.length > 0 ? lineage.familyLineages : lineage.families.map((family) => ({
+    id: family.id,
+    memberCount: family.memberCount,
+    relationshipCount: 0,
+    descendantCount: 0,
+    generationDepth: 0,
+    knowledgeCarrierCount: 0,
+    knowledgeInheritanceCount: 0,
+    beliefCarrierCount: 0,
+    relationshipCounts: {},
+  }))).slice(0, 3).map((family, index) => `
+    <li><span>家庭 ${String(index + 1).padStart(2, "0")} · ${format(family.relationshipCount)} 关系</span><strong>${format(family.memberCount)} 名成员 · ${format(family.descendantCount)} 后代 · ${format(family.knowledgeInheritanceCount)} 条知识</strong></li>
   `).join("");
   element.innerHTML = `
     <div class="inspector-head"><strong>${selection.regionId}</strong><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
@@ -86,7 +112,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
       <div class="relationship-breakdown" aria-label="亲属关系">
         ${relationshipLabels.map(([kind, label]) => `<span><i data-kind="${kind}"></i>${label}<strong>${format(lineage.relationshipCounts[kind] ?? 0)}</strong></span>`).join("")}
       </div>
-      <div class="inheritance-note"><span>信念承继</span><strong>${format(lineage.beliefCarrierCount)} 名后代</strong></div>
+      <div class="inheritance-note"><span>代际知识传承</span><strong>${format(lineage.knowledgeInheritanceCount)} 条知识</strong></div>
       <div class="food-security"><span>食物保障</span><strong>${format(lineage.foodBalance)} 单位 · 人均 ${format(lineage.foodPerAgent)} · ${(lineage.foodSecurity * 100).toFixed(0)}%</strong></div>
       <ol class="family-list" aria-label="区域家庭">${familyRows || "<li class=\"family-empty\">尚未形成稳定家庭</li>"}</ol>
     </section>

@@ -19,6 +19,7 @@ const lineageSnapshot = (): WorldSnapshot => {
   const second = createAgent(population, species, 1, "lineage");
   const older = createAgent(population, species, 2, "lineage", [first.id, second.id]);
   const younger = createAgent(population, species, 3, "lineage", [first.id, second.id]);
+  first.knowledgeIds = ["knowledge:fire"];
   older.knowledgeIds = ["knowledge:fire"];
   younger.beliefIds = ["belief:ancestors"];
   state.species = [species];
@@ -54,6 +55,7 @@ describe("region lineage inspector", () => {
       descendantCount: 2,
       generationDepth: 2,
       knowledgeCarrierCount: 1,
+      knowledgeInheritanceCount: 1,
       beliefCarrierCount: 1,
       foodBalance: 0,
       foodPerAgent: 0,
@@ -61,6 +63,7 @@ describe("region lineage inspector", () => {
     });
     expect(lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1, caregiver: 1, sibling: 1 });
     expect(lineage.families[0]?.memberCount).toBe(4);
+    expect(lineage.familyLineages[0]).toMatchObject({ memberCount: 4, relationshipCount: 4, descendantCount: 2, knowledgeInheritanceCount: 1 });
   });
 
   it("uses conserved lineage metrics for an aggregate region", () => {
@@ -73,6 +76,7 @@ describe("region lineage inspector", () => {
     expect(lineage.source).toBe("aggregate");
     expect(lineage.descendantCount).toBe(2);
     expect(lineage.knowledgeCarrierCount).toBe(1);
+    expect(lineage.knowledgeInheritanceCount).toBe(1);
     expect(lineage.relationshipCounts.sibling).toBe(1);
   });
 });

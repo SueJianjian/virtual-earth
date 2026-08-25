@@ -1,5 +1,5 @@
 import { hashString } from "../random.ts";
-import type { Distribution, OrganizationSummary, RegionId, RegionSummary, RelationshipState, WorldDelta, WorldState } from "../types.ts";
+import type { Distribution, FamilyLineageSummary, OrganizationSummary, RegionAgentRecord, RegionId, RegionSummary, RelationshipState, WorldDelta, WorldState } from "../types.ts";
 import { summarizeLineage } from "./lineage.ts";
 import { meanFoodSecurity } from "../agents/food.ts";
 
@@ -15,14 +15,28 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     return eventRegion === regionId || event.payload.fromRegion === regionId || event.payload.toRegion === regionId || event.sourceIds.some((sourceId) => organizations.some((organization) => organization.id === sourceId));
   });
   const historyIds = regionEvents.map((event) => event.id).sort();
-  const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({ id: organization.id, type: organization.type, memberCount: organization.memberIds.length, childIds: [...organization.childOrganizationIds], resourceIds: Object.keys(organization.resources).sort(), historyIds: regionEvents.filter((event) => event.sourceIds.includes(organization.id) || event.payload.organizationId === organization.id).map((event) => event.id).sort() }));
+  const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({ id: organization.id, type: organization.type, memberCount: organization.memberIds.length, memberIds: [...organization.memberIds], childIds: [...organization.childOrganizationIds], resourceIds: Object.keys(organization.resources).sort(), historyIds: regionEvents.filter((event) => event.sourceIds.includes(organization.id) || event.payload.organizationId === organization.id).map((event) => event.id).sort() }));
+  const agentRecords: RegionAgentRecord[] = agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: [...agent.parentIds], skills: { ...agent.skills }, knowledgeIds: [...agent.knowledgeIds], beliefIds: [...agent.beliefIds] }));
   const relationshipRecords: RelationshipState[] = state.relationships.filter((relationship) => agentIds.includes(relationship.fromId) && agentIds.includes(relationship.toId)).map((relationship) => structuredClone(relationship));
   const relationshipIds = relationshipRecords.map((relationship) => relationship.id).sort();
   const lineage = summarizeLineage(agents, relationshipRecords);
+  const familyLineages: FamilyLineageSummary[] = organizations
+    .filter((organization) => organization.type === "family")
+    .map((family) => {
+      const memberIds = new Set(family.memberIds);
+      const familyAgents = agents.filter((agent) => memberIds.has(agent.id));
+      const familyRelationships = relationshipRecords.filter((relationship) => memberIds.has(relationship.fromId) && memberIds.has(relationship.toId));
+      return {
+        id: family.id,
+        memberCount: family.memberIds.length,
+        relationshipCount: familyRelationships.length,
+        ...summarizeLineage(familyAgents, familyRelationships),
+      };
+    });
   const foodBalance = state.resources.filter((resource) => resource.resourceId === "food" && resource.regionId === regionId).reduce((sum, resource) => sum + resource.amount, 0);
   const foodPerAgent = foodBalance / Math.max(1, agents.length);
   const foodSecurity = meanFoodSecurity({ resources: state.resources, organizations, agents });
-  const canonical = { regionId, mode, agents: agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: agent.parentIds, skills: agent.skills, knowledgeIds: agent.knowledgeIds, beliefIds: agent.beliefIds })).sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, lineage, resources: state.resources.filter((resource) => resource.regionId === regionId) };
+  const canonical = { regionId, mode, agentRecords: [...agentRecords].sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, lineage, familyLineages, resources: state.resources.filter((resource) => resource.regionId === regionId) };
   return {
     regionId,
     version: state.tick,
@@ -34,10 +48,12 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     householdCount: organizations.filter((organization) => organization.type === "family").length,
     organizations: organizationSummaries,
     agentIds,
+    agentRecords,
     relationshipCount: relationshipIds.length,
     relationshipDigest: hashString(JSON.stringify(relationshipIds)).toString(16),
     relationshipRecords,
     lineage,
+    familyLineages,
     foodBalance,
     foodPerAgent,
     foodSecurity,

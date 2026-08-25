@@ -280,10 +280,19 @@ export type WorldEventInput = {
 };
 
 export type Distribution = { bins: Record<string, number> };
+export type RegionAgentRecord = {
+  id: EntityId;
+  age: number;
+  parentIds: EntityId[];
+  skills: Record<string, number>;
+  knowledgeIds: string[];
+  beliefIds: string[];
+};
 export type OrganizationSummary = {
   id: OrganizationId;
   type: OrganizationType;
   memberCount: number;
+  memberIds: EntityId[];
   childIds: OrganizationId[];
   resourceIds: string[];
   historyIds: string[];
@@ -292,8 +301,14 @@ export type RegionLineageSummary = {
   descendantCount: number;
   generationDepth: number;
   knowledgeCarrierCount: number;
+  knowledgeInheritanceCount: number;
   beliefCarrierCount: number;
   relationshipCounts: Partial<Record<RelationshipState["kind"], number>>;
+};
+export type FamilyLineageSummary = RegionLineageSummary & {
+  id: OrganizationId;
+  memberCount: number;
+  relationshipCount: number;
 };
 export type RegionSummary = {
   regionId: RegionId;
@@ -306,10 +321,12 @@ export type RegionSummary = {
   householdCount: number;
   organizations: OrganizationSummary[];
   agentIds: EntityId[];
+  agentRecords: RegionAgentRecord[];
   relationshipCount: number;
   relationshipDigest: string;
   relationshipRecords: RelationshipState[];
   lineage: RegionLineageSummary;
+  familyLineages: FamilyLineageSummary[];
   foodBalance: number;
   foodPerAgent: number;
   foodSecurity: number;

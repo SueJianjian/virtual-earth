@@ -45,6 +45,7 @@ describe("conserved multi-scale state", () => {
   it("summarizes population and relationships without losing the source counts", () => {
     const state = populatedWorld();
     state.agents[2]!.parentIds = [state.agents[0]!.id, state.agents[1]!.id];
+    state.agents[0]!.knowledgeIds = ["knowledge:fire"];
     state.agents[2]!.knowledgeIds = ["knowledge:fire"];
     state.agents[2]!.beliefIds = ["belief:ancestors"];
     state.relationships.push(createRelationship("parent", state.agents[0]!.id, state.agents[2]!.id, 2, 0.9));
@@ -56,8 +57,9 @@ describe("conserved multi-scale state", () => {
     expect(summary.summary.population).toBe(state.agents.length);
     expect(summary.summary.relationshipCount).toBe(state.relationships.length);
     expect(summary.summary.agentIds).toHaveLength(state.agents.length);
+    expect(summary.summary.agentRecords).toHaveLength(state.agents.length);
     expect(summary.summary.relationshipRecords.map((relationship) => relationship.id)).toEqual(state.relationships.map((relationship) => relationship.id));
-    expect(summary.summary.lineage).toMatchObject({ descendantCount: 1, generationDepth: 2, knowledgeCarrierCount: 1, beliefCarrierCount: 1 });
+    expect(summary.summary.lineage).toMatchObject({ descendantCount: 1, generationDepth: 2, knowledgeCarrierCount: 1, knowledgeInheritanceCount: 1, beliefCarrierCount: 1 });
     expect(summary.summary.lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1 });
     expect(summary.summary.foodBalance).toBe(1);
     expect(summary.summary.foodPerAgent).toBe(0.25);
@@ -120,6 +122,10 @@ describe("conserved multi-scale state", () => {
 
   it("keeps population and relationship counts stable across explicit summarize and promote", () => {
     const source = populatedWorld();
+    source.agents[2]!.parentIds = [source.agents[0]!.id, source.agents[1]!.id];
+    source.agents[0]!.knowledgeIds = ["knowledge:fire"];
+    source.agents[2]!.knowledgeIds = ["knowledge:fire"];
+    source.relationships.push(createRelationship("parent", source.agents[0]!.id, source.agents[2]!.id, 2, 0.9));
     const aggregate = summarizeRegionState(source, region, "aggregate");
     const expanded = { ...source, agents: [], relationships: [], organizations: [], lod: { ...source.lod, summaries: [aggregate] } };
     expanded.events = [{
@@ -143,6 +149,9 @@ describe("conserved multi-scale state", () => {
 
     expect(projectRegion(aggregate, aggregate.version).agents).toHaveLength(aggregate.population);
     expect(projectRegion(aggregate, aggregate.version).relationships).toHaveLength(aggregate.relationshipCount);
+    const promotedProjection = projectRegion(aggregate, aggregate.version);
+    expect(promotedProjection.agents.find((agent) => agent.knowledgeIds.includes("knowledge:fire"))?.parentIds).toHaveLength(2);
+    expect(promotedProjection.organizations[0]?.memberIds).toHaveLength(2);
   });
 });
 

@@ -24,6 +24,10 @@ export const summarizeLineage = (
     return depth;
   };
   const descendants = agents.filter((agent) => agent.parentIds.length > 0);
+  const knowledgeInheritanceCount = descendants.reduce((count, descendant) => {
+    const parentKnowledge = new Set(descendant.parentIds.flatMap((parentId) => byId.get(parentId)?.knowledgeIds ?? []));
+    return count + descendant.knowledgeIds.filter((knowledgeId) => parentKnowledge.has(knowledgeId)).length;
+  }, 0);
   const relationshipCounts = relationships.reduce<RegionLineageSummary["relationshipCounts"]>((counts, relationship) => {
     counts[relationship.kind] = (counts[relationship.kind] ?? 0) + 1;
     return counts;
@@ -32,6 +36,7 @@ export const summarizeLineage = (
     descendantCount: descendants.length,
     generationDepth: agents.length === 0 ? 0 : Math.max(...agents.map((agent) => depthFor(agent))),
     knowledgeCarrierCount: descendants.filter((agent) => agent.knowledgeIds.length > 0).length,
+    knowledgeInheritanceCount,
     beliefCarrierCount: descendants.filter((agent) => agent.beliefIds.length > 0).length,
     relationshipCounts,
   };

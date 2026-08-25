@@ -6,31 +6,40 @@ const asOrganizationId = (value: string): OrganizationState["id"] => value as Or
 
 export const projectRegion = (summary: RegionSummary, version: number): RegionProjection => {
   const count = Math.max(0, Math.min(128, Math.floor(summary.population)));
+  const sourceAgentIds = [...summary.agentIds].sort();
+  const sourceRecords = new Map((summary.agentRecords ?? []).map((record) => [record.id, record]));
   const agents: AgentState[] = [];
   for (let index = 0; index < count; index += 1) {
+    const sourceId = sourceAgentIds[index];
+    const source = sourceId ? sourceRecords.get(sourceId) : undefined;
     const id = asEntityId(`agent:${hashString(`${summary.canonicalDigest}:${version}:${index}`).toString(16)}`);
     agents.push({
       id,
       populationId: asEntityId(`population:${summary.regionId}`),
       regionId: summary.regionId,
-      age: hashString(`${summary.canonicalDigest}:age:${index}`) % 60,
+      age: source?.age ?? hashString(`${summary.canonicalDigest}:age:${index}`) % 60,
       lifespan: 45 + hashString(`${summary.canonicalDigest}:lifespan:${index}`) % 50,
       parentIds: [],
       traits: { cognitivePotential: 0.2 + (index % 7) * 0.05, sociality: 0.3 + (index % 5) * 0.1, cooperation: 0.3 + (index % 4) * 0.1 },
-      skills: { observation: 0.1 + (index % 6) * 0.04, communication: 0.1 + (index % 5) * 0.05 },
+      skills: source?.skills ? { ...source.skills } : { observation: 0.1 + (index % 6) * 0.04, communication: 0.1 + (index % 5) * 0.05 },
       needs: { food: 0.5, safety: 0.5, belonging: 0.2 },
       memoryIds: [],
-      knowledgeIds: [],
-      beliefIds: [],
+      knowledgeIds: source?.knowledgeIds ? [...source.knowledgeIds] : [],
+      beliefIds: source?.beliefIds ? [...source.beliefIds] : [],
       relationshipIds: [],
     });
   }
   const relationships: RelationshipState[] = [];
-  const sourceAgentIds = [...summary.agentIds].sort();
   const projectedIdFor = new Map<string, EntityId>();
   for (let index = 0; index < sourceAgentIds.length; index += 1) {
     const projected = agents[index];
     if (projected) projectedIdFor.set(sourceAgentIds[index]!, projected.id);
+  }
+  for (let index = 0; index < agents.length; index += 1) {
+    const projected = agents[index];
+    const sourceId = sourceAgentIds[index];
+    const source = sourceId ? sourceRecords.get(sourceId) : undefined;
+    if (projected && source) projected.parentIds = source.parentIds.map((parentId) => projectedIdFor.get(parentId)).filter((parentId): parentId is EntityId => Boolean(parentId));
   }
   if (summary.relationshipRecords.length > 0) {
     for (const source of summary.relationshipRecords) {
@@ -64,8 +73,9 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
   }
   const organizations: OrganizationState[] = [];
   for (const summaryOrganization of summary.organizations) {
+    const sourceMembers = (summaryOrganization.memberIds ?? []).map((memberId) => projectedIdFor.get(memberId)).filter((memberId): memberId is EntityId => Boolean(memberId));
     const memberCount = Math.min(summaryOrganization.memberCount, agents.length);
-    const memberIds = agents.slice(0, memberCount).map((agent) => agent.id);
+    const memberIds = sourceMembers.length > 0 ? sourceMembers : agents.slice(0, memberCount).map((agent) => agent.id);
     organizations.push({
       id: asOrganizationId(summaryOrganization.id),
       type: summaryOrganization.type,
