@@ -179,6 +179,7 @@ const applyMessage = (message: WorkerMessage): void => {
   }
   if (message.type !== "snapshot") return;
   snapshot = message.snapshot;
+  map.setAnimating(!message.paused);
   if (message.snapshot.focusRegionId) {
     const match = /^region:(\d+):(\d+)$/.exec(message.snapshot.focusRegionId);
     if (match) {

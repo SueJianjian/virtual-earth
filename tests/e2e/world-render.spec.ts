@@ -31,6 +31,11 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#zoom-level")).toHaveText("110%");
   await page.getByRole("button", { name: "复位地图缩放" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("100%");
+  for (let click = 0; click < 12; click += 1) await page.getByRole("button", { name: "放大地图" }).click();
+  await expect(page.locator("#zoom-level")).toHaveText("800%");
+  await expect(canvas).toHaveJSProperty("width", 1920);
+  await expect(canvas).toHaveJSProperty("height", 1080);
+  await page.getByRole("button", { name: "复位地图缩放" }).click();
   const pixelSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d");
     if (!context || element.width === 0 || element.height === 0) return 0;

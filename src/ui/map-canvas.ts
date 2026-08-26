@@ -57,7 +57,7 @@ const shade = (color: [number, number, number], amount: number): string => {
   return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
 };
 
-const clampZoom = (value: number): number => Math.max(0.6, Math.min(2.5, value));
+const clampZoom = (value: number): number => Math.max(0.6, Math.min(8, value));
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
 const blendColor = (
@@ -105,11 +105,17 @@ const sampleColor = (
   return blendColor(top, bottom, vertical);
 };
 
-const surfaceDetailFor = (quality: RenderQuality, width: number, height: number): number => {
-  const requested = quality === 480 ? 2 : quality === 720 ? 3 : 4;
-  const maximum = Math.max(1, Math.floor(Math.sqrt(60_000 / Math.max(1, width * height))));
+const surfaceDetailFor = (quality: RenderQuality, width: number, height: number, zoom: number): number => {
+  const requested = zoom >= 4 ? 6 : zoom >= 2 ? 4 : quality === 480 ? 3 : quality === 720 ? 4 : 5;
+  const maximum = Math.max(1, Math.floor(Math.sqrt(180_000 / Math.max(1, width * height))));
   return Math.min(requested, maximum);
 };
+
+const microRelief = (x: number, y: number, phase: number): number => (
+  Math.sin(x * 7.13 + y * 3.71 + phase * 0.35) * 0.45
+  + Math.sin(x * 13.7 - y * 5.19 + phase * 0.18) * 0.3
+  + Math.sin((x + y) * 21.4 - phase * 0.12) * 0.25
+);
 
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
@@ -121,9 +127,16 @@ export const createMapCanvas = (
   let selection: CellSelection | undefined;
   let quality: RenderQuality = 480;
   let zoom = 1;
+  let cameraTarget: { x: number; y: number } | undefined;
   let geometry: MapGeometry | undefined;
+  let animationPhase = 0;
+  let lastAnimationFrame = 0;
+  let animationEnabled = false;
+  let scheduledRender = 0;
   const updateZoom = (next: number): void => {
     zoom = clampZoom(next);
+    if (zoom > 1 && selection) cameraTarget = { x: selection.x + 0.5, y: selection.y + 0.5 };
+    if (zoom <= 1) cameraTarget = undefined;
     onZoomChange?.(zoom);
     render();
   };
@@ -132,8 +145,13 @@ export const createMapCanvas = (
     if (!snapshot) return;
     const grid = snapshot.fields.elevation;
     const currentSnapshot = snapshot;
-    const dimensions = renderDimensions[quality];
-    const ratio = quality / 480;
+    const baseDimensions = renderDimensions[quality];
+    const rasterScale = Math.min(2.25, Math.max(1, zoom));
+    const dimensions = {
+      width: Math.min(1920, Math.round(baseDimensions.width * rasterScale)),
+      height: Math.min(1080, Math.round(baseDimensions.height * rasterScale)),
+    };
+    const ratio = dimensions.height / renderDimensions[480].height;
     if (canvas.width !== dimensions.width || canvas.height !== dimensions.height) {
       canvas.width = dimensions.width;
       canvas.height = dimensions.height;
@@ -141,18 +159,26 @@ export const createMapCanvas = (
     const context = canvas.getContext("2d");
     if (!context) return;
     const baseGeometry = geometryFor(grid.width, grid.height, canvas.width, canvas.height);
-    geometry = {
+    const scaledGeometry = {
       ...baseGeometry,
       tileWidth: baseGeometry.tileWidth * zoom,
       tileHeight: baseGeometry.tileHeight * zoom,
       heightScale: baseGeometry.heightScale * zoom,
+    };
+    const target = cameraTarget ?? { x: (grid.width - 1) / 2, y: (grid.height - 1) / 2 };
+    const targetElevation = sampleGrid(grid.values, grid.width, grid.height, target.x, target.y) * scaledGeometry.heightScale;
+    const targetPoint = pointFor(target.x, target.y, targetElevation, scaledGeometry);
+    geometry = {
+      ...scaledGeometry,
+      originX: scaledGeometry.originX + canvas.width / 2 - targetPoint[0],
+      originY: scaledGeometry.originY + canvas.height / 2 - targetPoint[1],
     };
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#101713";
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.lineJoin = "round";
     context.imageSmoothingEnabled = true;
-    const detail = surfaceDetailFor(quality, grid.width, grid.height);
+    const detail = surfaceDetailFor(quality, grid.width, grid.height, zoom);
     const fineWidth = grid.width * detail;
     const fineHeight = grid.height * detail;
     const terrainPoint = (x: number, y: number): [number, number] => pointFor(
@@ -179,17 +205,74 @@ export const createMapCanvas = (
     const drawSurface = (fineX: number, fineY: number): void => {
       const x = fineX / detail;
       const y = fineY / detail;
+      const bleed = 0.018;
       const nextX = (fineX + 1) / detail;
       const nextY = (fineY + 1) / detail;
-      polygon(context, [terrainPoint(x, y), terrainPoint(nextX, y), terrainPoint(nextX, nextY), terrainPoint(x, nextY)]);
+      const corners = [
+        terrainPoint(Math.max(0, x - bleed), Math.max(0, y - bleed)),
+        terrainPoint(Math.min(grid.width, nextX + bleed), Math.max(0, y - bleed)),
+        terrainPoint(Math.min(grid.width, nextX + bleed), Math.min(grid.height, nextY + bleed)),
+        terrainPoint(Math.max(0, x - bleed), Math.min(grid.height, nextY + bleed)),
+      ];
+      const minX = Math.min(...corners.map(([pointX]) => pointX));
+      const maxX = Math.max(...corners.map(([pointX]) => pointX));
+      const minY = Math.min(...corners.map(([, pointY]) => pointY));
+      const maxY = Math.max(...corners.map(([, pointY]) => pointY));
+      if (maxX < -32 || minX > canvas.width + 32 || maxY < -32 || minY > canvas.height + 32) return;
+      polygon(context, corners);
       const elevation = sampleGrid(grid.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
-      context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail, layer), 0.92 + elevation * 0.12);
+      const sampleX = x + 0.5 / detail;
+      const sampleY = y + 0.5 / detail;
+      const water = sampleGrid(currentSnapshot.fields.water.values, grid.width, grid.height, sampleX, sampleY);
+      const shimmer = water > 0.45 ? 1 + Math.sin(animationPhase * 2.2 + sampleX * 0.28 + sampleY * 0.19) * 0.045 : 1;
+      context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, sampleX, sampleY, layer), (0.92 + elevation * 0.12) * shimmer);
       context.fill();
     };
     for (let diagonal = 0; diagonal < fineWidth + fineHeight - 1; diagonal += 1) {
       const minX = Math.max(0, diagonal - (fineHeight - 1));
       const maxX = Math.min(fineWidth - 1, diagonal);
       for (let fineX = minX; fineX <= maxX; fineX += 1) drawSurface(fineX, diagonal - fineX);
+    }
+    if (zoom >= 4) {
+      const detail = zoom >= 6 ? 12 : 8;
+      const cellRadiusX = Math.ceil(canvas.width / Math.max(1, geometry.tileWidth) / 2) + 2;
+      const cellRadiusY = Math.ceil(canvas.height / Math.max(1, geometry.tileHeight) / 2) + 2;
+      const center = cameraTarget ?? { x: (grid.width - 1) / 2, y: (grid.height - 1) / 2 };
+      const minCellX = Math.max(0, Math.floor(center.x - cellRadiusX));
+      const maxCellX = Math.min(grid.width - 1, Math.ceil(center.x + cellRadiusX));
+      const minCellY = Math.max(0, Math.floor(center.y - cellRadiusY));
+      const maxCellY = Math.min(grid.height - 1, Math.ceil(center.y + cellRadiusY));
+      for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
+        for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+          for (let detailY = 0; detailY < detail; detailY += 1) {
+            for (let detailX = 0; detailX < detail; detailX += 1) {
+              const x = cellX + detailX / detail;
+              const y = cellY + detailY / detail;
+              const nextX = Math.min(grid.width, x + 1 / detail);
+              const nextY = Math.min(grid.height, y + 1 / detail);
+              const relief = microRelief(x, y, animationPhase) * 0.018;
+              const elevation = sampleGrid(grid.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
+              const microElevation = clamp(elevation + relief, 0, 1);
+              const points: Array<[number, number]> = [
+                pointFor(x, y, microElevation * geometry.heightScale, geometry),
+                pointFor(nextX, y, microElevation * geometry.heightScale, geometry),
+                pointFor(nextX, nextY, microElevation * geometry.heightScale, geometry),
+                pointFor(x, nextY, microElevation * geometry.heightScale, geometry),
+              ];
+              const minX = Math.min(...points.map(([pointX]) => pointX));
+              const maxX = Math.max(...points.map(([pointX]) => pointX));
+              const minY = Math.min(...points.map(([, pointY]) => pointY));
+              const maxY = Math.max(...points.map(([, pointY]) => pointY));
+              if (maxX < -8 || minX > canvas.width + 8 || maxY < -8 || minY > canvas.height + 8) continue;
+              polygon(context, points);
+              const water = sampleGrid(currentSnapshot.fields.water.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
+              const light = 0.97 + relief * 3 + (water > 0.45 ? Math.sin(animationPhase * 2 + x + y) * 0.025 : 0);
+              context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail, layer), light);
+              context.fill();
+            }
+          }
+        }
+      }
     }
     if (selection) {
       const corners = [
@@ -205,6 +288,24 @@ export const createMapCanvas = (
     }
   };
 
+  const animate = (time: number): void => {
+    const animationInterval = zoom > 4 ? 250 : zoom > 2 ? 100 : 50;
+    if (animationEnabled && time - lastAnimationFrame >= animationInterval) {
+      animationPhase = time / 1000;
+      lastAnimationFrame = time;
+      render();
+    }
+    requestAnimationFrame(animate);
+  };
+  const scheduleRender = (): void => {
+    if (scheduledRender) return;
+    scheduledRender = requestAnimationFrame(() => {
+      scheduledRender = 0;
+      render();
+    });
+  };
+  requestAnimationFrame(animate);
+
   canvas.addEventListener("click", (event) => {
     if (!snapshot) return;
     const rect = canvas.getBoundingClientRect();
@@ -219,6 +320,7 @@ export const createMapCanvas = (
     const x = Math.max(0, Math.min(grid.width - 1, Math.floor((diagonal + antiDiagonal) / 2)));
     const y = Math.max(0, Math.min(grid.height - 1, Math.floor((antiDiagonal - diagonal) / 2)));
     selection = { x, y, index: y * grid.width + x, regionId: `region:${x}:${y}` as RegionId };
+    if (zoom > 1) cameraTarget = { x: x + 0.5, y: y + 0.5 };
     onSelect(selection);
     render();
   });
@@ -233,9 +335,10 @@ export const createMapCanvas = (
     setLayer: (next: MapLayer) => { layer = next; render(); },
     setQuality: (next: RenderQuality) => { quality = next; render(); },
     setSelection: (next: CellSelection | undefined) => { selection = next; render(); },
-    zoomIn: () => updateZoom(zoom + 0.25),
-    zoomOut: () => updateZoom(zoom - 0.25),
-    resetZoom: () => updateZoom(1),
+    setAnimating: (next: boolean) => { if (animationEnabled === next) return; animationEnabled = next; if (next) render(); },
+    zoomIn: () => { zoom = clampZoom(zoom + (zoom < 2 ? 0.25 : zoom < 4 ? 0.5 : 1)); if (zoom > 1 && selection) cameraTarget = { x: selection.x + 0.5, y: selection.y + 0.5 }; onZoomChange?.(zoom); scheduleRender(); },
+    zoomOut: () => { zoom = clampZoom(zoom - (zoom <= 2 ? 0.25 : zoom <= 4 ? 0.5 : 1)); if (zoom <= 1) cameraTarget = undefined; onZoomChange?.(zoom); scheduleRender(); },
+    resetZoom: () => { zoom = 1; cameraTarget = undefined; onZoomChange?.(zoom); scheduleRender(); },
     getLayer: () => layer,
     getQuality: () => quality,
     getZoom: () => zoom,
