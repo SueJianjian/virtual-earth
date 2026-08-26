@@ -3,7 +3,7 @@ import type { WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
-export type RenderQuality = 1 | 2 | 3;
+export type RenderQuality = 480 | 720 | 1080;
 
 type MapGeometry = {
   originX: number;
@@ -58,7 +58,7 @@ export const createMapCanvas = (
   let snapshot: WorldSnapshot | undefined;
   let layer: MapLayer = "natural";
   let selection: CellSelection | undefined;
-  let quality: RenderQuality = 2;
+  let quality: RenderQuality = 480;
   let geometry: MapGeometry | undefined;
 
   const render = (): void => {
@@ -66,9 +66,9 @@ export const createMapCanvas = (
     const grid = snapshot.fields.elevation;
     const currentSnapshot = snapshot;
     const rect = canvas.getBoundingClientRect();
-    const ratio = Math.min(4, Math.max(1, window.devicePixelRatio || 1) * quality);
+    const ratio = quality / Math.max(1, rect.height);
     canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-    canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+    canvas.height = Math.max(1, quality);
     const context = canvas.getContext("2d");
     if (!context) return;
     geometry = geometryFor(grid.width, grid.height, canvas.width, canvas.height);

@@ -7,7 +7,14 @@ test("renders a non-empty world map and interactive observation panels", async (
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
-  await expect(page.locator("#render-quality")).toHaveValue("2");
+  await expect(page.locator("#render-quality")).toHaveValue("480");
+  await expect(canvas).toHaveJSProperty("height", 480);
+  await page.locator("#render-quality").selectOption("720");
+  await expect(canvas).toHaveJSProperty("height", 720);
+  await page.locator("#render-quality").selectOption("1080");
+  await expect(canvas).toHaveJSProperty("height", 1080);
+  await page.locator("#render-quality").selectOption("480");
+  await expect(canvas).toHaveJSProperty("height", 480);
   const pixelSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d");
     if (!context || element.width === 0 || element.height === 0) return 0;

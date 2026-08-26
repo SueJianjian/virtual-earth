@@ -42,7 +42,7 @@ app.innerHTML = `
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
         <canvas id="world-map" aria-label="虚拟地球 2.5D 地图"></canvas>
-        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="1">标准</option><option value="2" selected>高清</option><option value="3">超清</option></select></label></div>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
@@ -128,7 +128,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     legendHigh.textContent = legend[1];
   });
 });
-renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 1 | 2 | 3));
+renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 480 | 720 | 1080));
 bindTimeControls(document, client);
 query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
   const regionId = selection?.regionId ?? "region:0:0" as never;
