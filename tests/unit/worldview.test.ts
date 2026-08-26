@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { clearSimulationStages, registerSimulationStage, stepWorld } from "../../src/sim/engine.ts";
 import { createWorld, assertBlankWorld } from "../../src/sim/world.ts";
-import { createWorldviewState, listWorldviewPacks, stepWorldviews } from "../../src/sim/worldview/index.ts";
+import { createWorldviewState, DEFAULT_WORLDVIEW_PACK_IDS, listWorldviewPacks, stepWorldviews } from "../../src/sim/worldview/index.ts";
 import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
 import type { WorldDelta, WorldviewContext } from "../../src/sim/types.ts";
 
@@ -21,10 +21,11 @@ const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext =>
 describe("worldview packs", () => {
   beforeEach(() => clearSimulationStages());
 
-  it("registers four mythology motifs plus cultivation without seeding entities", () => {
+  it("registers the original emergence pack alongside optional legacy motifs without seeding records", () => {
     const packs = listWorldviewPacks();
     expect(packs.map((pack) => pack.id)).toEqual([
       "cultivation.path",
+      "emergence.original-worldview",
       "mythology.chinese-motif",
       "mythology.greek-motif",
       "mythology.indian-motif",
@@ -32,8 +33,10 @@ describe("worldview packs", () => {
     ]);
     const world = createWorld(100, { width: 8, height: 8, enabledPackIds: packs.map((pack) => pack.id) });
     expect(world.worldview.enabledPackIds).toEqual(packs.map((pack) => pack.id));
+    expect(DEFAULT_WORLDVIEW_PACK_IDS).toEqual(["emergence.original-worldview"]);
     expect(() => assertBlankWorld(world)).not.toThrow();
     expect(world.resources).toEqual([]);
+    expect(world.worldview.phenomena).toEqual([]);
   });
 
   it("returns only constrained effects and is deterministic for the same state", () => {

@@ -60,4 +60,15 @@ describe("world persistence", () => {
     expect(restored.organizations[0]?.territoryRegionIds).toEqual([regionId]);
     expect(restored.lod.summaries[0]?.organizations[0]?.territoryRegionIds).toEqual([regionId]);
   });
+
+  it("restores an empty phenomenon ledger for saves created before causal worldview records", () => {
+    const world = createWorld(123, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { worldview: { phenomena?: unknown } } };
+    delete legacy.world.worldview.phenomena;
+
+    const restored = deserializeWorld(JSON.stringify(legacy));
+
+    expect(restored.worldview.phenomena).toEqual([]);
+    expect(restored.worldview.enabledPackIds).toEqual(["cultivation.path"]);
+  });
 });

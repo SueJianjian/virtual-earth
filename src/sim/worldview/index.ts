@@ -2,7 +2,7 @@ import type { SimulationStage, WorldDelta } from "../types.ts";
 import { stepWorldviews } from "./engine.ts";
 import { meanFoodSecurity } from "../agents/food.ts";
 
-export { createWorldviewState, getWorldviewPack, listWorldviewPacks } from "./registry.ts";
+export { createWorldviewState, DEFAULT_WORLDVIEW_PACK_IDS, getWorldviewPack, listWorldviewPacks } from "./registry.ts";
 export { stepWorldviews } from "./engine.ts";
 export type { WorldviewPack, WorldviewRule, MotifDefinition, ResourceDefinition, EventTemplate } from "../types.ts";
 

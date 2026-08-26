@@ -239,6 +239,28 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         influence: 0.01,
         resourceBalances: {},
       });
+    } else if (effect.kind === "record-phenomenon") {
+      if (!state.worldview.enabledPackIds.includes(effect.packId)) throw new Error(`Worldview pack is not enabled: ${effect.packId}`);
+      const id = `phenomenon:${hashString(JSON.stringify(effect)).toString(16)}`;
+      if (state.worldview.phenomena.some((record) => record.id === id)) continue;
+      state.worldview.phenomena.push({
+        id,
+        packId: effect.packId,
+        kind: effect.phenomenonKind,
+        epistemicStatus: effect.epistemicStatus,
+        name: effect.name,
+        regionId: effect.regionId,
+        originTick: state.tick + 1,
+        parentIds: [...effect.parentIds].sort(),
+        causeRuleId: effect.causeRuleId,
+        evidence: { ...effect.evidence },
+      });
+      if (effect.epistemicStatus === "believed") {
+        const beliefId = `belief:${id}`;
+        for (const culture of state.cultures.filter((candidate) => candidate.regionId === effect.regionId)) {
+          if (!culture.beliefIds.includes(beliefId)) culture.beliefIds.push(beliefId);
+        }
+      }
     }
   }
 };

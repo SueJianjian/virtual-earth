@@ -10,6 +10,13 @@ test("renders a non-empty world map and interactive observation panels", async (
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "虚拟地球" })).toBeVisible();
   await expect(page.locator("#simulation-status")).toContainText("暂停");
+  await expect(page.locator("#status-panel")).toContainText("世界年龄");
+  await expect(page.locator("#status-panel")).toContainText("模型均温");
+  await expect(page.locator("#status-panel")).toContainText("°C");
+  await expect(page.locator("#status-panel")).toContainText("生命个体");
+  await expect(page.locator("#status-panel")).toContainText("个");
+  await expect(page.locator("#status-panel")).toContainText("户");
+  await expect(page.locator("#status-panel")).toContainText("食物单位");
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("data-render-style", "fantasy-3d");
@@ -80,6 +87,13 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#legend-high")).toHaveText("高保障");
   await canvas.click({ position: { x: 120, y: 100 } });
   await expect(page.locator("#inspector")).toContainText("region:");
+  await expect(page.locator("#inspector")).toContainText("行星坐标");
+  await expect(page.locator("#inspector")).toContainText("模拟海拔");
+  await expect(page.locator("#inspector")).toContainText("m");
+  await expect(page.locator("#inspector")).toContainText("°C");
+  await expect(page.locator("#inspector")).toContainText("相对浓度");
+  await expect(page.getByRole("region", { name: "认知与传说" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "认知与传说" })).toContainText("观测、理论、信仰与验证严格分离");
   await expect(page.locator("#inspector")).toContainText("有机物");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("知识承继");
@@ -106,6 +120,10 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   expect(overflow).toBeLessThanOrEqual(1);
   const metricOverflow = await page.locator(".lineage-metrics > div").evaluateAll((elements) => elements.some((element) => element.scrollWidth > element.clientWidth + 1));
   expect(metricOverflow).toBe(false);
+  const observationOverflow = await page.locator(".metric-row, .observation-row").evaluateAll((elements) => elements.some((element) => element.scrollWidth > element.clientWidth + 1));
+  expect(observationOverflow).toBe(false);
+  const worldviewOverflow = await page.locator(".worldview-list li").evaluateAll((elements) => elements.some((element) => element.scrollWidth > element.clientWidth + 1));
+  expect(worldviewOverflow).toBe(false);
 });
 
 test("rotates and tilts the constrained 2.5d camera", async ({ page }) => {

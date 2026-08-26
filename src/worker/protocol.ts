@@ -1,4 +1,4 @@
-import type { OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, StepResult, WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
+import type { OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, StepResult, WorldEvent, WorldEventInput, WorldState, WorldviewPhenomenonState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -21,6 +21,7 @@ export type WorldSnapshot = {
   foodSecurityByRegion?: Record<string, number>;
   sceneEntities?: SceneEntity[];
   sceneLinks?: SceneLink[];
+  worldviewPhenomena?: WorldviewPhenomenonState[];
   selectedRegion?: RegionSummary;
   projection?: RegionProjection;
 };

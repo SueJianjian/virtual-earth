@@ -5,7 +5,7 @@ import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { projectMicroRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { createWorld } from "../../src/sim/world.ts";
-import { lineageForSnapshot } from "../../src/ui/inspector.ts";
+import { lineageForSnapshot, renderInspector } from "../../src/ui/inspector.ts";
 import type { RegionId } from "../../src/sim/types.ts";
 import type { WorldSnapshot } from "../../src/worker/protocol.ts";
 
@@ -79,5 +79,46 @@ describe("region lineage inspector", () => {
     expect(lineage.knowledgeCarrierCount).toBe(1);
     expect(lineage.knowledgeInheritanceCount).toBe(1);
     expect(lineage.relationshipCounts.sibling).toBe(1);
+  });
+
+  it("renders physical, ecological and social values with explicit units", () => {
+    const snapshot = lineageSnapshot();
+    snapshot.worldviewPhenomena = [{
+      id: "phenomenon:observed",
+      packId: "emergence.original-worldview",
+      kind: "natural-anomaly",
+      epistemicStatus: "observed",
+      name: "晶息回响",
+      regionId: region,
+      originTick: 12,
+      parentIds: [],
+      causeRuleId: "original-anomaly-observation",
+      evidence: { anomalyStrength: 0.4 },
+    }, {
+      id: "phenomenon:theory",
+      packId: "emergence.original-worldview",
+      kind: "cultural-theory",
+      epistemicStatus: "hypothesized",
+      name: "晶息观测律",
+      regionId: region,
+      originTick: 18,
+      parentIds: ["phenomenon:observed"],
+      causeRuleId: "original-cultural-theory",
+      evidence: { knowledgeDiversity: 3 },
+    }];
+    const element = { innerHTML: "" } as HTMLElement;
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region });
+
+    expect(element.innerHTML).toContain("行星坐标");
+    expect(element.innerHTML).toContain("模拟海拔");
+    expect(element.innerHTML).toContain("°C");
+    expect(element.innerHTML).toContain("m");
+    expect(element.innerHTML).toContain("相对浓度");
+    expect(element.innerHTML).toContain("户");
+    expect(element.innerHTML).toContain("食物单位");
+    expect(element.innerHTML).toContain("认知与传说");
+    expect(element.innerHTML).toContain("已观测");
+    expect(element.innerHTML).toContain("文明理论");
+    expect(element.innerHTML).toContain("源自 晶息回响");
   });
 });

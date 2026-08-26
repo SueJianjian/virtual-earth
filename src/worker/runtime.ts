@@ -5,6 +5,7 @@ import { createWorld, worldDigest } from "../sim/world.ts";
 import { foodSecurityFromBalance } from "../sim/agents/food.ts";
 import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 import type { SceneEntity, SceneLink, WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
+import { DEFAULT_WORLDVIEW_PACK_IDS } from "../sim/worldview/index.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
 const cloneChemistry = (chemistry: WorldState["chemistry"]): WorldState["chemistry"] => structuredClone(chemistry);
@@ -109,7 +110,7 @@ export type SimulationRuntime = {
   getSpeed(): 1 | 4 | 16 | 64;
 };
 
-export const createSimulationRuntime = (initial: WorldState = createWorld(1, { enabledPackIds: ["cultivation.path", "mythology.chinese-motif", "mythology.greek-motif", "mythology.indian-motif", "mythology.norse-motif"] })): SimulationRuntime => {
+export const createSimulationRuntime = (initial: WorldState = createWorld(1, { enabledPackIds: [...DEFAULT_WORLDVIEW_PACK_IDS] })): SimulationRuntime => {
   let state = structuredClone(initial);
   let paused = true;
   let speed: 1 | 4 | 16 | 64 = 1;
@@ -150,6 +151,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       foodSecurityByRegion: foodSecurityByRegion(state),
       sceneEntities: scene.entities,
       sceneLinks: scene.links,
+      worldviewPhenomena: structuredClone(state.worldview.phenomena),
       ...(selectedRegion ? { selectedRegion } : {}),
       ...(projection ? { projection: structuredClone(projection) } : {}),
     };

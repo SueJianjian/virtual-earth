@@ -92,7 +92,20 @@ const validateWorld = (value: unknown): WorldState => {
     ...organization,
     territoryRegionIds: Array.isArray(organization.territoryRegionIds) ? organization.territoryRegionIds : [organization.regionId],
   }));
-  return { ...world, organizations, lod: { ...lod, summaries }, observation: focusRegionId ? { focusRegionId } : {} } as WorldState;
+  const worldview = world.worldview as Partial<WorldState["worldview"]>;
+  return {
+    ...world,
+    organizations,
+    worldview: {
+      ...world.worldview,
+      enabledPackIds: Array.isArray(worldview.enabledPackIds) ? worldview.enabledPackIds : [],
+      discoveredRuleIds: Array.isArray(worldview.discoveredRuleIds) ? worldview.discoveredRuleIds : [],
+      entities: Array.isArray(worldview.entities) ? worldview.entities : [],
+      phenomena: Array.isArray(worldview.phenomena) ? worldview.phenomena : [],
+    },
+    lod: { ...lod, summaries },
+    observation: focusRegionId ? { focusRegionId } : {},
+  } as WorldState;
 };
 
 export const serializeWorld = (state: WorldState): string => JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, world: encode({ ...state, observation: state.observation.focusRegionId ? { focusRegionId: state.observation.focusRegionId } : {} }) });

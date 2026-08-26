@@ -16,15 +16,25 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
       if (roll >= decision.probability) continue;
       const outcome = rule.apply(context as RuleApplicationContext);
       if (outcome.status !== "applied" || !outcome.value) continue;
-      delta.worldviewEffects.push(outcome.value as WorldviewEffect);
+      const effect = outcome.value as WorldviewEffect;
+      delta.worldviewEffects.push(effect);
       delta.eventDrafts.push({
         kind: `worldview-${rule.id}`,
         ruleId: rule.id,
-        sourceIds: [],
+        sourceIds: effect.kind === "record-phenomenon" ? effect.parentIds : [],
         probability: decision.probability,
         roll,
         evidence: { ...decision.evidence, eligible: true, packId },
-        payload: { packId, ruleId: rule.id },
+        payload: {
+          packId,
+          ruleId: rule.id,
+          ...(effect.kind === "record-phenomenon" ? {
+            name: effect.name,
+            phenomenonKind: effect.phenomenonKind,
+            epistemicStatus: effect.epistemicStatus,
+            regionId: effect.regionId,
+          } : {}),
+        },
         source: "natural",
       });
     }

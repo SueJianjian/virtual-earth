@@ -424,6 +424,24 @@ export type WorldviewEntityState = {
   influence: number;
   resourceBalances: Record<string, number>;
 };
+export type WorldviewPhenomenonKind =
+  | "natural-anomaly"
+  | "cultural-theory"
+  | "mythic-tradition"
+  | "verified-principle";
+export type EpistemicStatus = "observed" | "hypothesized" | "believed" | "verified";
+export type WorldviewPhenomenonState = {
+  id: string;
+  packId: string;
+  kind: WorldviewPhenomenonKind;
+  epistemicStatus: EpistemicStatus;
+  name: string;
+  regionId: RegionId;
+  originTick: number;
+  parentIds: string[];
+  causeRuleId: string;
+  evidence: Record<string, number | string | boolean>;
+};
 export type WorldviewEffect =
   | {
       kind: "discover-motif";
@@ -448,11 +466,23 @@ export type WorldviewEffect =
       evidence: Record<string, number | string | boolean>;
       probability: number;
     }
+  | {
+      kind: "record-phenomenon";
+      packId: string;
+      phenomenonKind: WorldviewPhenomenonKind;
+      epistemicStatus: EpistemicStatus;
+      name: string;
+      regionId: RegionId;
+      parentIds: string[];
+      causeRuleId: string;
+      evidence: Record<string, number | string | boolean>;
+    }
   | { kind: "resource-transaction"; transaction: ResourceTransaction };
 export type WorldviewState = {
   enabledPackIds: string[];
   discoveredRuleIds: string[];
   entities: WorldviewEntityState[];
+  phenomena: WorldviewPhenomenonState[];
 };
 export type SimulationStage = {
   id: string;

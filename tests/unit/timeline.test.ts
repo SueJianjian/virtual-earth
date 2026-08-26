@@ -28,4 +28,33 @@ describe("event timeline", () => {
     expect(element.innerHTML).toContain("组织分裂 · 缺粮压力");
     expect(element.innerHTML).toContain("个体死亡 · 饥饿主导");
   });
+
+  it("uses readable labels for cross-region civilization events", () => {
+    const element = { innerHTML: "" } as HTMLElement;
+    renderTimeline(element, [
+      event("population-dispersal", {}),
+      event("territory-expansion", {}),
+      event("interregional-trade", {}),
+      event("border-conflict", {}),
+    ]);
+
+    expect(element.innerHTML).toContain("种群扩散");
+    expect(element.innerHTML).toContain("疆域扩张");
+    expect(element.innerHTML).toContain("区域贸易");
+    expect(element.innerHTML).toContain("边境冲突");
+    expect(element.innerHTML).toContain("演化步 4");
+  });
+
+  it("names causal worldview events without treating beliefs as verified facts", () => {
+    const element = { innerHTML: "" } as HTMLElement;
+    const observation = event("worldview-original-anomaly-observation", {});
+    observation.payload = { name: "雾脉共振", epistemicStatus: "observed" };
+    const myth = event("worldview-original-mythic-tradition", {});
+    myth.payload = { name: "雾脉守望传说", epistemicStatus: "believed" };
+    renderTimeline(element, [observation, myth]);
+
+    expect(element.innerHTML).toContain("发现异常自然现象 · 雾脉共振");
+    expect(element.innerHTML).toContain("形成神话传统 · 雾脉守望传说");
+    expect(element.innerHTML).not.toContain("验证客观规律 · 雾脉守望传说");
+  });
 });
