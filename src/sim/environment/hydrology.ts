@@ -41,13 +41,24 @@ export const simulateWater = (
   }
   const targetTotal = Math.max(0, total(water.values) + explicitTransfer);
   for (let index = 0; index < water.values.length; index += 1) {
+    const x = index % water.width;
+    const y = Math.floor(index / water.width);
     const waterValue = water.values[index] ?? 0;
     const humidityValue = humidity.values[index] ?? 0;
     const elevationValue = elevation.values[index] ?? 0;
-    const evaporation = waterValue * (0.018 + humidityValue * 0.01);
-    const rain = humidityValue * (0.025 + (1 - elevationValue) * 0.01);
-    const runoff = Math.max(0, elevationValue - 0.62) * 0.008;
-    next[index] = clamp01(waterValue - evaporation + rain - runoff);
+    const neighborIndices = [
+      y > 0 ? index - water.width : index,
+      y + 1 < water.height ? index + water.width : index,
+      y * water.width + (x + water.width - 1) % water.width,
+      y * water.width + (x + 1) % water.width,
+    ];
+    const neighborWater = neighborIndices.reduce((sum, neighbor) => sum + (water.values[neighbor] ?? waterValue), 0) / neighborIndices.length;
+    const neighborElevation = neighborIndices.reduce((sum, neighbor) => sum + (elevation.values[neighbor] ?? elevationValue), 0) / neighborIndices.length;
+    const evaporation = waterValue * (0.012 + (1 - humidityValue) * 0.012);
+    const rain = humidityValue * (0.018 + (1 - elevationValue) * 0.012);
+    const diffusion = (neighborWater - waterValue) * 0.045;
+    const runoff = Math.max(0, elevationValue - neighborElevation) * waterValue * 0.035;
+    next[index] = clamp01(waterValue - evaporation + rain + diffusion - runoff);
   }
   return rebalance(next, targetTotal);
 };

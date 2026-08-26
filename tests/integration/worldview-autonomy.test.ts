@@ -14,7 +14,7 @@ describe("worldview autonomy integration", () => {
     const packs = ["cultivation.path", "mythology.chinese-motif", "mythology.greek-motif", "mythology.indian-motif", "mythology.norse-motif"];
     let state = createWorld(123, { width: 16, height: 8, enabledPackIds: packs });
     for (let index = 0; index < 1_200; index += 1) {
-      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
 
     expect(state.worldview.entities.length).toBeGreaterThan(0);

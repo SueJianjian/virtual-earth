@@ -37,6 +37,7 @@ const lineageSnapshot = (): WorldSnapshot => {
     years: state.years,
     digest: "test",
     fields: state.fields,
+    chemistry: state.chemistry,
     metrics: {},
     projection: projectMicroRegion(state, region),
     selectedRegion: summarizeRegionState(state, region, "micro"),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { initializeEnvironment, stepEnvironment, applyEnvironmentDelta } from "../../src/sim/environment/index.ts";
+import { initializeEnvironment, stepEnvironment, applyEnvironmentDelta, calculateClimate } from "../../src/sim/environment/index.ts";
 import { totalWater } from "../../src/sim/environment/hydrology.ts";
 import { createWorld } from "../../src/sim/world.ts";
 
@@ -67,5 +67,27 @@ describe("environment simulation", () => {
     const after = applyEnvironmentDelta(state, delta);
 
     expect(totalWater(after.fields.water)).toBeGreaterThan(before);
+  });
+
+  it("warms under a stronger atmospheric carbon greenhouse forcing", () => {
+    const baseline = makeEnvironment();
+    const carbonRich = structuredClone(baseline);
+    carbonRich.chemistry.carbon.values.fill(0.8);
+    const mean = (values: Float32Array) => values.reduce((sum, value) => sum + value, 0) / values.length;
+
+    expect(mean(calculateClimate(carbonRich).temperature)).toBeGreaterThan(mean(calculateClimate(baseline).temperature));
+  });
+
+  it("changes relief and recycles minerals through slow geology", () => {
+    const state = makeEnvironment();
+    state.tick = 7;
+    state.years = 7;
+    const beforeElevation = Array.from(state.fields.elevation.values);
+    const delta = stepEnvironment(state, { solarFlux: 1, externalEvents: [] });
+    const next = applyEnvironmentDelta(state, delta);
+
+    expect(delta.fieldChanges.some((change) => change.causeRuleId === "geology:tectonics-erosion")).toBe(true);
+    expect(Array.from(next.fields.elevation.values)).not.toEqual(beforeElevation);
+    expect(next.fields.nutrients.values.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
   });
 });

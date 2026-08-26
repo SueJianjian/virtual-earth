@@ -36,6 +36,13 @@ event count and the final authoritative digest.
   organizations, mythology entities or cultivation entities.
 - Environment initialization is derived from generated terrain. Water and
   nutrients then evolve through field deltas and chemistry changes.
+- Orbital forcing, greenhouse carbon, ocean thermal inertia and humidity form
+  a deterministic climate cycle. Slow tectonics, erosion and deposition alter
+  relief while recycling minerals without bypassing the field-delta ledger.
+- Biomass is no longer monotonic: primary production, grazing, decomposition
+  and natural turnover feed carbon, oxygen, organics and nutrients back into
+  one another. Regional ecological carrying capacity also contributes to the
+  stability of settlements and larger organizations.
 - Abiogenesis, trophic species, individuals, families and organizations are
   conditional probabilistic outcomes. No fixed tick or stage name creates an
   entity.
@@ -67,4 +74,5 @@ event count and the final authoritative digest.
 - Mythology and cultivation packs provide potential rules only. They do not
   pre-create deities, sects, techniques or cultivators.
 - Observation, focus and map layers are projections. They cannot change the
-  authoritative world.
+  authoritative world. Carbon and oxygen overlays plus local chemistry values
+  make the planetary feedback cycle directly observable.

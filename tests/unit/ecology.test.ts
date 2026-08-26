@@ -15,6 +15,10 @@ const ecologyContext = (state: ReturnType<typeof createWorld>): RuleContext => (
     nutrientLevel: 0.8,
     biomass: 0,
     oxygen: 0.01,
+    carbon: 0.2,
+    organics: 0,
+    oceanCoverage: 0.5,
+    terrainRelief: 0.1,
     populationCount: 0,
     cognitivePotential: 0,
     knowledgeDiversity: 0,
@@ -96,6 +100,8 @@ describe("emergent ecology", () => {
       source: "environment",
       causeRuleId: "ecology:producer-food",
     }));
+    expect(delta.fieldChanges).toContainEqual(expect.objectContaining({ field: "biomass", causeRuleId: "ecology:primary-production" }));
+    expect(delta.chemistryChanges).toContainEqual(expect.objectContaining({ field: "oxygen", causeRuleId: "ecology:photosynthesis" }));
   });
 
   it("migrates a mobile population toward a better adjacent habitat", () => {

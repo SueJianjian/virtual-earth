@@ -131,6 +131,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     return;
   }
   const fields = snapshot.fields;
+  const chemistry = snapshot.chemistry;
   const lineage = lineageForSnapshot(snapshot);
   const targets = detailTargets(snapshot, detail.level);
   const targetOptions = detail.level === "region"
@@ -160,6 +161,9 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
       <div><dt>湿度</dt><dd>${percent(fields.humidity.values[selection.index])}</dd></div>
       <div><dt>养分</dt><dd>${percent(fields.nutrients.values[selection.index])}</dd></div>
       <div><dt>生物量</dt><dd>${percent(fields.biomass.values[selection.index])}</dd></div>
+      <div><dt>碳</dt><dd>${percent(chemistry.carbon.values[selection.index])}</dd></div>
+      <div><dt>氧气</dt><dd>${percent(chemistry.oxygen.values[selection.index])}</dd></div>
+      <div><dt>有机物</dt><dd>${percent(chemistry.organics.values[selection.index])}</dd></div>
     </dl>
     <section class="lineage-section" aria-label="家庭谱系">
       <div class="lineage-heading"><strong>家庭谱系</strong><span>${format(lineage.population)} 个体 · ${format(lineage.relationshipCount)} 关系</span></div>

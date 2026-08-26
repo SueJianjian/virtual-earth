@@ -29,7 +29,7 @@ export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "ye
   const resourceTotal = Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + state.resources
     .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
     .reduce((sum, resource) => sum + resource.amount, 0);
-  const foodResilient = organization.type === "family" || organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.1;
+  const foodResilient = organization.type === "family" || organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.075;
   const stable = members.length >= minimumMembers && members.length <= capacity && resourceTotal >= 0 && foodResilient;
   const status = stable ? "active" : members.length < minimumMembers ? "collapsed" : "fragmenting";
   if (members.length !== organization.memberIds.length || status !== organization.status) {

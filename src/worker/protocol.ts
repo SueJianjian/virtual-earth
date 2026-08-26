@@ -16,6 +16,7 @@ export type WorldSnapshot = {
   digest: string;
   focusRegionId?: RegionId;
   fields: WorldState["fields"];
+  chemistry: WorldState["chemistry"];
   metrics: Record<string, number>;
   foodSecurityByRegion?: Record<string, number>;
   sceneEntities?: SceneEntity[];

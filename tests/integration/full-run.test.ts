@@ -11,6 +11,18 @@ const run = (seed: number, steps = 900) => {
 };
 
 describe("autonomous world long run", () => {
+  it("produces the next world without mutating the authoritative input", () => {
+    const initial = createWorld(41, { width: 16, height: 8 });
+    const digest = worldDigest(initial);
+
+    const result = stepWorld(initial, { elapsedYears: 1, externalEvents: [] });
+
+    expect(worldDigest(initial)).toBe(digest);
+    expect(initial.tick).toBe(0);
+    expect(result.state).not.toBe(initial);
+    expect(result.state.tick).toBe(1);
+  });
+
   it("starts from blank entities and evolves environmental fields", () => {
     const initial = createWorld(42, { width: 16, height: 8 });
     const state = run(42);

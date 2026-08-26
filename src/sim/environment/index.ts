@@ -2,6 +2,7 @@ import { calculateChemistry, applyChemistryChanges } from "./chemistry.ts";
 import { calculateClimate } from "./climate.ts";
 import { simulateWater } from "./hydrology.ts";
 import { initializeTerrainWater } from "./terrain.ts";
+import { calculateGeology } from "./geology.ts";
 import type {
   EnvironmentDelta,
   EnvironmentInput,
@@ -95,6 +96,7 @@ export const stepEnvironment = (
     }
   }
   delta.chemistryChanges = calculateChemistry(workingState);
+  delta.fieldChanges.push(...calculateGeology(workingState));
   const width = state.fields.elevation.width;
   for (const event of activeEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
@@ -132,3 +134,4 @@ export const applyEnvironmentDelta = (
 };
 
 export { calculateChemistry, calculateClimate, initializeTerrainWater, simulateWater };
+export { calculateGeology } from "./geology.ts";

@@ -54,6 +54,25 @@ const mean = (values: Float32Array): number => {
   return sum / values.length;
 };
 
+const fractionAtLeast = (values: Float32Array, threshold: number): number => {
+  if (values.length === 0) return 0;
+  let count = 0;
+  for (const value of values) if (value >= threshold) count += 1;
+  return count / values.length;
+};
+
+const terrainRelief = (state: WorldState): number => {
+  const { elevation } = state.fields;
+  if (elevation.values.length === 0) return 0;
+  let total = 0;
+  for (let index = 0; index < elevation.values.length; index += 1) {
+    const x = index % elevation.width;
+    const east = Math.floor(index / elevation.width) * elevation.width + (x + 1) % elevation.width;
+    total += Math.abs((elevation.values[index] ?? 0) - (elevation.values[east] ?? 0));
+  }
+  return total / elevation.values.length;
+};
+
 export const metricsFor = (state: WorldState): Record<StateMetric, number> => ({
   meanTemperature: mean(state.fields.temperature.values),
   meanHumidity: mean(state.fields.humidity.values),
@@ -61,6 +80,10 @@ export const metricsFor = (state: WorldState): Record<StateMetric, number> => ({
   nutrientLevel: mean(state.fields.nutrients.values),
   biomass: mean(state.fields.biomass.values),
   oxygen: mean(state.chemistry.oxygen.values),
+  carbon: mean(state.chemistry.carbon.values),
+  organics: mean(state.chemistry.organics.values),
+  oceanCoverage: fractionAtLeast(state.fields.water.values, 0.5),
+  terrainRelief: terrainRelief(state),
   populationCount: state.populations.reduce((sum, population) => sum + population.count, 0),
   cognitivePotential: state.species.reduce((sum, species) => sum + (species.traits.cognitivePotential ?? 0), 0),
   knowledgeDiversity: state.cultures.reduce((sum, culture) => sum + culture.knowledgeIds.length, 0),
@@ -274,7 +297,7 @@ export type StepOptions = { computeDigest?: boolean };
 
 export const stepWorld = (state: WorldState, input: StepInput, options: StepOptions = {}): { state: WorldState; events: WorldState["events"]; digest: string } => {
   installDefaultStages();
-  const previous = structuredClone(state);
+  const previous = state;
   const acceptedExternalEvents = input.externalEvents.filter((event) => !previous.events.some((known) => known.id === event.id));
   const priorDeltas = new Map<string, WorldDelta>();
   const merged = emptyDelta();
@@ -290,7 +313,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     merged.eventDrafts.push(...delta.eventDrafts);
     if (delta.lodEffects) merged.lodEffects = [...(merged.lodEffects ?? []), ...delta.lodEffects];
   }
-  const next = structuredClone(previous);
+  const next = structuredClone({ ...previous, events: [] }) as WorldState;
   applyDelta(next, merged);
   const [, nextRandom] = nextRandomValue(previous.random);
   next.random = nextRandom;

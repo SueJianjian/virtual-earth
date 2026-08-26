@@ -7,6 +7,7 @@ import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 import type { SceneEntity, SceneLink, WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
+const cloneChemistry = (chemistry: WorldState["chemistry"]): WorldState["chemistry"] => structuredClone(chemistry);
 const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
   const foodBalances = new Map<string, number>();
   for (const resource of state.resources) {
@@ -134,6 +135,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       digest,
       ...(observation.focusRegionId ? { focusRegionId: observation.focusRegionId } : {}),
       fields: cloneFields(state.fields),
+      chemistry: cloneChemistry(state.chemistry),
       metrics: metricsFor(state),
       foodSecurityByRegion: foodSecurityByRegion(state),
       sceneEntities: scene.entities,

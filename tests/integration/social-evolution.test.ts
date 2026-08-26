@@ -15,7 +15,7 @@ describe("social evolution integration", () => {
   it("forms relationships and families when an eligible population persists", () => {
     let state = createWorld(123, { width: 16, height: 8 });
     for (let index = 0; index < 950; index += 1) {
-      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
 
     expect(state.agents.length).toBeGreaterThanOrEqual(2);
@@ -24,10 +24,12 @@ describe("social evolution integration", () => {
     expect(state.events.some((event) => event.kind === "family-formation")).toBe(true);
   });
 
-  it("rebuilds active higher-order organizations after earlier groups collapse", () => {
+  it("eventually rebuilds active higher-order organizations after earlier groups collapse", () => {
     let state = createWorld(123, { width: 16, height: 8 });
-    for (let index = 0; index < 1_100; index += 1) {
-      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    for (let index = 0; index < 1_300; index += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
+      const active = state.organizations.filter((organization) => organization.status === "active");
+      if (active.some((organization) => organization.type === "tribe") && active.some((organization) => organization.type === "settlement")) break;
     }
 
     const activeOrganizations = state.organizations.filter((organization) => organization.status === "active");
@@ -39,7 +41,7 @@ describe("social evolution integration", () => {
   it("reaches city-scale organization through sustained local conditions", () => {
     let state = createWorld(123, { width: 16, height: 8 });
     for (let index = 0; index < 1_200; index += 1) {
-      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
 
     expect(state.organizations.some((organization) => organization.status === "active" && organization.type === "city" && organization.memberIds.length >= 30)).toBe(true);

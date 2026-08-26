@@ -1,6 +1,6 @@
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
-export type MapLayer = "natural" | "temperature" | "rainfall" | "nutrients" | "biomass" | "species" | "foodSecurity";
+export type MapLayer = "natural" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "species" | "foodSecurity";
 
 export const layerLabels: Record<MapLayer, string> = {
   natural: "自然",
@@ -8,6 +8,8 @@ export const layerLabels: Record<MapLayer, string> = {
   rainfall: "降水",
   nutrients: "养分",
   biomass: "生物量",
+  carbon: "碳循环",
+  oxygen: "氧气",
   species: "物种",
   foodSecurity: "食物保障",
 };
@@ -27,6 +29,8 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const humidity = clamp(fields.humidity.values[index] ?? 0);
   const nutrients = clamp(fields.nutrients.values[index] ?? 0);
   const biomass = clamp(fields.biomass.values[index] ?? 0);
+  const carbon = clamp(snapshot.chemistry.carbon.values[index] ?? 0);
+  const oxygen = clamp(snapshot.chemistry.oxygen.values[index] ?? 0);
   const width = fields.elevation.width;
   const regionId = `region:${index % width}:${Math.floor(index / width)}`;
   const foodSecurity = clamp(snapshot.foodSecurityByRegion?.[regionId] ?? 0);
@@ -34,6 +38,8 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   if (layer === "rainfall") return mix([37, 43, 46], [44, 163, 191], humidity);
   if (layer === "nutrients") return mix([51, 47, 41], [211, 167, 63], nutrients);
   if (layer === "biomass") return mix([50, 48, 43], [65, 157, 85], biomass);
+  if (layer === "carbon") return mix([47, 92, 105], [201, 118, 58], carbon);
+  if (layer === "oxygen") return mix([74, 72, 76], [111, 192, 215], oxygen);
   if (layer === "species") return biomass > 0.005 ? mix([62, 85, 59], [224, 193, 86], Math.min(1, biomass * 4)) : [42, 48, 45];
   if (layer === "foodSecurity") return mix([131, 61, 49], [64, 157, 104], foodSecurity);
   if (water > 0.45 || elevation < 0.46) return mix([20, 66, 88], [46, 121, 144], Math.max(water, 1 - elevation));

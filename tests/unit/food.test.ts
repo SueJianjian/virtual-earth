@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgent, foodPerCapitaForAgent, foodSecurityForAgent, meanFoodSecurity, stepAgents } from "../../src/sim/agents/index.ts";
+import { createAgent, foodPerCapitaForAgent, foodSecurityForAgent, foodSecurityForOrganization, meanFoodSecurity, stepAgents } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { metricsFor } from "../../src/sim/engine.ts";
@@ -35,6 +35,14 @@ const fixture = () => {
 };
 
 describe("food security", () => {
+  it("lets local biomass support an organization before food is stockpiled", () => {
+    const { state, family } = fixture();
+    state.fields.biomass.values[0] = 0.02;
+    state.fields.nutrients.values[0] = 0.5;
+
+    expect(foodSecurityForOrganization(state, family)).toBeGreaterThan(0.45);
+  });
+
   it("turns held food into bounded per-agent security without counting it twice", () => {
     const { state, family, agents } = fixture();
     state.resources = [{

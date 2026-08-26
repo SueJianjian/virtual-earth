@@ -14,9 +14,21 @@ export const foodBalanceFor = (
   .reduce((sum, resource) => sum + resource.amount, 0);
 
 export const foodSecurityForOrganization = (
-  state: Pick<WorldState, "resources">,
+  state: Pick<WorldState, "resources" | "fields">,
   organization: Pick<OrganizationState, "id" | "regionId" | "memberIds">,
-): number => clamp(foodBalanceFor(state, organization.regionId, organization.id) * 2 / Math.max(1, organization.memberIds.length));
+): number => {
+  const ledgerSecurity = clamp(foodBalanceFor(state, organization.regionId, organization.id) * 2 / Math.max(1, organization.memberIds.length));
+  const match = /^region:(\d+):(\d+)$/.exec(organization.regionId);
+  if (!match) return ledgerSecurity;
+  const x = Math.max(0, Math.min(state.fields.biomass.width - 1, Number(match[1] ?? 0)));
+  const y = Math.max(0, Math.min(state.fields.biomass.height - 1, Number(match[2] ?? 0)));
+  const index = y * state.fields.biomass.width + x;
+  const ecosystemSecurity = clamp(
+    (state.fields.biomass.values[index] ?? 0) * 24
+    + (state.fields.nutrients.values[index] ?? 0) * 0.06,
+  );
+  return Math.max(ledgerSecurity, ecosystemSecurity);
+};
 
 export const foodSecurityForRegion = (
   state: Pick<WorldState, "resources">,

@@ -49,6 +49,13 @@ const neighborRegion = (regionId: string, width: number, height: number): string
 
 export const stepEcology = (state: WorldState, context: RuleContext): EcologyDelta => {
   const delta = emptyDelta();
+  for (let index = 0; index < state.fields.biomass.values.length; index += 1) {
+    const biomass = state.fields.biomass.values[index] ?? 0;
+    if (biomass > 0) {
+      delta.fieldChanges.push({ field: "biomass", index, operation: "add", value: -biomass * 0.00035, causeRuleId: "ecology:biomass-turnover" });
+      delta.chemistryChanges.push({ field: "organics", index, operation: "add", value: biomass * 0.00035, causeRuleId: "ecology:biomass-turnover" });
+    }
+  }
   const metrics = {
     ...context.metrics,
     waterCoverage: mean(state.fields.water.values),
@@ -124,13 +131,19 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       ...(count > 0.001 ? { value: { ...population, regionId: nextRegionId, count, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
     });
     if (species.role === "producer") {
+      const primaryProduction = Math.min(0.02, count * 0.000001 * (0.5 + suitabilityScore) * (0.6 + nutrients * 0.4));
       delta.fieldChanges.push({
         field: "biomass",
         index,
         operation: "add",
-        value: Math.min(0.03, count * 0.000001),
-        causeRuleId: "producer-growth",
+        value: primaryProduction,
+        causeRuleId: "ecology:primary-production",
       });
+      delta.fieldChanges.push({ field: "nutrients", index, operation: "add", value: -primaryProduction * 0.12, causeRuleId: "ecology:nutrient-uptake" });
+      delta.chemistryChanges.push(
+        { field: "carbon", index, operation: "add", value: -primaryProduction * 0.025, causeRuleId: "ecology:photosynthesis" },
+        { field: "oxygen", index, operation: "add", value: primaryProduction * 0.032, causeRuleId: "ecology:photosynthesis" },
+      );
       const foodAmount = Math.max(0, Math.min(4, count * suitabilityScore * 0.002));
       if (foodAmount > 0.001) {
         delta.resourceTransactions.push({
@@ -143,6 +156,22 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
           sourceId: population.id,
           causeRuleId: "ecology:producer-food",
         });
+      }
+    } else if (species.role === "consumer") {
+      const localBiomass = state.fields.biomass.values[index] ?? 0;
+      const grazing = Math.min(localBiomass * 0.0015, count * 0.000000001);
+      if (grazing > 0) {
+        delta.fieldChanges.push({ field: "biomass", index, operation: "add", value: -grazing, causeRuleId: "ecology:grazing" });
+        delta.chemistryChanges.push({ field: "organics", index, operation: "add", value: grazing * 0.35, causeRuleId: "ecology:grazing" });
+      }
+    } else {
+      const decomposition = Math.min(state.chemistry.organics.values[index] ?? 0, count * 0.00000035);
+      if (decomposition > 0) {
+        delta.chemistryChanges.push(
+          { field: "organics", index, operation: "add", value: -decomposition, causeRuleId: "ecology:decomposition" },
+          { field: "carbon", index, operation: "add", value: decomposition * 0.2, causeRuleId: "ecology:decomposition" },
+        );
+        delta.fieldChanges.push({ field: "nutrients", index, operation: "add", value: decomposition * 0.4, causeRuleId: "ecology:decomposition" });
       }
     }
   }

@@ -31,7 +31,7 @@ export const organizationCapacity = (
     family: 8,
     clan: 24,
     tribe: 80,
-    settlement: 160,
+    settlement: 512,
     city: 2_000,
     state: 20_000,
     federation: 100_000,
@@ -41,7 +41,7 @@ export const organizationCapacity = (
     .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
     .reduce((sum, resource) => sum + resource.amount, 0);
   const foodSecurity = foodSecurityForOrganization(context.state, { ...organization, memberIds: context.candidateMemberIds });
-  const resourceFactor = Math.max(0.1, Math.min(1.5, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + ledgerResources + 1) / 10));
+  const resourceFactor = Math.max(0.5, Math.min(1.5, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + ledgerResources + 1) / 10));
   const foodFactor = 0.7 + foodSecurity * 0.3;
   const socialFactor = Math.max(0.25, Math.min(1.5, context.candidateMemberIds.length / Math.max(1, organization.memberIds.length)));
   return Math.max(minimumMembersFor(organization.type), Math.floor(base[organization.type] * resourceFactor * foodFactor * socialFactor));

@@ -87,6 +87,13 @@ const emptySnapshot: WorldSnapshot = {
     nutrients: { width: 1, height: 1, values: new Float32Array(1) },
     biomass: { width: 1, height: 1, values: new Float32Array(1) },
   },
+  chemistry: {
+    carbon: { width: 1, height: 1, values: new Float32Array(1) },
+    nitrogen: { width: 1, height: 1, values: new Float32Array(1) },
+    phosphorus: { width: 1, height: 1, values: new Float32Array(1) },
+    organics: { width: 1, height: 1, values: new Float32Array(1) },
+    oxygen: { width: 1, height: 1, values: new Float32Array(1) },
+  },
   tick: 0,
   years: 0,
   digest: "",

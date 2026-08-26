@@ -24,18 +24,36 @@ export const calculateClimate = (
   const { elevation } = state.fields;
   const temperature = new Float32Array(elevation.values.length);
   const humidity = new Float32Array(elevation.values.length);
+  const meanCarbon = averageGrid(state.chemistry.carbon);
+  const meanOrganics = averageGrid(state.chemistry.organics);
+  const seedPhase = (state.seed % 2048) / 2048 * Math.PI * 2;
+  const orbitalPhase = state.years / 240 * Math.PI * 2 + seedPhase;
+  const orbitalFlux = solarFlux * (1 + Math.sin(orbitalPhase) * 0.018);
+  const greenhouse = Math.max(-0.04, Math.min(0.12, (meanCarbon - 0.2) * 0.24 + meanOrganics * 0.035));
   for (let index = 0; index < elevation.values.length; index += 1) {
     const y = Math.floor(index / elevation.width);
     const oceanFraction = oceanFractionAround(elevation, index);
     const elevationValue = elevation.values[index] ?? 0;
-    temperature[index] = temperatureAt(
+    const hemisphere = y / Math.max(1, elevation.height - 1) * 2 - 1;
+    const axialCycle = Math.sin(state.years / 37 * Math.PI * 2 + seedPhase) * hemisphere * 0.025;
+    const equilibrium = clamp01(temperatureAt(
       elevationValue,
       y,
       elevation.height,
       oceanFraction,
-      solarFlux,
+      orbitalFlux,
+    ) + greenhouse + axialCycle);
+    const previousTemperature = state.fields.temperature.values[index] ?? equilibrium;
+    const thermalInertia = oceanFraction * 0.42;
+    temperature[index] = clamp01(equilibrium * (1 - thermalInertia) + previousTemperature * thermalInertia);
+    const previousHumidity = state.fields.humidity.values[index] ?? 0;
+    const localWater = state.fields.water.values[index] ?? 0;
+    humidity[index] = clamp01(
+      oceanFraction * 0.5
+      + localWater * 0.2
+      + (1 - (temperature[index] ?? 0)) * 0.07
+      + previousHumidity * 0.16,
     );
-    humidity[index] = clamp01(oceanFraction * 0.72 + (1 - (temperature[index] ?? 0)) * 0.08);
   }
   return { temperature, humidity };
 };

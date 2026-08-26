@@ -5,6 +5,7 @@ import { createWorld, worldDigest } from "../../src/sim/world.ts";
 describe("long-running worlds", () => {
   it("keeps advancing past the 3479-year observation point", () => {
     let state = createWorld(3479, { width: 16, height: 8 });
+    const initialElevation = Array.from(state.fields.elevation.values);
     for (let step = 0; step < 3_500; step += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
@@ -12,5 +13,8 @@ describe("long-running worlds", () => {
     expect(state.tick).toBe(3_500);
     expect(worldDigest(state)).toMatch(/^[0-9a-f]+$/);
     expect([...state.fields.elevation.values, ...state.fields.water.values].every(Number.isFinite)).toBe(true);
+    expect(Object.values(state.chemistry).every((grid) => grid.values.every(Number.isFinite))).toBe(true);
+    expect(Array.from(state.fields.elevation.values)).not.toEqual(initialElevation);
+    expect(state.fields.biomass.values.every((value) => value >= 0 && value <= 1)).toBe(true);
   });
 });
