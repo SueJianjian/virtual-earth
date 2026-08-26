@@ -6,6 +6,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#simulation-status")).toContainText("暂停");
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
+  await expect(page.locator("#render-quality")).toHaveValue("2");
   const pixelSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d");
     if (!context || element.width === 0 || element.height === 0) return 0;
@@ -27,6 +29,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("知识承继");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("代际知识传承");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("食物保障");
+  await expect(page.getByRole("region", { name: "层级详情" })).toBeVisible();
+  await expect(page.locator("[data-detail-level=region]")).toHaveClass(/active/);
   await page.getByRole("button", { name: "单步推进" }).click();
   await expect(page.locator("#world-year")).toContainText("1 年");
   await page.getByRole("button", { name: "4×", exact: true }).click();

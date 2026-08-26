@@ -52,6 +52,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
   let state = structuredClone(initial);
   let paused = true;
   let speed: 1 | 4 | 16 | 64 = 1;
+  let digest = worldDigest(state);
 
   const snapshot = (): WorldSnapshot => {
     const observation = state.observation;
@@ -79,7 +80,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
     return {
       tick: state.tick,
       years: state.years,
-      digest: worldDigest(state),
+      digest,
       ...(observation.focusRegionId ? { focusRegionId: observation.focusRegionId } : {}),
       fields: cloneFields(state.fields),
       metrics: metricsFor(state),
@@ -93,10 +94,11 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
     let emitted: WorldEvent[] = [];
     for (let index = 0; index < count; index += 1) {
       const previousEventCount = state.events.length;
-      const result = stepWorld(state, { elapsedYears: 1, externalEvents: index === 0 ? events : [] });
+      const result = stepWorld(state, { elapsedYears: 1, externalEvents: index === 0 ? events : [] }, { computeDigest: false });
       state = result.state;
       emitted = [...emitted, ...state.events.slice(previousEventCount)];
     }
+    digest = worldDigest(state);
     return emitted;
   };
   const dispatch = (command: WorkerCommand): WorkerMessage[] => {
@@ -120,11 +122,12 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       }
       if (command.type === "save") {
         const payload = serializeWorld(state);
-        return [{ type: "saved", payload, digest: worldDigest(state) }];
+        return [{ type: "saved", payload, digest }];
       }
       const candidate = deserializeWorld(command.payload);
       if (candidate.observation.focusRegionId) candidate.observation = focusRegion(candidate, candidate.observation.focusRegionId);
       state = candidate;
+      digest = worldDigest(state);
       paused = true;
       return messages();
     } catch (error) {

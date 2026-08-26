@@ -270,7 +270,9 @@ const installDefaultStages = (): void => {
   if (!stageRegistry.has(worldviewStage.id)) registerSimulationStage(worldviewStage);
 };
 
-export const stepWorld = (state: WorldState, input: StepInput): { state: WorldState; events: WorldState["events"]; digest: string } => {
+export type StepOptions = { computeDigest?: boolean };
+
+export const stepWorld = (state: WorldState, input: StepInput, options: StepOptions = {}): { state: WorldState; events: WorldState["events"]; digest: string } => {
   installDefaultStages();
   const previous = structuredClone(state);
   const acceptedExternalEvents = input.externalEvents.filter((event) => !previous.events.some((known) => known.id === event.id));
@@ -295,7 +297,7 @@ export const stepWorld = (state: WorldState, input: StepInput): { state: WorldSt
   next.tick += 1;
   next.years += Math.max(0, input.elapsedYears);
   next.events = appendEvents(appendExternalEvents(previous.events, acceptedExternalEvents), merged.eventDrafts, next.tick);
-  return { state: next, events: next.events, digest: worldDigest(next) };
+  return { state: next, events: next.events, digest: options.computeDigest === false ? "" : worldDigest(next) };
 };
 
 const nextRandomValue = (random: WorldState["random"]): [number, WorldState["random"]] => nextRandom(random);

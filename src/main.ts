@@ -5,7 +5,7 @@ import type { WorldEvent } from "./sim/types.ts";
 import { createMapCanvas, type CellSelection } from "./ui/map-canvas.ts";
 import { layerLabels, type MapLayer } from "./ui/layers.ts";
 import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
-import { renderInspector } from "./ui/inspector.ts";
+import { renderInspector, type InspectorDetail } from "./ui/inspector.ts";
 import { renderTimeline } from "./ui/timeline.ts";
 import { bindTimeControls, downloadSave } from "./ui/controls.ts";
 import { createGodEvent, godToolLabels, type GodTool } from "./ui/god-mode.ts";
@@ -41,8 +41,8 @@ app.innerHTML = `
     </nav>
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
-        <canvas id="world-map" aria-label="虚拟地球网格地图"></canvas>
-        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span></div>
+        <canvas id="world-map" aria-label="虚拟地球 2.5D 地图"></canvas>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="1">标准</option><option value="2" selected>高清</option><option value="3">超清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
@@ -89,18 +89,34 @@ const phase = query<HTMLElement>("#phase-label");
 const digest = query<HTMLElement>("#digest-label");
 const legendLow = query<HTMLElement>("#legend-low");
 const legendHigh = query<HTMLElement>("#legend-high");
+const renderQuality = query<HTMLSelectElement>("#render-quality");
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
+let detail: InspectorDetail = { level: "region" };
 let events: WorldEvent[] = [];
 let userEventOrdinal = 0;
 
 const map = createMapCanvas(canvas, (nextSelection) => {
   selection = nextSelection;
-  if (snapshot) renderInspector(inspector, snapshot, selection);
+  detail = { level: "region" };
+  if (snapshot) renderInspector(inspector, snapshot, selection, detail);
   client.send({ type: "focusRegion", regionId: nextSelection.regionId });
 });
 renderInspector(inspector, emptySnapshot);
 renderTimeline(timeline, []);
+
+inspector.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-detail-level]");
+  if (!button || !snapshot) return;
+  detail = { level: button.dataset.detailLevel as InspectorDetail["level"] };
+  renderInspector(inspector, snapshot, selection, detail);
+});
+inspector.addEventListener("change", (event) => {
+  const target = event.target as HTMLSelectElement;
+  if (!target.matches("[data-detail-target]") || !snapshot) return;
+  detail = target.value ? { ...detail, id: target.value } : { level: detail.level };
+  renderInspector(inspector, snapshot, selection, detail);
+});
 
 document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -112,6 +128,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     legendHigh.textContent = legend[1];
   });
 });
+renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 1 | 2 | 3));
 bindTimeControls(document, client);
 query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
   const regionId = selection?.regionId ?? "region:0:0" as never;
@@ -133,7 +150,12 @@ const applyMessage = (message: WorkerMessage): void => {
     return;
   }
   if (message.type === "events") {
-    events = [...events, ...message.events].filter((event, index, all) => all.findIndex((candidate) => candidate.id === event.id) === index);
+    const seen = new Set<string>();
+    events = [...events, ...message.events].filter((event) => {
+      if (seen.has(event.id)) return false;
+      seen.add(event.id);
+      return true;
+    }).slice(-64);
     renderTimeline(timeline, events);
     return;
   }
@@ -155,7 +177,7 @@ const applyMessage = (message: WorkerMessage): void => {
   map.setSelection(selection);
   map.update(snapshot);
   renderStatusPanel(statusPanel, snapshot);
-  renderInspector(inspector, snapshot, selection);
+  renderInspector(inspector, snapshot, selection, detail);
   year.textContent = `${Math.floor(snapshot.years).toLocaleString("zh-CN")} 年`;
   phase.textContent = phaseForSnapshot(snapshot);
   digest.textContent = `状态 ${snapshot.digest.slice(0, 8)}`;

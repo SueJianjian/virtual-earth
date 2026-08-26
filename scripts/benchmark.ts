@@ -9,7 +9,7 @@ const height = 8;
 let state = createWorld(seed, { width, height });
 const started = performance.now();
 for (let index = 0; index < steps; index += 1) {
-  state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+  state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
 }
 const elapsed = performance.now() - started;
 const averageStep = elapsed / steps;
