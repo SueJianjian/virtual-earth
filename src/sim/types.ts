@@ -442,6 +442,23 @@ export type WorldviewPhenomenonState = {
   causeRuleId: string;
   evidence: Record<string, number | string | boolean>;
 };
+export type WorldviewPracticeStatus = "active" | "dormant" | "failed";
+export type WorldviewPracticeState = {
+  id: string;
+  packId: string;
+  name: string;
+  phenomenonId: string;
+  regionId: RegionId;
+  practitionerId: EntityId;
+  teacherId?: EntityId;
+  originTick: number;
+  lastTrainedTick: number;
+  attunement: number;
+  energy: number;
+  attempts: number;
+  failures: number;
+  status: WorldviewPracticeStatus;
+};
 export type WorldviewEffect =
   | {
       kind: "discover-motif";
@@ -477,12 +494,33 @@ export type WorldviewEffect =
       causeRuleId: string;
       evidence: Record<string, number | string | boolean>;
     }
+  | {
+      kind: "begin-practice";
+      packId: string;
+      name: string;
+      phenomenonId: string;
+      regionId: RegionId;
+      practitionerId: EntityId;
+      teacherId?: EntityId;
+      evidence: Record<string, number | string | boolean>;
+    }
+  | {
+      kind: "train-practice";
+      packId: string;
+      practiceId: string;
+      outcome: "advance" | "setback" | "exhausted";
+      energyGain: number;
+      energySpent: number;
+      attunementDelta: number;
+      evidence: Record<string, number | string | boolean>;
+    }
   | { kind: "resource-transaction"; transaction: ResourceTransaction };
 export type WorldviewState = {
   enabledPackIds: string[];
   discoveredRuleIds: string[];
   entities: WorldviewEntityState[];
   phenomena: WorldviewPhenomenonState[];
+  practices: WorldviewPracticeState[];
 };
 export type SimulationStage = {
   id: string;

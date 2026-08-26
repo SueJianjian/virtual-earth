@@ -33,6 +33,16 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
             phenomenonKind: effect.phenomenonKind,
             epistemicStatus: effect.epistemicStatus,
             regionId: effect.regionId,
+          } : effect.kind === "begin-practice" ? {
+            name: effect.name,
+            practiceOrigin: effect.teacherId ? "transmission" : "self-discovery",
+            practitionerId: effect.practitionerId,
+            regionId: effect.regionId,
+          } : effect.kind === "train-practice" ? {
+            practiceId: effect.practiceId,
+            outcome: effect.outcome,
+            energySpent: effect.energySpent,
+            energyGain: effect.energyGain,
           } : {}),
         },
         source: "natural",

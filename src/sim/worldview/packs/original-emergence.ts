@@ -1,5 +1,6 @@
-import { hashString } from "../../random.ts";
+import { forkRandom, hashString, randomFloat } from "../../random.ts";
 import type {
+  AgentState,
   RuleDecision,
   WorldviewContext,
   WorldviewDelta,
@@ -15,6 +16,8 @@ export const ORIGINAL_EMERGENCE_PACK_ID = "emergence.original-worldview";
 const emptyDelta = (): WorldviewDelta => ({ worldviewEffects: [], resourceTransactions: [], eventDrafts: [] });
 const recordsOf = (context: WorldviewContext, kind: WorldviewPhenomenonKind) =>
   context.state.worldview.phenomena.filter((record) => record.packId === ORIGINAL_EMERGENCE_PACK_ID && record.kind === kind);
+const practicesOf = (context: WorldviewContext) =>
+  context.state.worldview.practices.filter((practice) => practice.packId === ORIGINAL_EMERGENCE_PACK_ID);
 
 const generatedName = (context: WorldviewContext, stage: WorldviewPhenomenonKind): string => {
   const regionId = regionIdForWorldview(context);
@@ -29,6 +32,29 @@ const generatedName = (context: WorldviewContext, stage: WorldviewPhenomenonKind
   const root = roots[index % roots.length] ?? "异象";
   const suffixes = endings[stage];
   return `${root}${suffixes[Math.floor(index / roots.length) % suffixes.length] ?? "记录"}`;
+};
+
+const generatedPracticeName = (context: WorldviewContext, phenomenonId: string): string => {
+  const index = hashString(`${context.state.seed}:${phenomenonId}:practice`);
+  const roots = ["调律", "循息", "观潮", "听岩", "纳光", "引泉", "映云", "析晶"];
+  const endings = ["训练法", "共鸣法", "静观术", "感应式"];
+  return `${roots[index % roots.length] ?? "观测"}${endings[Math.floor(index / roots.length) % endings.length] ?? "训练法"}`;
+};
+
+const ambientEnergy = (context: WorldviewContext, phenomenon: { evidence: Record<string, number | string | boolean> }): number => {
+  const recordedStrength = Number(phenomenon.evidence.anomalyStrength ?? 0);
+  return Math.max(0.04, Math.min(1, recordedStrength * 0.45 + context.metrics.terrainRelief * 1.6 + Math.abs(context.metrics.carbon - context.metrics.oxygen) * 0.4));
+};
+
+const practiceCandidates = (context: WorldviewContext, regionId: string): AgentState[] => {
+  const practitioners = new Set(practicesOf(context).map((practice) => practice.practitionerId));
+  return context.state.agents
+    .filter((agent) => agent.regionId === regionId && !practitioners.has(agent.id))
+    .filter((agent) => (agent.traits.cognitivePotential ?? 0) >= 0.3 && (agent.skills.observation ?? 0) >= 0.08)
+    .sort((left, right) =>
+      ((right.traits.cognitivePotential ?? 0) + (right.skills.observation ?? 0))
+      - ((left.traits.cognitivePotential ?? 0) + (left.skills.observation ?? 0))
+      || left.id.localeCompare(right.id));
 };
 
 type Eligibility = (context: WorldviewContext) => RuleDecision;
@@ -171,12 +197,87 @@ const verificationRule = causalRule("original-principle-verification", 0.1, (con
   };
 });
 
+const practiceBeginRule = causalRule("original-practice-begin", 0.22, (context) => {
+  const principle = recordsOf(context, "verified-principle")[0];
+  const practiceCount = practicesOf(context).filter((practice) => practice.phenomenonId === principle?.id && practice.status !== "failed").length;
+  const candidates = principle ? practiceCandidates(context, principle.regionId) : [];
+  const teachers = practicesOf(context)
+    .filter((practice) => practice.phenomenonId === principle?.id && practice.status === "active" && practice.attunement >= 0.18)
+    .sort((left, right) => right.attunement - left.attunement || left.id.localeCompare(right.id));
+  const candidate = candidates[0];
+  const evidence = {
+    hasVerifiedPrinciple: Boolean(principle),
+    candidateCount: candidates.length,
+    practiceCount,
+    hasTeacher: Boolean(teachers[0]),
+  };
+  const eligible = Boolean(principle && candidate)
+    && practiceCount < 8
+    && (practiceCount === 0 || Boolean(teachers[0]));
+  return decision(eligible, evidence, eligible ? "a verified principle can be learned through discovery or a qualified teacher" : "practice entry requirements are not met");
+}, (context, evidence) => {
+  const principle = recordsOf(context, "verified-principle")[0]!;
+  const candidate = practiceCandidates(context, principle.regionId)[0]!;
+  const teacher = practicesOf(context)
+    .filter((practice) => practice.phenomenonId === principle.id && practice.status === "active" && practice.attunement >= 0.18)
+    .sort((left, right) => right.attunement - left.attunement || left.id.localeCompare(right.id))[0];
+  return {
+    kind: "begin-practice",
+    packId: ORIGINAL_EMERGENCE_PACK_ID,
+    name: generatedPracticeName(context, principle.id),
+    phenomenonId: principle.id,
+    regionId: principle.regionId,
+    practitionerId: candidate.id,
+    ...(teacher ? { teacherId: teacher.practitionerId } : {}),
+    evidence: { ...evidence, practiceOrigin: teacher ? "transmission" : "self-discovery" },
+  };
+});
+
+const practiceTrainingRule = causalRule("original-practice-training", 1, (context) => {
+  const practices = practicesOf(context)
+    .filter((practice) => practice.status === "active")
+    .sort((left, right) => left.lastTrainedTick - right.lastTrainedTick || left.id.localeCompare(right.id));
+  const practice = practices[0];
+  const principle = practice ? context.state.worldview.phenomena.find((record) => record.id === practice.phenomenonId && record.epistemicStatus === "verified") : undefined;
+  const practitioner = practice ? context.state.agents.find((agent) => agent.id === practice.practitionerId) : undefined;
+  const ambient = principle ? ambientEnergy(context, principle) : 0;
+  const evidence = { hasPractice: Boolean(practice), hasPractitioner: Boolean(practitioner), ambientEnergy: ambient };
+  const eligible = Boolean(practice && principle && practitioner);
+  return decision(eligible, evidence, eligible ? "an active practitioner can train against a verified principle" : "no active training target is available");
+}, (context, evidence) => {
+  const practice = practicesOf(context)
+    .filter((candidate) => candidate.status === "active")
+    .sort((left, right) => left.lastTrainedTick - right.lastTrainedTick || left.id.localeCompare(right.id))[0]!;
+  const practitioner = context.state.agents.find((agent) => agent.id === practice.practitionerId)!;
+  const principle = context.state.worldview.phenomena.find((record) => record.id === practice.phenomenonId)!;
+  const ambient = ambientEnergy(context, principle);
+  const skill = ((practitioner.traits.cognitivePotential ?? 0) + (practitioner.skills.observation ?? 0)) / 2;
+  const [roll] = randomFloat(forkRandom(context.random, `practice:${practice.id}:${context.random.value}`));
+  const chance = Math.max(0.1, Math.min(0.86, 0.18 + skill * 0.42 + practice.energy * 0.18 - practice.failures * 0.04));
+  const energyGain = ambient * 0.22;
+  const energySpent = 0.07 + practice.attunement * 0.04;
+  const outcome = roll < chance && practice.energy + energyGain >= energySpent
+    ? "advance"
+    : practice.energy + energyGain < energySpent ? "exhausted" : "setback";
+  const attunementDelta = outcome === "advance" ? 0.026 + ambient * 0.018 : outcome === "setback" ? -0.012 : -0.02;
+  return {
+    kind: "train-practice",
+    packId: ORIGINAL_EMERGENCE_PACK_ID,
+    practiceId: practice.id,
+    outcome,
+    energyGain,
+    energySpent,
+    attunementDelta,
+    evidence: { ...evidence, successChance: chance, trainingRoll: roll, ambientEnergy: ambient, practitionerId: practitioner.id },
+  };
+});
+
 export const originalEmergence: WorldviewPack = {
   id: ORIGINAL_EMERGENCE_PACK_ID,
   version: 1,
   label: "原创现象与文明解释",
   motifs: [],
   resources: [],
-  rules: [observationRule, theoryRule, mythRule, verificationRule],
+  rules: [observationRule, theoryRule, mythRule, verificationRule, practiceBeginRule, practiceTrainingRule],
   templates: [],
 };

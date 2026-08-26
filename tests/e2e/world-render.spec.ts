@@ -94,6 +94,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("相对浓度");
   await expect(page.getByRole("region", { name: "认知与传说" })).toBeVisible();
   await expect(page.getByRole("region", { name: "认知与传说" })).toContainText("观测、理论、信仰与验证严格分离");
+  await expect(page.getByRole("region", { name: "规律训练" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "规律训练" })).toContainText("只在已验证规律后出现");
   await expect(page.locator("#inspector")).toContainText("有机物");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("知识承继");

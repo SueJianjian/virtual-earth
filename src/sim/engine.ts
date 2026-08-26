@@ -261,6 +261,43 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
           if (!culture.beliefIds.includes(beliefId)) culture.beliefIds.push(beliefId);
         }
       }
+    } else if (effect.kind === "begin-practice") {
+      if (!state.worldview.enabledPackIds.includes(effect.packId)) throw new Error(`Worldview pack is not enabled: ${effect.packId}`);
+      const id = `practice:${hashString(JSON.stringify(effect)).toString(16)}`;
+      if (state.worldview.practices.some((practice) => practice.id === id)) continue;
+      if (!state.agents.some((agent) => agent.id === effect.practitionerId)) continue;
+      state.worldview.practices.push({
+        id,
+        packId: effect.packId,
+        name: effect.name,
+        phenomenonId: effect.phenomenonId,
+        regionId: effect.regionId,
+        practitionerId: effect.practitionerId,
+        ...(effect.teacherId ? { teacherId: effect.teacherId } : {}),
+        originTick: state.tick + 1,
+        lastTrainedTick: state.tick,
+        attunement: 0.02,
+        energy: 0.12,
+        attempts: 0,
+        failures: 0,
+        status: "active",
+      });
+    } else if (effect.kind === "train-practice") {
+      if (!state.worldview.enabledPackIds.includes(effect.packId)) throw new Error(`Worldview pack is not enabled: ${effect.packId}`);
+      const practice = state.worldview.practices.find((candidate) => candidate.id === effect.practiceId);
+      if (!practice || practice.status !== "active") continue;
+      const values = [effect.energyGain, effect.energySpent, effect.attunementDelta];
+      if (!values.every(Number.isFinite) || effect.energyGain < 0 || effect.energySpent < 0) {
+        throw new Error(`Invalid practice training values: ${effect.practiceId}`);
+      }
+      const nextEnergy = Math.max(0, Math.min(1, practice.energy + effect.energyGain - effect.energySpent));
+      practice.energy = nextEnergy;
+      practice.attunement = Math.max(0, Math.min(1, practice.attunement + effect.attunementDelta));
+      practice.attempts += 1;
+      practice.lastTrainedTick = state.tick + 1;
+      if (effect.outcome !== "advance") practice.failures += 1;
+      if (effect.outcome === "exhausted" && nextEnergy <= 0.01) practice.status = "dormant";
+      if (practice.failures >= 5 && practice.attunement < 0.04) practice.status = "failed";
     }
   }
 };

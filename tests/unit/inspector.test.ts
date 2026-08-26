@@ -106,6 +106,23 @@ describe("region lineage inspector", () => {
       causeRuleId: "original-cultural-theory",
       evidence: { knowledgeDiversity: 3 },
     }];
+    const practitionerId = snapshot.projection?.agents[0]?.id;
+    if (!practitionerId) throw new Error("Expected a projected agent for practice report");
+    snapshot.worldviewPractices = [{
+      id: "practice:crystal",
+      packId: "emergence.original-worldview",
+      name: "晶息共鸣法",
+      phenomenonId: "phenomenon:theory",
+      regionId: region,
+      practitionerId,
+      originTick: 22,
+      lastTrainedTick: 24,
+      attunement: 0.31,
+      energy: 0.42,
+      attempts: 4,
+      failures: 1,
+      status: "active",
+    }];
     const element = { innerHTML: "" } as HTMLElement;
     renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region });
 
@@ -120,5 +137,9 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("已观测");
     expect(element.innerHTML).toContain("文明理论");
     expect(element.innerHTML).toContain("源自 晶息回响");
+    expect(element.innerHTML).toContain("规律训练");
+    expect(element.innerHTML).toContain("晶息共鸣法");
+    expect(element.innerHTML).toContain("训练中");
+    expect(element.innerHTML).toContain("能量 42/100");
   });
 });

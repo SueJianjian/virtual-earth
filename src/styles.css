@@ -129,6 +129,17 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .worldview-list li strong { color: #d7dcd7; font-size: 11px; font-weight: 500; }
 .worldview-list li p { margin: 0; color: var(--muted); font-size: 8px; text-align: right; overflow-wrap: anywhere; }
 .worldview-list .worldview-empty { display: block; color: #737b74; font-size: 9px; }
+.practice-records { margin-top: 16px; border-top: 1px solid var(--line); }
+.practice-list { display: grid; gap: 0; margin: 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
+.practice-list li { display: grid; gap: 4px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.practice-list li > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.practice-list li span { padding-left: 7px; border-left: 2px solid #759c94; color: #a6c7bf; font-size: 9px; }
+.practice-list li[data-practice-status="dormant"] span { border-color: #8c8870; color: #b5ae91; }
+.practice-list li[data-practice-status="failed"] span { border-color: var(--alert); color: #e0a08d; }
+.practice-list li small { color: #707971; font-size: 8px; }
+.practice-list li strong { color: #d7dcd7; font-size: 11px; font-weight: 500; }
+.practice-list li p { margin: 0; color: var(--muted); font-size: 8px; overflow-wrap: anywhere; }
+.practice-list .practice-empty { color: #737b74; font-size: 9px; }
 .lineage-section { margin-top: 16px; border-top: 1px solid var(--line); }
 .lineage-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 13px 0 10px; }
 .lineage-heading strong { color: #e8dda8; font-family: Georgia, "STSong", serif; font-size: 14px; font-weight: 500; }

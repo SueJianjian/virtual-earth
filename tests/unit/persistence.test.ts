@@ -8,11 +8,45 @@ describe("world persistence", () => {
   it("round-trips authoritative state and typed grids", () => {
     const world = createWorld(120, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
     world.observation = { focusRegionId: "region:1:1" as never };
+    world.worldview.phenomena = [{
+      id: "phenomenon:persistence",
+      packId: "cultivation.path",
+      kind: "verified-principle",
+      epistemicStatus: "verified",
+      name: "持久化规律",
+      regionId: "region:1:1" as never,
+      originTick: 4,
+      parentIds: [],
+      causeRuleId: "test",
+      evidence: {},
+    }];
+    world.worldview.practices = [{
+      id: "practice:persistence",
+      packId: "cultivation.path",
+      name: "持久化训练法",
+      phenomenonId: "phenomenon:persistence",
+      regionId: "region:1:1" as never,
+      practitionerId: "agent:persistence" as never,
+      teacherId: "agent:teacher" as never,
+      originTick: 5,
+      lastTrainedTick: 8,
+      attunement: 0.26,
+      energy: 0.48,
+      attempts: 6,
+      failures: 2,
+      status: "active",
+    }];
     const restored = deserializeWorld(serializeWorld(world));
     expect(restored.fields.elevation.values).toBeInstanceOf(Float32Array);
     expect(worldDigest(restored)).toBe(worldDigest(world));
     expect(restored.observation).toEqual({ focusRegionId: "region:1:1" });
     expect(restored.worldview.enabledPackIds).toEqual(["cultivation.path"]);
+    expect(restored.worldview.practices[0]).toMatchObject({
+      teacherId: "agent:teacher",
+      energy: 0.48,
+      attempts: 6,
+      failures: 2,
+    });
   });
 
   it("rejects malformed and unsupported saves", () => {
@@ -63,12 +97,14 @@ describe("world persistence", () => {
 
   it("restores an empty phenomenon ledger for saves created before causal worldview records", () => {
     const world = createWorld(123, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
-    const legacy = JSON.parse(serializeWorld(world)) as { world: { worldview: { phenomena?: unknown } } };
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { worldview: { phenomena?: unknown; practices?: unknown } } };
     delete legacy.world.worldview.phenomena;
+    delete legacy.world.worldview.practices;
 
     const restored = deserializeWorld(JSON.stringify(legacy));
 
     expect(restored.worldview.phenomena).toEqual([]);
+    expect(restored.worldview.practices).toEqual([]);
     expect(restored.worldview.enabledPackIds).toEqual(["cultivation.path"]);
   });
 });

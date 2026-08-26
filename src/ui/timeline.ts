@@ -16,6 +16,8 @@ const labelFor = (event: WorldEvent): string => ({
   "worldview-original-cultural-theory": "形成文明解释",
   "worldview-original-mythic-tradition": "形成神话传统",
   "worldview-original-principle-verification": "验证客观规律",
+  "worldview-original-practice-begin": "开启规律训练",
+  "worldview-original-practice-training": "规律训练",
   "agent-birth": "个体出生",
   "agent-death": "个体死亡",
   "add-water": "用户增加水量",
@@ -29,6 +31,9 @@ const qualifierFor = (event: WorldEvent): string => {
   if (event.kind === "organization-split" && Number(event.evidence.foodSecurity ?? 1) < 0.1) return " · 缺粮压力";
   if (event.kind === "agent-death" && Number(event.evidence.hungerDeaths ?? 0) > 0) return " · 饥饿主导";
   if (typeof event.payload.name === "string") return ` · ${event.payload.name}`;
+  if (event.kind === "worldview-original-practice-training" && typeof event.payload.outcome === "string") {
+    return ` · ${{ advance: "共鸣提升", setback: "训练受挫", exhausted: "能量耗尽" }[event.payload.outcome] ?? event.payload.outcome}`;
+  }
   return "";
 };
 

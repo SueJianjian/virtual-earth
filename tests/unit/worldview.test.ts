@@ -3,6 +3,8 @@ import { clearSimulationStages, registerSimulationStage, stepWorld } from "../..
 import { createWorld, assertBlankWorld } from "../../src/sim/world.ts";
 import { createWorldviewState, DEFAULT_WORLDVIEW_PACK_IDS, listWorldviewPacks, stepWorldviews } from "../../src/sim/worldview/index.ts";
 import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
+import { createAgent } from "../../src/sim/agents/index.ts";
+import { createSpecies } from "../../src/sim/ecology/species.ts";
 import type { WorldDelta, WorldviewContext } from "../../src/sim/types.ts";
 
 const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext => ({
@@ -69,5 +71,64 @@ describe("worldview packs", () => {
     const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
     expect(result.state.worldview.entities).toHaveLength(1);
     expect(result.state.worldview.entities[0]?.kind).toBe("cultivation-path");
+  });
+
+  it("records energy consumption and a setback instead of silently granting progress", () => {
+    const regionId = "region:1:1" as never;
+    const world = createWorld(103, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview"] });
+    const species = createSpecies("practice", "consumer");
+    const population = { id: "population:practice" as never, speciesId: species.id, regionId, count: 8, energy: 1 };
+    const agent = createAgent(population, species, 0, "practice");
+    world.species = [species];
+    world.populations = [population];
+    world.agents = [agent];
+    world.worldview.phenomena = [{
+      id: "phenomenon:principle",
+      packId: "emergence.original-worldview",
+      kind: "verified-principle",
+      epistemicStatus: "verified",
+      name: "晶息响应定律",
+      regionId,
+      originTick: 1,
+      parentIds: [],
+      causeRuleId: "test",
+      evidence: {},
+    }];
+    world.worldview.practices = [{
+      id: "practice:one",
+      packId: "emergence.original-worldview",
+      name: "析晶训练法",
+      phenomenonId: "phenomenon:principle",
+      regionId,
+      practitionerId: agent.id,
+      originTick: 1,
+      lastTrainedTick: 1,
+      attunement: 0.1,
+      energy: 0.2,
+      attempts: 0,
+      failures: 0,
+      status: "active",
+    }];
+    const delta: WorldDelta = {
+      fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [],
+      worldviewEffects: [{
+        kind: "train-practice",
+        packId: "emergence.original-worldview",
+        practiceId: "practice:one",
+        outcome: "setback",
+        energyGain: 0.02,
+        energySpent: 0.11,
+        attunementDelta: -0.012,
+        evidence: { trainingRoll: 0.9 },
+      }],
+    };
+    registerSimulationStage({ id: "worldview", order: 70, run: () => delta });
+
+    const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
+
+    const practice = result.state.worldview.practices[0];
+    expect(practice?.energy).toBeCloseTo(0.11);
+    expect(practice?.attunement).toBeCloseTo(0.088);
+    expect(practice).toMatchObject({ attempts: 1, failures: 1, status: "active" });
   });
 });

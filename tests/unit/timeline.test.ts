@@ -57,4 +57,17 @@ describe("event timeline", () => {
     expect(element.innerHTML).toContain("形成神话传统 · 雾脉守望传说");
     expect(element.innerHTML).not.toContain("验证客观规律 · 雾脉守望传说");
   });
+
+  it("distinguishes practice progress, setbacks and energy exhaustion", () => {
+    const element = { innerHTML: "" } as HTMLElement;
+    const progress = event("worldview-original-practice-training", {});
+    progress.payload = { outcome: "advance" };
+    const exhausted = event("worldview-original-practice-training", {});
+    exhausted.id = "event:exhausted";
+    exhausted.payload = { outcome: "exhausted" };
+    renderTimeline(element, [progress, exhausted]);
+
+    expect(element.innerHTML).toContain("规律训练 · 共鸣提升");
+    expect(element.innerHTML).toContain("规律训练 · 能量耗尽");
+  });
 });

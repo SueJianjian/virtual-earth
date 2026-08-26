@@ -149,6 +149,10 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     .filter((record) => record.regionId === selection.regionId)
     .sort((left, right) => left.originTick - right.originTick || left.id.localeCompare(right.id));
   const worldviewById = new Map((snapshot.worldviewPhenomena ?? []).map((record) => [record.id, record]));
+  const worldviewPractices = (snapshot.worldviewPractices ?? [])
+    .filter((practice) => practice.regionId === selection.regionId)
+    .sort((left, right) => right.attunement - left.attunement || left.id.localeCompare(right.id));
+  const agentsById = new Map((snapshot.projection?.agents ?? []).map((agent) => [agent.id, agent]));
   const targets = detailTargets(snapshot, detail.level);
   const targetOptions = detail.level === "region"
     ? "<option>区域总览</option>"
@@ -203,6 +207,18 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
           const parentNames = record.parentIds.map((id) => worldviewById.get(id)?.name).filter((name): name is string => Boolean(name));
           return `<li data-epistemic-status="${record.epistemicStatus}"><div><span>${epistemicLabels[record.epistemicStatus]}</span><small>演化步 ${format(record.originTick)}</small></div><strong>${escapeHtml(record.name)}</strong><p>${parentNames.length > 0 ? `源自 ${parentNames.map(escapeHtml).join("、")}` : "源自当地可重复观测的环境证据"}</p></li>`;
         }).join("") : "<li class=\"worldview-empty\">尚未形成异常观测、文明理论或神话记录</li>"}
+      </ol>
+    </section>
+    <section class="practice-records" aria-label="规律训练">
+      <div class="worldview-heading"><strong>规律训练</strong><span>只在已验证规律后出现</span></div>
+      <ol class="practice-list">
+        ${worldviewPractices.length > 0 ? worldviewPractices.map((practice) => {
+          const practitioner = agentsById.get(practice.practitionerId);
+          const teacher = practice.teacherId ? agentsById.get(practice.teacherId) : undefined;
+          const source = worldviewById.get(practice.phenomenonId);
+          const statusLabel = practice.status === "active" ? "训练中" : practice.status === "dormant" ? "能量停滞" : "训练失败";
+          return `<li data-practice-status="${practice.status}"><div><span>${statusLabel}</span><small>${teacher ? `师承 ${escapeHtml(teacher.id.slice(-8))}` : "自主发现"}</small></div><strong>${escapeHtml(practice.name)}</strong><p>${practitioner ? `实践者 ${escapeHtml(practitioner.id.slice(-8))}` : "实践者已离开当前投影"} · 能量 ${formatNumber(practice.energy * 100, 1)}/100 · 共鸣 ${formatNumber(practice.attunement * 100, 1)}/100</p><p>${source ? `依据 ${escapeHtml(source.name)}` : "依据已失去记录"} · ${formatNumber(practice.attempts)} 次训练 · ${formatNumber(practice.failures)} 次受挫</p></li>`;
+        }).join("") : "<li class=\"practice-empty\">尚无个体从已验证规律中形成训练方法</li>"}
       </ol>
     </section>
     <section class="lineage-section" aria-label="家庭谱系">

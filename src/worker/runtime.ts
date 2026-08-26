@@ -152,6 +152,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       sceneEntities: scene.entities,
       sceneLinks: scene.links,
       worldviewPhenomena: structuredClone(state.worldview.phenomena),
+      worldviewPractices: structuredClone(state.worldview.practices),
       ...(selectedRegion ? { selectedRegion } : {}),
       ...(projection ? { projection: structuredClone(projection) } : {}),
     };

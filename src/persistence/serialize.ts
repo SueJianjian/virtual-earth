@@ -102,6 +102,7 @@ const validateWorld = (value: unknown): WorldState => {
       discoveredRuleIds: Array.isArray(worldview.discoveredRuleIds) ? worldview.discoveredRuleIds : [],
       entities: Array.isArray(worldview.entities) ? worldview.entities : [],
       phenomena: Array.isArray(worldview.phenomena) ? worldview.phenomena : [],
+      practices: Array.isArray(worldview.practices) ? worldview.practices : [],
     },
     lod: { ...lod, summaries },
     observation: focusRegionId ? { focusRegionId } : {},
