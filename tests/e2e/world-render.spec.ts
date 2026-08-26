@@ -12,8 +12,8 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#simulation-status")).toContainText("暂停");
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
-  await expect(canvas).toHaveAttribute("data-render-style", "pixel-world");
-  await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
+  await expect(canvas).toHaveAttribute("data-render-style", "fantasy-3d");
+  await expect(canvas).toHaveAttribute("aria-label", "虚拟地球奇幻 3D 地图");
   await expect(page.locator("#render-quality")).toHaveValue("480");
   await expect(canvas).toHaveJSProperty("width", 854);
   await expect(canvas).toHaveJSProperty("height", 480);
@@ -51,15 +51,20 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(canvas).toHaveJSProperty("width", 1920);
   await expect(canvas).toHaveJSProperty("height", 1080);
   await page.getByRole("button", { name: "复位地图缩放" }).click();
-  const pixelSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
-    const context = element.getContext("2d");
+  const webglSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("webgl2") ?? element.getContext("webgl");
     if (!context || element.width === 0 || element.height === 0) return 0;
-    const pixels = context.getImageData(0, 0, element.width, element.height).data;
+    const pixels = new Uint8Array(4 * 16);
     let signal = 0;
-    for (let index = 0; index < pixels.length; index += 160) signal += pixels[index] ?? 0;
+    for (let sample = 0; sample < 16; sample += 1) {
+      const x = Math.floor(element.width * ((sample % 4) + 0.5) / 4);
+      const y = Math.floor(element.height * (Math.floor(sample / 4) + 0.5) / 4);
+      context.readPixels(x, y, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixels, sample * 4);
+      signal += pixels[sample * 4] ?? 0;
+    }
     return signal;
   });
-  expect(pixelSignal).toBeGreaterThan(1000);
+  expect(webglSignal).toBeGreaterThan(100);
   await page.getByRole("button", { name: "温度" }).click();
   await expect(page.getByRole("button", { name: "温度" })).toHaveClass(/active/);
   await page.getByRole("button", { name: "食物保障" }).click();
@@ -95,12 +100,12 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   expect(metricOverflow).toBe(false);
 });
 
-test("renders the complete society as crisp pixel sprites", async ({ page }) => {
+test("renders the complete society as detailed fantasy 3d models", async ({ page }) => {
   const state = createWorld(90_210, { width: 64, height: 40 });
-  const species = createSpecies("pixel-world", "consumer");
+  const species = createSpecies("fantasy-world", "consumer");
   const regionId = "region:32:20" as never;
-  const population = { id: "population:pixel-world" as never, speciesId: species.id, regionId, count: 48, energy: 1 };
-  const agents = Array.from({ length: 48 }, (_, index) => createAgent(population, species, index, "pixel-world"));
+  const population = { id: "population:fantasy-world" as never, speciesId: species.id, regionId, count: 48, energy: 1 };
+  const agents = Array.from({ length: 48 }, (_, index) => createAgent(population, species, index, "fantasy-world"));
   state.species = [species];
   state.populations = [population];
   state.agents = agents;
@@ -119,7 +124,7 @@ test("renders the complete society as crisp pixel sprites", async ({ page }) => 
 
   await page.goto("/");
   await page.locator("#load-input").setInputFiles({
-    name: "pixel-world.json",
+    name: "fantasy-world.json",
     mimeType: "application/json",
     buffer: Buffer.from(serializeWorld(state)),
   });
@@ -129,5 +134,5 @@ test("renders the complete society as crisp pixel sprites", async ({ page }) => 
   await page.locator("#render-quality").selectOption("1080");
   for (let click = 0; click < 8; click += 1) await page.getByRole("button", { name: "\u653e\u5927\u5730\u56fe" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("400%");
-  await page.screenshot({ path: "test-results/pixel-world-suite.png", fullPage: true });
+  await page.screenshot({ path: "test-results/fantasy-3d-suite.png", fullPage: true });
 });

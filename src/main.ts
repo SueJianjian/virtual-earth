@@ -41,7 +41,7 @@ app.innerHTML = `
     </nav>
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
-        <canvas id="world-map" aria-label="虚拟地球 2.5D 地图"></canvas>
+        <canvas id="world-map" aria-label="虚拟地球奇幻 3D 地图"></canvas>
         <div class="map-tools" aria-label="地图缩放控制">
           <button id="zoom-out" type="button" title="缩小地图" aria-label="缩小地图">−</button>
           <output id="zoom-level" aria-live="polite">100%</output>
