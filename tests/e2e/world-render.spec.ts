@@ -1,4 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { createAgent } from "../../src/sim/agents/index.ts";
+import { createRelationship } from "../../src/sim/agents/relationships.ts";
+import { createSpecies } from "../../src/sim/ecology/species.ts";
+import { createOrganization } from "../../src/sim/society/organization.ts";
+import { createWorld } from "../../src/sim/world.ts";
+import { serializeWorld } from "../../src/persistence/serialize.ts";
 
 test("renders a non-empty world map and interactive observation panels", async ({ page }) => {
   await page.goto("/");
@@ -6,6 +12,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#simulation-status")).toContainText("暂停");
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
+  await expect(canvas).toHaveAttribute("data-render-style", "pixel-world");
   await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
   await expect(page.locator("#render-quality")).toHaveValue("480");
   await expect(canvas).toHaveJSProperty("width", 854);
@@ -86,4 +93,41 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   expect(overflow).toBeLessThanOrEqual(1);
   const metricOverflow = await page.locator(".lineage-metrics > div").evaluateAll((elements) => elements.some((element) => element.scrollWidth > element.clientWidth + 1));
   expect(metricOverflow).toBe(false);
+});
+
+test("renders the complete society as crisp pixel sprites", async ({ page }) => {
+  const state = createWorld(90_210, { width: 64, height: 40 });
+  const species = createSpecies("pixel-world", "consumer");
+  const regionId = "region:32:20" as never;
+  const population = { id: "population:pixel-world" as never, speciesId: species.id, regionId, count: 48, energy: 1 };
+  const agents = Array.from({ length: 48 }, (_, index) => createAgent(population, species, index, "pixel-world"));
+  state.species = [species];
+  state.populations = [population];
+  state.agents = agents;
+  state.relationships = Array.from({ length: 24 }, (_, index) => createRelationship("partner", agents[index * 2]!.id, agents[index * 2 + 1]!.id, 0, 0.8));
+  state.organizations = ([
+    ["family", "region:31:19", 6],
+    ["clan", "region:32:19", 12],
+    ["tribe", "region:33:19", 18],
+    ["settlement", "region:31:20", 24],
+    ["city", "region:32:20", 36],
+    ["state", "region:33:20", 40],
+    ["federation", "region:31:21", 44],
+    ["empire", "region:33:21", 48],
+  ] as const).map(([type, organizationRegionId, count]) => createOrganization(type, organizationRegionId as never, agents.slice(0, count).map((agent) => agent.id)));
+  state.observation = { focusRegionId: regionId };
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "pixel-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+  const canvas = page.locator("#world-map");
+  await expect(canvas).toHaveAttribute("data-scene-entity-count", "57");
+  await expect(canvas).toHaveAttribute("data-scene-link-count", "24");
+  await page.locator("#render-quality").selectOption("1080");
+  for (let click = 0; click < 8; click += 1) await page.getByRole("button", { name: "\u653e\u5927\u5730\u56fe" }).click();
+  await expect(page.locator("#zoom-level")).toHaveText("400%");
+  await page.screenshot({ path: "test-results/pixel-world-suite.png", fullPage: true });
 });

@@ -2,6 +2,17 @@ import type { RegionId } from "../sim/types.ts";
 import type { WorldSnapshot } from "../worker/protocol.ts";
 import type { SceneEntity, SceneLink } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
+import {
+  drawPixelAgent,
+  drawPixelCamp,
+  drawPixelGroundDetail,
+  drawPixelLabel,
+  drawPixelOrganization,
+  drawPixelRock,
+  drawPixelTree,
+  drawPixelWater,
+  organizationLabel,
+} from "./pixel-scene.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
 export type RenderQuality = 480 | 720 | 1080;
@@ -61,16 +72,6 @@ const shade = (color: [number, number, number], amount: number): string => {
 const clampZoom = (value: number): number => Math.max(0.6, Math.min(8, value));
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 
-const blendColor = (
-  from: [number, number, number],
-  to: [number, number, number],
-  amount: number,
-): [number, number, number] => [
-  Math.round(from[0] + (to[0] - from[0]) * amount),
-  Math.round(from[1] + (to[1] - from[1]) * amount),
-  Math.round(from[2] + (to[2] - from[2]) * amount),
-];
-
 const sampleGrid = (values: Float32Array, width: number, height: number, x: number, y: number): number => {
   const sampleX = clamp(x, 0, width - 1);
   const sampleY = clamp(y, 0, height - 1);
@@ -84,39 +85,6 @@ const sampleGrid = (values: Float32Array, width: number, height: number, x: numb
   const bottom = (values[y1 * width + x0] ?? 0) * (1 - horizontal) + (values[y1 * width + x1] ?? 0) * horizontal;
   return top * (1 - vertical) + bottom * vertical;
 };
-
-const sampleColor = (
-  snapshot: WorldSnapshot,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  layer: MapLayer,
-): [number, number, number] => {
-  const sampleX = clamp(x, 0, width - 1);
-  const sampleY = clamp(y, 0, height - 1);
-  const x0 = Math.floor(sampleX);
-  const y0 = Math.floor(sampleY);
-  const x1 = Math.min(width - 1, x0 + 1);
-  const y1 = Math.min(height - 1, y0 + 1);
-  const horizontal = sampleX - x0;
-  const vertical = sampleY - y0;
-  const top = blendColor(colorForCell(snapshot, y0 * width + x0, layer), colorForCell(snapshot, y0 * width + x1, layer), horizontal);
-  const bottom = blendColor(colorForCell(snapshot, y1 * width + x0, layer), colorForCell(snapshot, y1 * width + x1, layer), horizontal);
-  return blendColor(top, bottom, vertical);
-};
-
-const surfaceDetailFor = (quality: RenderQuality, width: number, height: number, zoom: number): number => {
-  const requested = zoom >= 4 ? 6 : zoom >= 2 ? 4 : quality === 480 ? 3 : quality === 720 ? 4 : 5;
-  const maximum = Math.max(1, Math.floor(Math.sqrt(180_000 / Math.max(1, width * height))));
-  return Math.min(requested, maximum);
-};
-
-const microRelief = (x: number, y: number, phase: number): number => (
-  Math.sin(x * 7.13 + y * 3.71 + phase * 0.35) * 0.45
-  + Math.sin(x * 13.7 - y * 5.19 + phase * 0.18) * 0.3
-  + Math.sin((x + y) * 21.4 - phase * 0.12) * 0.25
-);
 
 const sceneHash = (x: number, y: number, salt: number): number => {
   let value = Math.imul(Math.floor(x * 1000) + 1, 374761393) ^ Math.imul(Math.floor(y * 1000) + 1, 668265263) ^ salt;
@@ -199,107 +167,105 @@ export const createMapCanvas = (
       originY: scaledGeometry.originY + canvas.height / 2 - targetPoint[1] + panY,
     };
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#101713";
+    context.fillStyle = "#14252a";
     context.fillRect(0, 0, canvas.width, canvas.height);
+    const backdropUnit = Math.max(4, Math.round(ratio * 6));
+    context.fillStyle = "rgba(43, 91, 96, 0.12)";
+    for (let backdropY = 0; backdropY < canvas.height; backdropY += backdropUnit * 4) {
+      const offset = (Math.floor(backdropY / (backdropUnit * 4)) % 2) * backdropUnit * 2;
+      for (let backdropX = -offset; backdropX < canvas.width; backdropX += backdropUnit * 8) {
+        context.fillRect(backdropX, backdropY, backdropUnit * 3, backdropUnit);
+      }
+    }
     context.lineJoin = "round";
-    context.imageSmoothingEnabled = true;
-    const detail = surfaceDetailFor(quality, grid.width, grid.height, zoom);
-    const fineWidth = grid.width * detail;
-    const fineHeight = grid.height * detail;
-    const terrainPoint = (x: number, y: number): [number, number] => pointFor(
-      x,
-      y,
-      sampleGrid(grid.values, grid.width, grid.height, x, y) * geometry!.heightScale,
+    context.imageSmoothingEnabled = false;
+    canvas.dataset.renderStyle = "pixel-world";
+    const waterAt = (cellX: number, cellY: number): boolean => {
+      if (cellX < 0 || cellY < 0 || cellX >= grid.width || cellY >= grid.height) return true;
+      const index = cellY * grid.width + cellX;
+      return (currentSnapshot.fields.water.values[index] ?? 0) > 0.45 || (grid.values[index] ?? 0) < 0.46;
+    };
+    const elevationAt = (cellX: number, cellY: number): number => {
+      if (cellX < 0 || cellY < 0 || cellX >= grid.width || cellY >= grid.height) return 0;
+      const value = clamp(grid.values[cellY * grid.width + cellX] ?? 0, 0, 1);
+      return Math.round(value * 12) / 12;
+    };
+    const tilePoint = (cellX: number, cellY: number, elevation: number): [number, number] => pointFor(
+      cellX,
+      cellY,
+      elevation * geometry!.heightScale,
       geometry!,
     );
-    const drawOuterEdge = (from: [number, number], to: [number, number], color: [number, number, number], amount: number): void => {
-      polygon(context, [terrainPoint(...from), terrainPoint(...to), pointFor(to[0], to[1], 0, geometry!), pointFor(from[0], from[1], 0, geometry!)]);
-      context.fillStyle = shade(color, amount);
-      context.fill();
+    const tileColor = (cellX: number, cellY: number): [number, number, number] => {
+      const index = cellY * grid.width + cellX;
+      if (layer !== "natural") return colorForCell(currentSnapshot, index, layer);
+      const elevation = elevationAt(cellX, cellY);
+      const biomass = clamp(currentSnapshot.fields.biomass.values[index] ?? 0, 0, 1);
+      const humidity = clamp(currentSnapshot.fields.humidity.values[index] ?? 0, 0, 1);
+      if (waterAt(cellX, cellY)) {
+        const water = clamp(currentSnapshot.fields.water.values[index] ?? 0, 0, 1);
+        return water > 0.68 ? [36, 104, 137] : [52, 132, 151];
+      }
+      if (elevation > 0.78) return [203, 214, 199];
+      if (elevation > 0.66) return [126, 133, 111];
+      if (humidity < 0.25) return [190, 159, 91];
+      if (biomass > 0.45) return [87, 143, 72];
+      return [111, 151, 78];
     };
-    for (let fineY = 0; fineY < fineHeight; fineY += 1) {
-      const y = fineY / detail;
-      const nextY = (fineY + 1) / detail;
-      drawOuterEdge([grid.width, y], [grid.width, nextY], sampleColor(currentSnapshot, grid.width, grid.height, grid.width - 0.5, y + 0.5 / detail, layer), 0.58);
-    }
-    for (let fineX = 0; fineX < fineWidth; fineX += 1) {
-      const x = fineX / detail;
-      const nextX = (fineX + 1) / detail;
-      drawOuterEdge([x, grid.height], [nextX, grid.height], sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, grid.height - 0.5, layer), 0.44);
-    }
-    const drawSurface = (fineX: number, fineY: number): void => {
-      const x = fineX / detail;
-      const y = fineY / detail;
-      const bleed = 0.018;
-      const nextX = (fineX + 1) / detail;
-      const nextY = (fineY + 1) / detail;
+    const drawTile = (cellX: number, cellY: number): void => {
+      const elevation = elevationAt(cellX, cellY);
       const corners = [
-        terrainPoint(Math.max(0, x - bleed), Math.max(0, y - bleed)),
-        terrainPoint(Math.min(grid.width, nextX + bleed), Math.max(0, y - bleed)),
-        terrainPoint(Math.min(grid.width, nextX + bleed), Math.min(grid.height, nextY + bleed)),
-        terrainPoint(Math.max(0, x - bleed), Math.min(grid.height, nextY + bleed)),
-      ];
+        tilePoint(cellX, cellY, elevation),
+        tilePoint(cellX + 1, cellY, elevation),
+        tilePoint(cellX + 1, cellY + 1, elevation),
+        tilePoint(cellX, cellY + 1, elevation),
+      ] as Array<[number, number]>;
       const minX = Math.min(...corners.map(([pointX]) => pointX));
       const maxX = Math.max(...corners.map(([pointX]) => pointX));
       const minY = Math.min(...corners.map(([, pointY]) => pointY));
       const maxY = Math.max(...corners.map(([, pointY]) => pointY));
-      if (maxX < -32 || minX > canvas.width + 32 || maxY < -32 || minY > canvas.height + 32) return;
-      polygon(context, corners);
-      const elevation = sampleGrid(grid.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
-      const sampleX = x + 0.5 / detail;
-      const sampleY = y + 0.5 / detail;
-      const water = sampleGrid(currentSnapshot.fields.water.values, grid.width, grid.height, sampleX, sampleY);
-      const shimmer = water > 0.45 ? 1 + Math.sin(animationPhase * 2.2 + sampleX * 0.28 + sampleY * 0.19) * 0.045 : 1;
-      context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, sampleX, sampleY, layer), (0.92 + elevation * 0.12) * shimmer);
-      context.fill();
-    };
-    for (let diagonal = 0; diagonal < fineWidth + fineHeight - 1; diagonal += 1) {
-      const minX = Math.max(0, diagonal - (fineHeight - 1));
-      const maxX = Math.min(fineWidth - 1, diagonal);
-      for (let fineX = minX; fineX <= maxX; fineX += 1) drawSurface(fineX, diagonal - fineX);
-    }
-    if (zoom >= 4) {
-      const detail = zoom >= 6 ? 12 : 8;
-      const cellRadiusX = Math.ceil(canvas.width / Math.max(1, geometry.tileWidth) / 2) + 2;
-      const cellRadiusY = Math.ceil(canvas.height / Math.max(1, geometry.tileHeight) / 2) + 2;
-      const center = cameraTarget ?? { x: (grid.width - 1) / 2, y: (grid.height - 1) / 2 };
-      const minCellX = Math.max(0, Math.floor(center.x - cellRadiusX));
-      const maxCellX = Math.min(grid.width - 1, Math.ceil(center.x + cellRadiusX));
-      const minCellY = Math.max(0, Math.floor(center.y - cellRadiusY));
-      const maxCellY = Math.min(grid.height - 1, Math.ceil(center.y + cellRadiusY));
-      for (let cellY = minCellY; cellY <= maxCellY; cellY += 1) {
-        for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
-          for (let detailY = 0; detailY < detail; detailY += 1) {
-            for (let detailX = 0; detailX < detail; detailX += 1) {
-              const x = cellX + detailX / detail;
-              const y = cellY + detailY / detail;
-              const nextX = Math.min(grid.width, x + 1 / detail);
-              const nextY = Math.min(grid.height, y + 1 / detail);
-              const relief = microRelief(x, y, animationPhase) * 0.018;
-              const elevation = sampleGrid(grid.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
-              const microElevation = clamp(elevation + relief, 0, 1);
-              const points: Array<[number, number]> = [
-                pointFor(x, y, microElevation * geometry.heightScale, geometry),
-                pointFor(nextX, y, microElevation * geometry.heightScale, geometry),
-                pointFor(nextX, nextY, microElevation * geometry.heightScale, geometry),
-                pointFor(x, nextY, microElevation * geometry.heightScale, geometry),
-              ];
-              const minX = Math.min(...points.map(([pointX]) => pointX));
-              const maxX = Math.max(...points.map(([pointX]) => pointX));
-              const minY = Math.min(...points.map(([, pointY]) => pointY));
-              const maxY = Math.max(...points.map(([, pointY]) => pointY));
-              if (maxX < -8 || minX > canvas.width + 8 || maxY < -8 || minY > canvas.height + 8) continue;
-              polygon(context, points);
-              const water = sampleGrid(currentSnapshot.fields.water.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
-              const light = 0.97 + relief * 3 + (water > 0.45 ? Math.sin(animationPhase * 2 + x + y) * 0.025 : 0);
-              context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail, layer), light);
-              context.fill();
-            }
-          }
-        }
+      if (maxX < -48 || minX > canvas.width + 48 || maxY < -48 || minY > canvas.height + 48) return;
+      const color = tileColor(cellX, cellY);
+      const eastElevation = elevationAt(cellX + 1, cellY);
+      if (elevation - eastElevation > 0.04) {
+        polygon(context, [corners[1]!, corners[2]!, tilePoint(cellX + 1, cellY + 1, eastElevation), tilePoint(cellX + 1, cellY, eastElevation)]);
+        context.fillStyle = shade(color, 0.62);
+        context.fill();
       }
+      const southElevation = elevationAt(cellX, cellY + 1);
+      if (elevation - southElevation > 0.04) {
+        polygon(context, [corners[2]!, corners[3]!, tilePoint(cellX, cellY + 1, southElevation), tilePoint(cellX + 1, cellY + 1, southElevation)]);
+        context.fillStyle = shade(color, 0.48);
+        context.fill();
+      }
+      polygon(context, corners);
+      const variant = sceneHash(cellX, cellY, 17);
+      context.fillStyle = shade(color, 0.94 + variant * 0.12);
+      context.fill();
+      const center = pointFor(cellX + 0.5, cellY + 0.5, elevation * geometry!.heightScale, geometry!);
+      const detailScale = Math.max(1, geometry!.tileWidth / 52);
+      if (waterAt(cellX, cellY)) {
+        if (layer === "natural" && (cellX + cellY) % 2 === 0) {
+          drawPixelWater(context, { x: center[0], y: center[1] - detailScale, scale: detailScale, seed: Math.floor(variant * 1000), phase: animationPhase });
+        }
+        return;
+      }
+      if (zoom >= 1.5 && variant > 0.72 && layer === "natural") {
+        const kind = elevation > 0.76 ? "snow" : (currentSnapshot.fields.humidity.values[cellY * grid.width + cellX] ?? 0) < 0.25 ? "sand" : "grass";
+        drawPixelGroundDetail(context, { x: center[0], y: center[1], scale: detailScale, seed: Math.floor(variant * 1000), kind });
+      }
+    };
+    for (let diagonal = 0; diagonal < grid.width + grid.height - 1; diagonal += 1) {
+      const minCellX = Math.max(0, diagonal - (grid.height - 1));
+      const maxCellX = Math.min(grid.width - 1, diagonal);
+      for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) drawTile(cellX, diagonal - cellX);
     }
-    const propStride = zoom >= 4 ? 1 : zoom >= 2 ? 2 : 5;
+    const terrainPoint = (x: number, y: number): [number, number] => {
+      const cellX = Math.min(grid.width - 1, Math.max(0, Math.floor(x)));
+      const cellY = Math.min(grid.height - 1, Math.max(0, Math.floor(y)));
+      return pointFor(x, y, elevationAt(cellX, cellY) * geometry!.heightScale, geometry!);
+    };
+    const propStride = zoom >= 4 ? 1 : zoom >= 2 ? 2 : 3;
     const propRadiusX = Math.ceil(canvas.width / Math.max(1, geometry.tileWidth) / 2) + 2;
     const propRadiusY = Math.ceil(canvas.height / Math.max(1, geometry.tileHeight) / 2) + 2;
     const propCenter = cameraTarget ?? { x: (grid.width - 1) / 2, y: (grid.height - 1) / 2 };
@@ -311,43 +277,23 @@ export const createMapCanvas = (
       const index = cellY * grid.width + cellX;
       const elevation = clamp(grid.values[index] ?? 0, 0, 1);
       const water = clamp(currentSnapshot.fields.water.values[index] ?? 0, 0, 1);
-      const base = pointFor(cellX + 0.5, cellY + 0.5, elevation * geometry!.heightScale, geometry!);
-      const size = Math.max(2, geometry!.tileWidth * 0.18);
+      const base = pointFor(cellX + 0.5, cellY + 0.5, elevationAt(cellX, cellY) * geometry!.heightScale, geometry!);
+      const spriteScale = Math.max(1, geometry!.tileWidth / 48);
       const variant = sceneHash(cellX, cellY, currentSnapshot.tick + currentSnapshot.fields.elevation.width * 31);
-      if (water > 0.45) {
-        context.strokeStyle = `rgba(166, 226, 231, ${0.22 + Math.sin(animationPhase * 2 + cellX * 0.4 + cellY) * 0.08})`;
-        context.lineWidth = Math.max(1, ratio * 0.8);
-        for (let wave = 0; wave < 2; wave += 1) {
-          const waveY = base[1] - size * 0.25 + wave * size * 0.35;
-          context.beginPath();
-          context.moveTo(base[0] - size, waveY + Math.sin(animationPhase * 2 + cellX + wave) * 2);
-          context.quadraticCurveTo(base[0], waveY - size * 0.18, base[0] + size, waveY + Math.sin(animationPhase * 2.4 + cellY + wave) * 2);
-          context.stroke();
-        }
+      if (water > 0.45 || elevation < 0.46) return;
+      const biomass = clamp(currentSnapshot.fields.biomass.values[index] ?? 0, 0, 1);
+      const treeChance = 0.2 + biomass * 0.42;
+      if (variant < treeChance) {
+        drawPixelTree(context, { x: base[0], y: base[1], scale: spriteScale, seed: Math.floor(variant * 10_000), altitude: elevation, phase: animationPhase });
         return;
       }
-      if (variant < 0.48 && zoom >= 2) {
-        const trunkHeight = size * (0.9 + variant);
-        context.fillStyle = "#554634";
-        context.fillRect(base[0] - size * 0.08, base[1] - trunkHeight, size * 0.16, trunkHeight);
-        const canopy = [
-          [base[0], base[1] - trunkHeight - size * 1.1],
-          [base[0] - size * 0.75, base[1] - trunkHeight * 0.35],
-          [base[0] + size * 0.75, base[1] - trunkHeight * 0.35],
-        ] as Array<[number, number]>;
-        polygon(context, canopy);
-        context.fillStyle = elevation > 0.7 ? "#6c7560" : "#48704b";
-        context.fill();
+      if (variant > 0.82) {
+        drawPixelRock(context, { x: base[0], y: base[1], scale: spriteScale, seed: Math.floor(variant * 10_000), altitude: elevation });
         return;
       }
-      if (variant > 0.78 && zoom >= 2) {
-        polygon(context, [
-          [base[0] - size, base[1]],
-          [base[0] - size * 0.2, base[1] - size * (0.8 + variant * 0.4)],
-          [base[0] + size, base[1]],
-        ]);
-        context.fillStyle = "#777468";
-        context.fill();
+      if (zoom >= 2 && variant > 0.66) {
+        const kind = elevation > 0.76 ? "snow" : (currentSnapshot.fields.humidity.values[index] ?? 0) < 0.25 ? "sand" : "grass";
+        drawPixelGroundDetail(context, { x: base[0], y: base[1], scale: spriteScale, seed: Math.floor(variant * 10_000), kind });
       }
     };
     for (let cellY = propMinY; cellY <= propMaxY; cellY += propStride) {
@@ -361,7 +307,7 @@ export const createMapCanvas = (
       const seed = stringSeed(entity.id);
       const localX = ((seed % 1000) / 1000 - 0.5) * 0.62;
       const localY = (((seed >>> 10) % 1000) / 1000 - 0.5) * 0.62;
-      const elevation = sampleGrid(grid.values, grid.width, grid.height, regionX + 0.5, regionY + 0.5);
+      const elevation = elevationAt(regionX, regionY);
       return pointFor(regionX + 0.5 + localX, regionY + 0.5 + localY, elevation * geometry!.heightScale, geometry!);
     };
     const entityPositions = new Map<string, [number, number]>();
@@ -392,56 +338,25 @@ export const createMapCanvas = (
     const drawSceneEntity = (entity: SceneEntity): void => {
       const point = entityPositions.get(entity.id);
       if (!point) return;
-      const size = Math.max(2, geometry!.tileWidth * (entity.kind === "agent" ? 0.08 : entity.kind === "population" ? 0.2 : 0.16 + entity.rank * 0.018));
-      if (point[0] < -size * 4 || point[0] > canvas.width + size * 4 || point[1] < -size * 8 || point[1] > canvas.height + size * 4) return;
-      context.fillStyle = "rgba(8, 12, 9, 0.28)";
-      context.beginPath();
-      context.ellipse(point[0], point[1] + size * 0.14, size * 1.25, size * 0.35, 0, 0, Math.PI * 2);
-      context.fill();
-      const bob = animationEnabled ? Math.sin(animationPhase * 2.4 + stringSeed(entity.id) % 31) * size * 0.08 : 0;
+      const seed = stringSeed(entity.id);
+      const spriteScale = Math.max(1, geometry!.tileWidth / (entity.kind === "agent" ? 54 : 46));
+      const extent = spriteScale * (entity.kind === "agent" ? 20 : 65);
+      if (point[0] < -extent || point[0] > canvas.width + extent || point[1] < -extent * 2 || point[1] > canvas.height + extent) return;
       if (entity.kind === "agent") {
-        context.fillStyle = "#d6b84b";
-        context.beginPath();
-        context.arc(point[0], point[1] - size * 1.25 + bob, size * 0.33, 0, Math.PI * 2);
-        context.fill();
-        context.strokeStyle = "#d6b84b";
-        context.lineWidth = Math.max(1, size * 0.14);
-        context.beginPath();
-        context.moveTo(point[0], point[1] - size * 0.9 + bob);
-        context.lineTo(point[0], point[1] - size * 0.05 + bob);
-        context.moveTo(point[0], point[1] - size * 0.65 + bob);
-        context.lineTo(point[0] - size * 0.45, point[1] - size * 0.28 + bob);
-        context.moveTo(point[0], point[1] - size * 0.65 + bob);
-        context.lineTo(point[0] + size * 0.45, point[1] - size * 0.28 + bob);
-        context.stroke();
+        drawPixelAgent(context, { x: point[0], y: point[1], scale: spriteScale, seed, phase: animationPhase });
+        if (zoom >= 6 && sceneEntities.length < 80) {
+          drawPixelLabel(context, { x: point[0], y: point[1] - spriteScale * 24, scale: spriteScale * 0.65, label: `#${entity.id.slice(-5)}`, count: 1, seed });
+        }
         return;
       }
       if (entity.kind === "population") {
-        context.fillStyle = "#8d6d4e";
-        polygon(context, [[point[0] - size, point[1]], [point[0], point[1] - size * 1.15], [point[0] + size, point[1]]]);
-        context.fill();
-        context.fillStyle = "#c5a86e";
-        context.fillRect(point[0] - size * 0.1, point[1] - size * 0.58, size * 0.2, size * 0.58);
+        drawPixelCamp(context, { x: point[0], y: point[1], scale: spriteScale, seed, phase: animationPhase });
+        if (zoom >= 4) drawPixelLabel(context, { x: point[0], y: point[1] - spriteScale * 18, scale: spriteScale * 0.55, label: "\u4eba\u53e3", count: entity.count, seed });
         return;
       }
-      const buildingHeight = size * (0.7 + entity.rank * 0.2);
-      const width = size * (1.2 + entity.rank * 0.12);
-      context.fillStyle = entity.rank >= 7 ? "#7d6a45" : entity.rank >= 5 ? "#776049" : "#695943";
-      context.fillRect(point[0] - width, point[1] - buildingHeight, width * 2, buildingHeight);
-      context.fillStyle = entity.rank >= 6 ? "#d6b84b" : "#b99e70";
-      polygon(context, [[point[0] - width * 1.15, point[1] - buildingHeight], [point[0], point[1] - buildingHeight - size * 0.72], [point[0] + width * 1.15, point[1] - buildingHeight]]);
-      context.fill();
-      if (entity.rank >= 5) {
-        context.strokeStyle = "#d6b84b";
-        context.lineWidth = Math.max(1, size * 0.12);
-        context.beginPath();
-        context.moveTo(point[0], point[1] - buildingHeight - size * 0.65);
-        context.lineTo(point[0], point[1] - buildingHeight - size * 1.35);
-        context.stroke();
-        context.fillStyle = entity.rank >= 7 ? "#d96b4d" : "#3f8fa6";
-        polygon(context, [[point[0], point[1] - buildingHeight - size * 1.35], [point[0] + size * 0.8, point[1] - buildingHeight - size * 1.12], [point[0], point[1] - buildingHeight - size * 0.95]]);
-        context.fill();
-      }
+      drawPixelOrganization(context, { x: point[0], y: point[1], scale: spriteScale, seed, kind: entity.kind, count: entity.count });
+      const showLabel = zoom >= 6 ? entity.rank >= 5 : zoom >= 4 ? entity.rank >= 7 : false;
+      if (showLabel) drawPixelLabel(context, { x: point[0], y: point[1] - spriteScale * (entity.rank >= 6 ? 38 : 26), scale: spriteScale * 0.55, label: organizationLabel[entity.kind], count: entity.count, seed });
     };
     for (const entity of visibleEntities) drawSceneEntity(entity);
     if (selection) {
