@@ -72,14 +72,18 @@ describe("rule engine and event ledger", () => {
           { id: "mint-1", resourceId: "food", regionId, amount: 10, operation: "mint", source: "environment", sourceId: "rain", toHolderId: "a", causeRuleId: "test" },
           { id: "transfer-1", resourceId: "food", regionId, amount: 4, operation: "transfer", source: "culture", sourceId: "trade", fromHolderId: "a", toHolderId: "b", causeRuleId: "test" },
           { id: "consume-1", resourceId: "food", regionId, amount: 1, operation: "consume", source: "culture", sourceId: "meal", fromHolderId: "b", causeRuleId: "test" },
+          { id: "cross-region-1", resourceId: "food", regionId, destinationRegionId: "region:1:0" as RegionId, amount: 2, operation: "transfer", source: "culture", sourceId: "caravan", fromHolderId: "a", toHolderId: "c", causeRuleId: "test" },
         ] satisfies ResourceTransaction[],
       }),
     };
     clearSimulationStages();
     registerSimulationStage(stage);
     const { state } = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
-    expect(state.resources.find((entry) => entry.holderId === "a")?.amount).toBe(6);
+    expect(state.resources.find((entry) => entry.holderId === "a")?.amount).toBe(4);
     expect(state.resources.find((entry) => entry.holderId === "b")?.amount).toBe(3);
+    expect(state.resources.find((entry) => entry.holderId === "c")?.regionId).toBe("region:1:0");
+    expect(state.resources.find((entry) => entry.holderId === "c")?.amount).toBe(2);
+    expect(state.resources.reduce((sum, entry) => sum + entry.amount, 0)).toBe(9);
   });
 
   it("keeps default stages when an extension stage is registered", () => {

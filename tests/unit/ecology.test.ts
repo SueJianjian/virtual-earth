@@ -147,4 +147,30 @@ describe("emergent ecology", () => {
     expect(event?.evidence).toMatchObject({ fromRegion: "region:0:0", toRegion: "region:1:0", foodDriven: true });
     expect(Number(event?.evidence.destinationFoodSecurity)).toBeGreaterThan(Number(event?.evidence.originFoodSecurity));
   });
+
+  it("splits a large mobile population into a conserved neighboring branch", () => {
+    const outcome = Array.from({ length: 96 }, (_, seed) => {
+      const state = initializeEnvironment(createWorld(400 + seed, { width: 8, height: 8 }));
+      const species = {
+        id: `species:dispersal:${seed}` as never,
+        role: "producer" as const,
+        traits: { energyUse: 0.1, reproduction: 0, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 1, cognitivePotential: 0 },
+      };
+      state.fields.temperature.values.fill(0.5);
+      state.fields.humidity.values.fill(0.5);
+      state.fields.nutrients.values.fill(1);
+      state.species = [species];
+      state.populations = [{ id: `population:dispersal:${seed}` as never, speciesId: species.id, regionId: "region:3:3" as never, count: 1_000, energy: 1 }];
+      const delta = stepEcology(state, ecologyContext(state));
+      const next = applyEcologyDelta(state, delta);
+      return { state, next, delta };
+    }).find(({ delta }) => delta.eventDrafts.some((event) => event.kind === "population-dispersal"));
+
+    expect(outcome).toBeDefined();
+    const event = outcome?.delta.eventDrafts.find((candidate) => candidate.kind === "population-dispersal");
+    expect(["region:4:3", "region:2:3", "region:3:4", "region:3:2"]).toContain(event?.payload.toRegion);
+    const producerPopulations = outcome?.next.populations.filter((population) => population.speciesId === outcome.state.species[0]?.id) ?? [];
+    expect(producerPopulations).toHaveLength(2);
+    expect(producerPopulations.reduce((sum, population) => sum + population.count, 0)).toBeCloseTo(1_000, 6);
+  });
 });

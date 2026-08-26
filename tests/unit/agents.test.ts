@@ -95,6 +95,7 @@ describe("agent emergence and lifecycle", () => {
       memberIds: [first.id, second.id, olderChild.id],
       childOrganizationIds: [],
       regionId: parentPopulation.regionId,
+      territoryRegionIds: [parentPopulation.regionId],
       resources: {},
       status: "active" as const,
     };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deserializeWorld, serializeWorld } from "../../src/persistence/serialize.ts";
 import { summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
+import { createOrganization } from "../../src/sim/society/organization.ts";
 
 describe("world persistence", () => {
   it("round-trips authoritative state and typed grids", () => {
@@ -43,5 +44,20 @@ describe("world persistence", () => {
     });
     expect(restored.lod.summaries[0]).toMatchObject({ foodBalance: 0, foodPerAgent: 0, foodSecurity: 0 });
     expect(restored.lod.summaries[0]?.agentRecords).toEqual([]);
+  });
+
+  it("restores a center territory for organizations from older saves", () => {
+    const world = createWorld(122, { width: 8, height: 8 });
+    const regionId = "region:2:3" as never;
+    world.organizations = [createOrganization("city", regionId, [])];
+    world.lod.summaries = [summarizeRegionState(world, regionId, "aggregate")];
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { organizations: Array<{ territoryRegionIds?: unknown }>; lod: { summaries: Array<{ organizations: Array<{ territoryRegionIds?: unknown }> }> } } };
+    delete legacy.world.organizations[0]?.territoryRegionIds;
+    delete legacy.world.lod.summaries[0]?.organizations[0]?.territoryRegionIds;
+
+    const restored = deserializeWorld(JSON.stringify(legacy));
+
+    expect(restored.organizations[0]?.territoryRegionIds).toEqual([regionId]);
+    expect(restored.lod.summaries[0]?.organizations[0]?.territoryRegionIds).toEqual([regionId]);
   });
 });

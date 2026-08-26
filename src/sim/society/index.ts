@@ -3,7 +3,8 @@ import { stepSociety } from "./step.ts";
 
 export { createOrganization, minimumMembersFor, organizationCapacity, organizationIdFor } from "./organization.ts";
 export { attemptOrganizationFormation } from "./formation.ts";
-export { applyOrganizationConflict, governOrganization } from "./governance.ts";
+export { applyOrganizationConflict, createGovernanceIndex, governOrganization } from "./governance.ts";
+export { neighboringRegionIds, stepTerritories } from "./territory.ts";
 export { stepSociety } from "./step.ts";
 
 export const societyStage: SimulationStage = {

@@ -60,11 +60,15 @@ export const attemptOrganizationFormation = (
   const [roll] = randomFloat(forkRandom(context.random, `organization:${type}:${context.regionId}:${hashString(sortedMembers.join(":")).toString(16)}`));
   if (roll >= eligibility.probability) return { status: "skipped", delta: emptyDelta() };
   const childTypes = new Set(childTypesFor(type));
-  const childOrganizationIds = context.state.organizations
-    .filter((organization) => organization.regionId === context.regionId && organization.status === "active" && childTypes.has(organization.type))
+  const childOrganizations = context.state.organizations
+    .filter((organization) => (type === "federation" || type === "empire" || organization.regionId === context.regionId) && organization.status === "active" && childTypes.has(organization.type));
+  const childOrganizationIds = childOrganizations
     .map((organization) => organization.id)
     .sort();
-  const organization = createOrganization(type, context.regionId, sortedMembers, childOrganizationIds);
+  const organization = {
+    ...createOrganization(type, context.regionId, sortedMembers, childOrganizationIds),
+    territoryRegionIds: [...new Set([context.regionId, ...childOrganizations.flatMap((child) => child.territoryRegionIds)])].sort(),
+  };
   const delta = emptyDelta();
   delta.entityEffects.push({ collection: "organizations", operation: "create", id: organization.id, value: organization });
   delta.eventDrafts.push({

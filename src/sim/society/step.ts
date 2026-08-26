@@ -1,7 +1,8 @@
 import { forkRandom, randomFloat } from "../random.ts";
 import type { AgentsDelta, CultureDelta, OrganizationState, SocietyContext, SocietyDelta, WorldDelta, WorldState, OrganizationType } from "../types.ts";
 import { attemptOrganizationFormation } from "./formation.ts";
-import { applyOrganizationConflict, governOrganization } from "./governance.ts";
+import { applyOrganizationConflict, createGovernanceIndex, governOrganization } from "./governance.ts";
+import { stepTerritories } from "./territory.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -16,6 +17,16 @@ const agentsAfter = (state: WorldState, delta: WorldDelta): WorldState["agents"]
     else if (effect.value) agents.set(effect.id, structuredClone(effect.value));
   }
   return [...agents.values()];
+};
+
+const organizationsAfter = (state: WorldState, delta: WorldDelta): WorldState["organizations"] => {
+  const organizations = new Map(state.organizations.map((organization) => [organization.id, structuredClone(organization)]));
+  for (const effect of delta.entityEffects) {
+    if (effect.collection !== "organizations") continue;
+    if (effect.operation === "remove") organizations.delete(effect.id);
+    else if (effect.value) organizations.set(effect.id, structuredClone(effect.value));
+  }
+  return [...organizations.values()];
 };
 
 const merge = (target: WorldDelta, source: WorldDelta): void => {
@@ -34,7 +45,9 @@ const balanceFor = (state: WorldState, resourceId: string, regionId: string, hol
 
 const addEconomy = (state: WorldState, delta: WorldDelta, organizations: OrganizationState[]): void => {
   for (const regionId of [...new Set(organizations.map((organization) => organization.regionId))].sort()) {
-    const local = organizations.filter((organization) => organization.regionId === regionId && organization.status === "active").sort((left, right) => left.id.localeCompare(right.id));
+    const candidates = organizations.filter((organization) => organization.regionId === regionId && organization.status === "active");
+    const civic = candidates.filter((organization) => ["settlement", "city", "state", "federation", "empire"].includes(organization.type));
+    const local = (civic.length > 0 ? civic : candidates).sort((left, right) => left.id.localeCompare(right.id));
     if (local.length === 0) continue;
     let worldFood = balanceFor(state, "food", regionId);
     const planned = new Map(local.map((organization) => [organization.id, balanceFor(state, "food", regionId, organization.id)]));
@@ -183,8 +196,11 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
       merge(delta, attemptOrganizationFormation(context, type).delta);
     }
   }
-  for (const organization of state.organizations.filter((organization) => organization.status !== "collapsed")) merge(delta, governOrganization(state, organization));
-  const activeOrganizations = state.organizations.filter((organization) => organization.status === "active");
+  const governanceIndex = createGovernanceIndex(state);
+  for (const organization of state.organizations.filter((organization) => organization.status !== "collapsed")) merge(delta, governOrganization(state, organization, governanceIndex));
+  const governedOrganizations = organizationsAfter(state, delta);
+  merge(delta, stepTerritories({ ...state, organizations: governedOrganizations }));
+  const activeOrganizations = organizationsAfter(state, delta).filter((organization) => organization.status === "active");
   addEconomy(state, delta, activeOrganizations);
   addConflicts(state, delta, activeOrganizations);
   return delta;

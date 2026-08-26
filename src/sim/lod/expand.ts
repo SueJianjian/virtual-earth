@@ -82,6 +82,7 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
       memberIds,
       childOrganizationIds: [...summaryOrganization.childIds],
       regionId: summary.regionId,
+      territoryRegionIds: [...summaryOrganization.territoryRegionIds],
       resources: Object.fromEntries(summaryOrganization.resourceIds.map((resourceId) => [resourceId, 0])),
       status: "active",
     });

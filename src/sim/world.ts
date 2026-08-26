@@ -181,6 +181,7 @@ export const emptyOrganization = (
   memberIds: [],
   childOrganizationIds: [],
   regionId,
+  territoryRegionIds: [regionId],
   resources: {},
   status: "active",
 });

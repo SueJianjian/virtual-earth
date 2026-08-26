@@ -60,6 +60,7 @@ export const createFamily = (
   memberIds: [...new Set(memberIds)].sort(),
   childOrganizationIds: [],
   regionId,
+  territoryRegionIds: [regionId],
   resources: {},
   status: "active",
 });

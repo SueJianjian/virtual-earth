@@ -165,8 +165,8 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
     state.resources.find((entry) => entryKey(entry.resourceId, entry.regionId, entry.holderId) === entryKey(resourceId, regionId, holderId));
   const balance = (resourceId: string, regionId: string, holderId?: string): number =>
     findEntry(resourceId, regionId, holderId)?.amount ?? 0;
-  const changeBalance = (transaction: ResourceTransactionLike, holderId: string | undefined, amount: number, originEventId: string): void => {
-    const existing = findEntry(transaction.resourceId, transaction.regionId, holderId);
+  const changeBalance = (transaction: ResourceTransactionLike, regionId: ResourceTransactionLike["regionId"], holderId: string | undefined, amount: number, originEventId: string): void => {
+    const existing = findEntry(transaction.resourceId, regionId, holderId);
     if (existing) {
       existing.amount = Math.max(0, Math.min(existing.cap, existing.amount + amount));
       existing.originEventId = originEventId;
@@ -174,9 +174,9 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
     }
     if (amount < 0) throw new Error(`Insufficient resource balance: ${transaction.id}`);
     state.resources.push({
-      id: `resource:${hashString(entryKey(transaction.resourceId, transaction.regionId, holderId)).toString(16)}`,
+      id: `resource:${hashString(entryKey(transaction.resourceId, regionId, holderId)).toString(16)}`,
       resourceId: transaction.resourceId,
-      regionId: transaction.regionId,
+      regionId,
       ...(holderId ? { holderId } : {}),
       amount,
       cap: Number.MAX_SAFE_INTEGER,
@@ -189,21 +189,21 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
     appliedIds.add(transaction.id);
     if (!Number.isFinite(transaction.amount) || transaction.amount < 0) throw new Error(`Invalid resource amount: ${transaction.id}`);
     if (transaction.operation === "mint") {
-      changeBalance(transaction, transaction.toHolderId, transaction.amount, transaction.id);
+      changeBalance(transaction, transaction.regionId, transaction.toHolderId, transaction.amount, transaction.id);
     } else if (transaction.operation === "transfer") {
       if (!transaction.toHolderId) throw new Error(`Transfer requires destination holder: ${transaction.id}`);
       const from = transaction.fromHolderId;
       if (balance(transaction.resourceId, transaction.regionId, from) < transaction.amount) {
         throw new Error(`Insufficient resource balance: ${transaction.id}`);
       }
-      changeBalance(transaction, from, -transaction.amount, transaction.id);
-      changeBalance(transaction, transaction.toHolderId, transaction.amount, transaction.id);
+      changeBalance(transaction, transaction.regionId, from, -transaction.amount, transaction.id);
+      changeBalance(transaction, transaction.destinationRegionId ?? transaction.regionId, transaction.toHolderId, transaction.amount, transaction.id);
     } else {
       const holderId = transaction.fromHolderId ?? transaction.toHolderId;
       if (balance(transaction.resourceId, transaction.regionId, holderId) < transaction.amount) {
         throw new Error(`Insufficient resource balance: ${transaction.id}`);
       }
-      changeBalance(transaction, holderId, -transaction.amount, transaction.id);
+      changeBalance(transaction, transaction.regionId, holderId, -transaction.amount, transaction.id);
     }
   }
 };

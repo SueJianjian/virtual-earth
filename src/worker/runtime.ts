@@ -51,11 +51,11 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
   };
   for (const summary of state.lod.summaries) {
     for (const organization of summary.organizations) {
-      add({ id: organization.id, kind: organization.type, regionId: summary.regionId, count: organization.memberCount, rank: organizationRank[organization.type] });
+      add({ id: organization.id, kind: organization.type, regionId: summary.regionId, count: organization.memberCount, rank: organizationRank[organization.type], territoryRegionIds: [...organization.territoryRegionIds] });
     }
   }
   for (const organization of state.organizations) {
-    add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type] });
+    add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type], territoryRegionIds: [...organization.territoryRegionIds] });
   }
   for (const population of state.populations) {
     add({ id: population.id, kind: "population", regionId: population.regionId, count: population.count, rank: organizationRank.population });
@@ -65,7 +65,7 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
   }
   if (projection) {
     for (const organization of projection.organizations) {
-      add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type] });
+      add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type], territoryRegionIds: [...organization.territoryRegionIds] });
     }
     for (const agent of projection.agents) {
       add({ id: agent.id, kind: "agent", regionId: agent.regionId, count: 1, rank: organizationRank.agent });
@@ -77,7 +77,17 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
     kind: relationship.kind,
     strength: relationship.strength,
   })) ?? [];
-  return { entities: [...entities.values()].slice(0, 800), links };
+  const interregionalLinks = state.events
+    .filter((event) => event.kind === "interregional-trade" || event.kind === "border-conflict")
+    .slice(-128)
+    .map((event): SceneLink | undefined => {
+      const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.sourceIds[0] ?? "");
+      const toId = String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.sourceIds[1] ?? "");
+      if (!entities.has(fromId) || !entities.has(toId)) return undefined;
+      return { fromId, toId, kind: event.kind === "border-conflict" ? "border-conflict" : "trade", strength: Number(event.payload.amount ?? 0.7) };
+    })
+    .filter((link): link is SceneLink => Boolean(link));
+  return { entities: [...entities.values()].slice(0, 800), links: [...links, ...interregionalLinks].slice(-384) };
 };
 const eventFromInput = (state: WorldState, input: WorldEventInput): WorldEvent => ({
   id: input.id,

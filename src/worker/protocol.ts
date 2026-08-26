@@ -31,9 +31,15 @@ export type SceneEntity = {
   regionId: RegionId;
   count: number;
   rank: number;
+  territoryRegionIds?: RegionId[];
 };
 
-export type SceneLink = Pick<RelationshipState, "fromId" | "toId" | "kind" | "strength">;
+export type SceneLink = {
+  fromId: string;
+  toId: string;
+  strength: number;
+  kind: RelationshipState["kind"] | "trade" | "border-conflict";
+};
 
 export type WorkerMessage =
   | { type: "snapshot"; snapshot: WorldSnapshot; paused: boolean; speed: 1 | 4 | 16 | 64 }

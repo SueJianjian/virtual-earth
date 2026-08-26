@@ -136,6 +136,7 @@ export type ResourceTransaction = {
   id: string;
   resourceId: string;
   regionId: RegionId;
+  destinationRegionId?: RegionId;
   amount: number;
   operation: "mint" | "transfer" | "consume" | "destroy";
   source: "environment" | "culture" | "worldview" | "user";
@@ -300,6 +301,7 @@ export type OrganizationSummary = {
   childIds: OrganizationId[];
   resourceIds: string[];
   historyIds: string[];
+  territoryRegionIds: RegionId[];
 };
 export type RegionLineageSummary = {
   descendantCount: number;
@@ -410,6 +412,7 @@ export type OrganizationState = {
   memberIds: EntityId[];
   childOrganizationIds: OrganizationId[];
   regionId: RegionId;
+  territoryRegionIds: RegionId[];
   resources: Record<string, number>;
   status: "active" | "migrating" | "fragmenting" | "collapsed";
 };

@@ -3,6 +3,21 @@ import type { OrganizationState, RelationshipState, WorldDelta, WorldState } fro
 import { minimumMembersFor, organizationCapacity } from "./organization.ts";
 import { foodSecurityForOrganization } from "../agents/food.ts";
 
+export type GovernanceIndex = {
+  agentIds: ReadonlySet<string>;
+  agentsByRegion: ReadonlyMap<string, WorldState["agents"]>;
+};
+
+export const createGovernanceIndex = (state: Pick<WorldState, "agents">): GovernanceIndex => {
+  const agentsByRegion = new Map<string, WorldState["agents"]>();
+  for (const agent of state.agents) {
+    const agents = agentsByRegion.get(agent.regionId) ?? [];
+    agents.push(agent);
+    agentsByRegion.set(agent.regionId, agents);
+  }
+  return { agentIds: new Set(state.agents.map((agent) => agent.id)), agentsByRegion };
+};
+
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
   resourceTransactions: [], worldviewEffects: [], eventDrafts: [],
@@ -12,11 +27,20 @@ const recruitsMembers = (organization: OrganizationState): boolean => [
   "settlement", "city", "state", "federation", "empire",
 ].includes(organization.type);
 
-export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "years" | "observation">>, organization: OrganizationState): WorldDelta => {
+export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "years" | "observation">>, organization: OrganizationState, suppliedIndex?: GovernanceIndex): WorldDelta => {
   const delta = emptyDelta();
-  const existingMembers = organization.memberIds.filter((id) => state.agents.some((agent) => agent.id === id));
-  const localAgents = state.agents
-    .filter((agent) => agent.regionId === organization.regionId)
+  const index = suppliedIndex ?? createGovernanceIndex(state);
+  const existingMembers = organization.memberIds.filter((id) => index.agentIds.has(id));
+  if (organization.type === "family") {
+    const status = existingMembers.length >= minimumMembersFor("family") ? "active" : "collapsed";
+    if (existingMembers.length !== organization.memberIds.length || status !== organization.status) {
+      delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: { ...organization, memberIds: existingMembers, status } });
+    }
+    return delta;
+  }
+  const territory = new Set(organization.territoryRegionIds.length > 0 ? organization.territoryRegionIds : [organization.regionId]);
+  const localAgents = [...territory]
+    .flatMap((regionId) => index.agentsByRegion.get(regionId) ?? [])
     .map((agent) => agent.id)
     .sort();
   const members = recruitsMembers(organization)
@@ -29,7 +53,7 @@ export const governOrganization = (state: Readonly<Omit<WorldState, "tick" | "ye
   const resourceTotal = Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + state.resources
     .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
     .reduce((sum, resource) => sum + resource.amount, 0);
-  const foodResilient = organization.type === "family" || organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.075;
+  const foodResilient = organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.075;
   const stable = members.length >= minimumMembers && members.length <= capacity && resourceTotal >= 0 && foodResilient;
   const status = stable ? "active" : members.length < minimumMembers ? "collapsed" : "fragmenting";
   if (members.length !== organization.memberIds.length || status !== organization.status) {

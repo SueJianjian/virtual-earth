@@ -61,11 +61,12 @@ export const createMapCanvas = (
   scene.fog = new THREE.FogExp2(0x8db5bd, 0.0055);
   const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 180);
   const terrainRoot = new THREE.Group();
+  const territoryRoot = new THREE.Group();
   const propRoot = new THREE.Group();
   const linkRoot = new THREE.Group();
   const entityRoot = new THREE.Group();
   const effectRoot = new THREE.Group();
-  scene.add(terrainRoot, propRoot, linkRoot, entityRoot, effectRoot);
+  scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot);
 
   scene.add(new THREE.HemisphereLight(0xc8e7ef, 0x31422d, 1.05));
   const sunlight = new THREE.DirectionalLight(0xffe8bc, 2.15);
@@ -353,6 +354,38 @@ export const createMapCanvas = (
     propRoot.add(rockMesh);
   };
 
+  const rebuildTerritories = (): void => {
+    clearGroup(territoryRoot);
+    const owners = new Map<string, SceneEntity>();
+    for (const entity of sceneEntities.filter((candidate) => candidate.rank >= 5)) {
+      for (const regionId of entity.territoryRegionIds ?? []) {
+        const existing = owners.get(regionId);
+        if (!existing || entity.rank > existing.rank || (entity.rank === existing.rank && entity.id < existing.id)) owners.set(regionId, entity);
+      }
+    }
+    const cells = [...owners.entries()]
+      .map(([regionId, entity]) => {
+        const match = /^region:(\d+):(\d+)$/.exec(regionId);
+        return match ? { x: Number(match[1]), y: Number(match[2]), entity } : undefined;
+      })
+      .filter((cell): cell is { x: number; y: number; entity: SceneEntity } => Boolean(cell));
+    canvas.dataset.territoryRegionCount = String(cells.length);
+    if (cells.length === 0) return;
+    const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.3, depthWrite: false, vertexColors: true, side: THREE.DoubleSide });
+    const mesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.5, 20), material, cells.length);
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    cells.forEach((cell, index) => {
+      matrix.compose(worldPosition(cell.x, cell.y, 0.16), quaternion, new THREE.Vector3(1, 1, 1));
+      mesh.setMatrixAt(index, matrix);
+      const seed = stringSeed(cell.entity.id);
+      mesh.setColorAt(index, new THREE.Color().setHSL((seed % 360) / 360, 0.56, 0.5));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    territoryRoot.add(mesh);
+  };
+
   const pointForEntity = (entity: SceneEntity): THREE.Vector3 | undefined => {
     const match = /^region:(\d+):(\d+)$/.exec(entity.regionId);
     if (!match || !snapshot) return undefined;
@@ -394,7 +427,8 @@ export const createMapCanvas = (
       midpoint.y += 0.7 + from.distanceTo(to) * 0.08;
       const curve = new THREE.QuadraticBezierCurve3(from.clone().add(new THREE.Vector3(0, 0.38, 0)), midpoint, to.clone().add(new THREE.Vector3(0, 0.38, 0)));
       const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(16));
-      const lineMaterial = new THREE.LineBasicMaterial({ color: link.kind === "rival" ? 0xd5573e : 0xf1d36a, transparent: true, opacity: 0.62 });
+      const conflict = link.kind === "rival" || link.kind === "border-conflict";
+      const lineMaterial = new THREE.LineBasicMaterial({ color: conflict ? 0xd5573e : 0xf1d36a, transparent: true, opacity: conflict ? 0.78 : 0.62 });
       linkRoot.add(new THREE.Line(geometry, lineMaterial));
     }
     updateSceneLod();
@@ -411,6 +445,7 @@ export const createMapCanvas = (
         || (sceneLod === "global" && rank >= 5);
     }
     propRoot.visible = zoom >= 0.8;
+    territoryRoot.visible = sceneLod !== "individual";
     linkRoot.visible = sceneLod === "individual";
     canvas.dataset.sceneLod = sceneLod;
   };
@@ -438,7 +473,9 @@ export const createMapCanvas = (
     sceneLinks = next.sceneLinks ?? [];
     canvas.dataset.sceneEntityCount = String(sceneEntities.length);
     canvas.dataset.sceneLinkCount = String(sceneLinks.length);
+    canvas.dataset.crossRegionLinkCount = String(sceneLinks.filter((link) => link.kind === "trade" || link.kind === "border-conflict").length);
     rebuildTerrain();
+    rebuildTerritories();
     rebuildProps();
     rebuildEntities();
     updateSelectionMarker();

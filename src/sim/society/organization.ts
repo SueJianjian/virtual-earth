@@ -19,6 +19,7 @@ export const createOrganization = (
   memberIds: [...new Set(memberIds)].sort() as OrganizationState["memberIds"],
   childOrganizationIds: [...new Set(childOrganizationIds)].sort(),
   regionId,
+  territoryRegionIds: [regionId],
   resources: {},
   status: "active",
 });

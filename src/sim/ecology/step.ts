@@ -1,4 +1,4 @@
-import { forkRandom, randomFloat } from "../random.ts";
+import { forkRandom, hashString, randomFloat } from "../random.ts";
 import { attemptAbiogenesis, attemptTrophicSpecies } from "./species.ts";
 import { foodSecurityForRegion } from "../agents/food.ts";
 import { nextPopulationCount, populationCellIndex, suitability } from "./populations.ts";
@@ -45,6 +45,24 @@ const neighborRegion = (regionId: string, width: number, height: number): string
   if (x > 0) return `region:${x - 1}:${y}`;
   if (y + 1 < height) return `region:${x}:${y + 1}`;
   return y > 0 ? `region:${x}:${y - 1}` : undefined;
+};
+
+const neighborRegions = (regionId: string, width: number, height: number): string[] => {
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  if (!match) return [];
+  const x = Number(match[1] ?? 0);
+  const y = Number(match[2] ?? 0);
+  return [
+    x + 1 < width ? `region:${x + 1}:${y}` : undefined,
+    x > 0 ? `region:${x - 1}:${y}` : undefined,
+    y + 1 < height ? `region:${x}:${y + 1}` : undefined,
+    y > 0 ? `region:${x}:${y - 1}` : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+};
+
+const cellIndexForRegion = (regionId: string, width: number): number => {
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  return match ? Number(match[2] ?? 0) * width + Number(match[1] ?? 0) : 0;
 };
 
 export const stepEcology = (state: WorldState, context: RuleContext): EcologyDelta => {
@@ -124,11 +142,56 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         });
       }
     }
+    let retainedCount = count;
+    if (nextRegionId === population.regionId && count >= 80 && (species.traits.mobility ?? 0) >= 0.25) {
+      const candidates = neighborRegions(population.regionId, state.fields.elevation.width, state.fields.elevation.height)
+        .filter((regionId) => !state.populations.some((candidate) => candidate.speciesId === population.speciesId && candidate.regionId === regionId)
+          && !delta.entityEffects.some((effect) => effect.collection === "populations" && effect.operation === "create" && effect.value?.speciesId === population.speciesId && effect.value.regionId === regionId))
+        .map((regionId) => {
+          const candidateIndex = cellIndexForRegion(regionId, state.fields.elevation.width);
+          const habitat = suitability(
+            species,
+            state.fields.temperature.values[candidateIndex] ?? metrics.meanTemperature,
+            state.fields.humidity.values[candidateIndex] ?? metrics.meanHumidity,
+          );
+          const resources = species.role === "producer"
+            ? state.fields.nutrients.values[candidateIndex] ?? 0
+            : state.fields.biomass.values[candidateIndex] ?? 0;
+          return { regionId, habitat, score: habitat * 0.82 + resources * 0.18 };
+        })
+        .sort((left, right) => right.score - left.score || left.regionId.localeCompare(right.regionId));
+      const destination = candidates[0];
+      if (destination && destination.score >= 0.42) {
+        const probability = Math.min(0.45, (species.traits.mobility ?? 0) * 0.16 + Math.max(0, destination.habitat - suitabilityScore) * 0.25 + Math.min(0.12, count / 20_000));
+        const [roll] = randomFloat(forkRandom(state.random, `dispersal:${population.id}:${destination.regionId}:${state.tick}`));
+        if (roll < probability) {
+          const branchCount = Math.min(500, Math.max(4, count * 0.08));
+          retainedCount = Math.max(0, count - branchCount);
+          const branchId = `population:${hashString(`${population.speciesId}:${destination.regionId}`).toString(16)}` as typeof population.id;
+          delta.entityEffects.push({
+            collection: "populations",
+            operation: "create",
+            id: branchId,
+            value: { ...population, id: branchId, regionId: destination.regionId as typeof population.regionId, count: branchCount, energy: Math.max(0.1, population.energy * 0.72) },
+          });
+          delta.eventDrafts.push({
+            kind: "population-dispersal",
+            ruleId: "ecology:population-dispersal",
+            sourceIds: [population.id, branchId],
+            probability,
+            roll,
+            evidence: { fromRegion: population.regionId, toRegion: destination.regionId, habitat: destination.habitat, destinationScore: destination.score, mobility: species.traits.mobility ?? 0, branchCount },
+            payload: { populationId: population.id, branchPopulationId: branchId, speciesId: population.speciesId, fromRegion: population.regionId, toRegion: destination.regionId, branchCount },
+            source: "natural",
+          });
+        }
+      }
+    }
     delta.entityEffects.push({
       collection: "populations",
-      operation: count <= 0.001 ? "remove" : "update",
+      operation: retainedCount <= 0.001 ? "remove" : "update",
       id: population.id,
-      ...(count > 0.001 ? { value: { ...population, regionId: nextRegionId, count, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
+      ...(retainedCount > 0.001 ? { value: { ...population, regionId: nextRegionId, count: retainedCount, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
     });
     if (species.role === "producer") {
       const primaryProduction = Math.min(0.02, count * 0.000001 * (0.5 + suitabilityScore) * (0.6 + nutrients * 0.4));

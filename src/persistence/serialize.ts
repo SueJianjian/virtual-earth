@@ -68,8 +68,13 @@ const validateWorld = (value: unknown): WorldState => {
       ...(partial.lineage ?? defaultLineage),
       knowledgeInheritanceCount: typeof partial.lineage?.knowledgeInheritanceCount === "number" ? partial.lineage.knowledgeInheritanceCount : 0,
     };
+    const organizations = (partial.organizations ?? []).map((organization) => ({
+      ...organization,
+      territoryRegionIds: Array.isArray(organization.territoryRegionIds) ? organization.territoryRegionIds : [partial.regionId!],
+    }));
     return {
       ...summary,
+      organizations,
       agentIds,
       agentRecords: Array.isArray(partial.agentRecords) ? partial.agentRecords : [],
       relationshipRecords,
@@ -83,7 +88,11 @@ const validateWorld = (value: unknown): WorldState => {
   const focusRegionId = world.observation && typeof world.observation === "object" && typeof (world.observation as { focusRegionId?: unknown }).focusRegionId === "string"
     ? (world.observation as { focusRegionId: WorldState["observation"]["focusRegionId"] }).focusRegionId
     : undefined;
-  return { ...world, lod: { ...lod, summaries }, observation: focusRegionId ? { focusRegionId } : {} } as WorldState;
+  const organizations = world.organizations!.map((organization) => ({
+    ...organization,
+    territoryRegionIds: Array.isArray(organization.territoryRegionIds) ? organization.territoryRegionIds : [organization.regionId],
+  }));
+  return { ...world, organizations, lod: { ...lod, summaries }, observation: focusRegionId ? { focusRegionId } : {} } as WorldState;
 };
 
 export const serializeWorld = (state: WorldState): string => JSON.stringify({ schemaVersion: SAVE_SCHEMA_VERSION, world: encode({ ...state, observation: state.observation.focusRegionId ? { focusRegionId: state.observation.focusRegionId } : {} }) });
