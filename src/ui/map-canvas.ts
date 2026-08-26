@@ -1,5 +1,6 @@
 import type { RegionId } from "../sim/types.ts";
 import type { WorldSnapshot } from "../worker/protocol.ts";
+import type { SceneEntity, SceneLink } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
@@ -123,6 +124,12 @@ const sceneHash = (x: number, y: number, salt: number): number => {
   return ((value ^ (value >>> 16)) >>> 0) / 0xffffffff;
 };
 
+const stringSeed = (value: string): number => {
+  let hash = 2166136261;
+  for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return hash >>> 0;
+};
+
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
   onSelect: (selection: CellSelection) => void,
@@ -131,6 +138,8 @@ export const createMapCanvas = (
   let snapshot: WorldSnapshot | undefined;
   let layer: MapLayer = "natural";
   let selection: CellSelection | undefined;
+  let sceneEntities: SceneEntity[] = [];
+  let sceneLinks: SceneLink[] = [];
   let quality: RenderQuality = 480;
   let zoom = 1;
   let cameraTarget: { x: number; y: number } | undefined;
@@ -139,6 +148,8 @@ export const createMapCanvas = (
   let lastAnimationFrame = 0;
   let animationEnabled = false;
   let scheduledRender = 0;
+  let deferredDataRender: ReturnType<typeof setTimeout> | undefined;
+  let lastDataRender = 0;
   let panX = 0;
   let panY = 0;
   let pointerStart: { x: number; y: number; panX: number; panY: number } | undefined;
@@ -155,6 +166,10 @@ export const createMapCanvas = (
     if (!snapshot) return;
     const grid = snapshot.fields.elevation;
     const currentSnapshot = snapshot;
+    sceneEntities = currentSnapshot.sceneEntities ?? [];
+    sceneLinks = currentSnapshot.sceneLinks ?? [];
+    canvas.dataset.sceneEntityCount = String(sceneEntities.length);
+    canvas.dataset.sceneLinkCount = String(sceneLinks.length);
     const baseDimensions = renderDimensions[quality];
     const rasterScale = Math.min(2.25, Math.max(1, zoom));
     const dimensions = {
@@ -338,6 +353,97 @@ export const createMapCanvas = (
     for (let cellY = propMinY; cellY <= propMaxY; cellY += propStride) {
       for (let cellX = propMinX; cellX <= propMaxX; cellX += propStride) drawProp(cellX, cellY);
     }
+    const entityPoint = (entity: SceneEntity): [number, number] | undefined => {
+      const match = /^region:(\d+):(\d+)$/.exec(entity.regionId);
+      if (!match) return undefined;
+      const regionX = Number(match[1] ?? 0);
+      const regionY = Number(match[2] ?? 0);
+      const seed = stringSeed(entity.id);
+      const localX = ((seed % 1000) / 1000 - 0.5) * 0.62;
+      const localY = (((seed >>> 10) % 1000) / 1000 - 0.5) * 0.62;
+      const elevation = sampleGrid(grid.values, grid.width, grid.height, regionX + 0.5, regionY + 0.5);
+      return pointFor(regionX + 0.5 + localX, regionY + 0.5 + localY, elevation * geometry!.heightScale, geometry!);
+    };
+    const entityPositions = new Map<string, [number, number]>();
+    for (const entity of sceneEntities) {
+      const position = entityPoint(entity);
+      if (position) entityPositions.set(entity.id, position);
+    }
+    if (zoom >= 2 && sceneLinks.length > 0) {
+      context.lineWidth = Math.max(1, ratio * 0.45);
+      for (const link of sceneLinks) {
+        const from = entityPositions.get(link.fromId);
+        const to = entityPositions.get(link.toId);
+        if (!from || !to) continue;
+        context.strokeStyle = link.kind === "rival" ? "rgba(214, 104, 77, 0.55)" : "rgba(238, 211, 113, 0.42)";
+        context.beginPath();
+        context.moveTo(from[0], from[1] - ratio * 2);
+        context.quadraticCurveTo((from[0] + to[0]) / 2, Math.min(from[1], to[1]) - ratio * 8, to[0], to[1] - ratio * 2);
+        context.stroke();
+      }
+    }
+    const visibleEntities = [...sceneEntities]
+      .filter((entity) => zoom >= 2 || entity.kind !== "agent")
+      .sort((left, right) => {
+        const leftPosition = entityPositions.get(left.id) ?? [0, 0];
+        const rightPosition = entityPositions.get(right.id) ?? [0, 0];
+        return leftPosition[1] - rightPosition[1];
+      });
+    const drawSceneEntity = (entity: SceneEntity): void => {
+      const point = entityPositions.get(entity.id);
+      if (!point) return;
+      const size = Math.max(2, geometry!.tileWidth * (entity.kind === "agent" ? 0.08 : entity.kind === "population" ? 0.2 : 0.16 + entity.rank * 0.018));
+      if (point[0] < -size * 4 || point[0] > canvas.width + size * 4 || point[1] < -size * 8 || point[1] > canvas.height + size * 4) return;
+      context.fillStyle = "rgba(8, 12, 9, 0.28)";
+      context.beginPath();
+      context.ellipse(point[0], point[1] + size * 0.14, size * 1.25, size * 0.35, 0, 0, Math.PI * 2);
+      context.fill();
+      const bob = animationEnabled ? Math.sin(animationPhase * 2.4 + stringSeed(entity.id) % 31) * size * 0.08 : 0;
+      if (entity.kind === "agent") {
+        context.fillStyle = "#d6b84b";
+        context.beginPath();
+        context.arc(point[0], point[1] - size * 1.25 + bob, size * 0.33, 0, Math.PI * 2);
+        context.fill();
+        context.strokeStyle = "#d6b84b";
+        context.lineWidth = Math.max(1, size * 0.14);
+        context.beginPath();
+        context.moveTo(point[0], point[1] - size * 0.9 + bob);
+        context.lineTo(point[0], point[1] - size * 0.05 + bob);
+        context.moveTo(point[0], point[1] - size * 0.65 + bob);
+        context.lineTo(point[0] - size * 0.45, point[1] - size * 0.28 + bob);
+        context.moveTo(point[0], point[1] - size * 0.65 + bob);
+        context.lineTo(point[0] + size * 0.45, point[1] - size * 0.28 + bob);
+        context.stroke();
+        return;
+      }
+      if (entity.kind === "population") {
+        context.fillStyle = "#8d6d4e";
+        polygon(context, [[point[0] - size, point[1]], [point[0], point[1] - size * 1.15], [point[0] + size, point[1]]]);
+        context.fill();
+        context.fillStyle = "#c5a86e";
+        context.fillRect(point[0] - size * 0.1, point[1] - size * 0.58, size * 0.2, size * 0.58);
+        return;
+      }
+      const buildingHeight = size * (0.7 + entity.rank * 0.2);
+      const width = size * (1.2 + entity.rank * 0.12);
+      context.fillStyle = entity.rank >= 7 ? "#7d6a45" : entity.rank >= 5 ? "#776049" : "#695943";
+      context.fillRect(point[0] - width, point[1] - buildingHeight, width * 2, buildingHeight);
+      context.fillStyle = entity.rank >= 6 ? "#d6b84b" : "#b99e70";
+      polygon(context, [[point[0] - width * 1.15, point[1] - buildingHeight], [point[0], point[1] - buildingHeight - size * 0.72], [point[0] + width * 1.15, point[1] - buildingHeight]]);
+      context.fill();
+      if (entity.rank >= 5) {
+        context.strokeStyle = "#d6b84b";
+        context.lineWidth = Math.max(1, size * 0.12);
+        context.beginPath();
+        context.moveTo(point[0], point[1] - buildingHeight - size * 0.65);
+        context.lineTo(point[0], point[1] - buildingHeight - size * 1.35);
+        context.stroke();
+        context.fillStyle = entity.rank >= 7 ? "#d96b4d" : "#3f8fa6";
+        polygon(context, [[point[0], point[1] - buildingHeight - size * 1.35], [point[0] + size * 0.8, point[1] - buildingHeight - size * 1.12], [point[0], point[1] - buildingHeight - size * 0.95]]);
+        context.fill();
+      }
+    };
+    for (const entity of visibleEntities) drawSceneEntity(entity);
     if (selection) {
       const corners = [
         terrainPoint(selection.x, selection.y),
@@ -423,10 +529,32 @@ export const createMapCanvas = (
   new ResizeObserver(render).observe(canvas);
 
   return {
-    update: (next: WorldSnapshot) => { snapshot = next; render(); },
+    update: (next: WorldSnapshot, immediate = false, renderIntermediate = true) => {
+      snapshot = next;
+      if (immediate) {
+        if (deferredDataRender !== undefined) clearTimeout(deferredDataRender);
+        deferredDataRender = undefined;
+        lastDataRender = performance.now();
+        render();
+        return;
+      }
+      if (!renderIntermediate) return;
+      if (animationEnabled) return;
+      const delay = Math.max(0, 250 - (performance.now() - lastDataRender));
+      if (deferredDataRender !== undefined) return;
+      deferredDataRender = setTimeout(() => {
+        deferredDataRender = undefined;
+        lastDataRender = performance.now();
+        render();
+      }, delay);
+    },
     setLayer: (next: MapLayer) => { layer = next; render(); },
     setQuality: (next: RenderQuality) => { quality = next; render(); },
-    setSelection: (next: CellSelection | undefined) => { selection = next; render(); },
+    setSelection: (next: CellSelection | undefined) => {
+      const changed = selection?.regionId !== next?.regionId;
+      selection = next;
+      if (changed) scheduleRender();
+    },
     setAnimating: (next: boolean) => { if (animationEnabled === next) return; animationEnabled = next; if (next) render(); },
     zoomIn: () => { zoom = clampZoom(zoom + (zoom < 2 ? 0.25 : zoom < 4 ? 0.5 : 1)); if (zoom > 1 && selection) cameraTarget = { x: selection.x + 0.5, y: selection.y + 0.5 }; onZoomChange?.(zoom); scheduleRender(); },
     zoomOut: () => { zoom = clampZoom(zoom - (zoom <= 2 ? 0.25 : zoom <= 4 ? 0.5 : 1)); if (zoom <= 1) cameraTarget = undefined; onZoomChange?.(zoom); scheduleRender(); },

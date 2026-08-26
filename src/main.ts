@@ -179,7 +179,7 @@ const applyMessage = (message: WorkerMessage): void => {
   }
   if (message.type !== "snapshot") return;
   snapshot = message.snapshot;
-  map.setAnimating(!message.paused);
+  map.setAnimating(!message.paused && message.speed <= 4);
   if (message.snapshot.focusRegionId) {
     const match = /^region:(\d+):(\d+)$/.exec(message.snapshot.focusRegionId);
     if (match) {
@@ -189,7 +189,7 @@ const applyMessage = (message: WorkerMessage): void => {
     }
   }
   map.setSelection(selection);
-  map.update(snapshot);
+  map.update(snapshot, message.paused, message.speed <= 4);
   renderStatusPanel(statusPanel, snapshot);
   renderInspector(inspector, snapshot, selection, detail);
   year.textContent = `${Math.floor(snapshot.years).toLocaleString("zh-CN")} 年`;

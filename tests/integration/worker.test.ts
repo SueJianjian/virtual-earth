@@ -3,7 +3,9 @@ import { createSimulationRuntime } from "../../src/worker/runtime.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { clearSimulationStages } from "../../src/sim/engine.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
+import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
+import { createOrganization } from "../../src/sim/society/organization.ts";
 
 describe("simulation worker runtime", () => {
   beforeEach(() => clearSimulationStages());
@@ -23,6 +25,34 @@ describe("simulation worker runtime", () => {
     runtime.dispatch({ type: "setSpeed", multiplier: 16 });
     expect(runtime.getSpeed()).toBe(16);
     expect(runtime.dispatch({ type: "setSpeed", multiplier: 4 })[0]).toMatchObject({ type: "snapshot", speed: 4 });
+  });
+
+  it("projects agents, relationships, and organizations into the 2.5d scene", () => {
+    const state = createWorld(139, { width: 8, height: 8 });
+    const regionId = "region:2:2" as never;
+    const species = createSpecies("scene", "consumer");
+    const population = { id: "population:scene" as never, speciesId: species.id, regionId, count: 12, energy: 1 };
+    const agents = [createAgent(population, species, 0, "scene"), createAgent(population, species, 1, "scene")];
+    const relationship = createRelationship("partner", agents[0]!.id, agents[1]!.id, 0, 0.8);
+    state.species = [species];
+    state.populations = [population];
+    state.agents = agents;
+    state.relationships = [relationship];
+    state.organizations = [
+      createOrganization("family", regionId, agents.map((agent) => agent.id)),
+      createOrganization("city", regionId, agents.map((agent) => agent.id)),
+    ];
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "focusRegion", regionId })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    expect(message.snapshot.sceneEntities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: population.id, kind: "population" }),
+      expect.objectContaining({ id: agents[0]!.id, kind: "agent" }),
+      expect.objectContaining({ kind: "family" }),
+      expect.objectContaining({ kind: "city" }),
+    ]));
+    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({ fromId: agents[0]!.id, toId: agents[1]!.id, kind: "partner" }));
   });
 
   it("does not apply the same event ID twice", () => {

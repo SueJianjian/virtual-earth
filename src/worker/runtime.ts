@@ -4,7 +4,7 @@ import { deserializeWorld, serializeWorld } from "../persistence/serialize.ts";
 import { createWorld, worldDigest } from "../sim/world.ts";
 import { foodSecurityFromBalance } from "../sim/agents/food.ts";
 import type { WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
-import type { WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
+import type { SceneEntity, SceneLink, WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
 const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
@@ -27,6 +27,56 @@ const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
     }
   }
   return result;
+};
+
+const organizationRank: Record<SceneEntity["kind"], number> = {
+  agent: 0,
+  population: 1,
+  family: 2,
+  clan: 3,
+  tribe: 4,
+  settlement: 5,
+  city: 6,
+  state: 7,
+  federation: 8,
+  empire: 9,
+};
+
+const sceneFor = (state: WorldState, projection?: WorldState["observation"]["projection"]): { entities: SceneEntity[]; links: SceneLink[] } => {
+  const entities = new Map<string, SceneEntity>();
+  const add = (entity: SceneEntity): void => {
+    if (entities.has(entity.id)) return;
+    entities.set(entity.id, entity);
+  };
+  for (const summary of state.lod.summaries) {
+    for (const organization of summary.organizations) {
+      add({ id: organization.id, kind: organization.type, regionId: summary.regionId, count: organization.memberCount, rank: organizationRank[organization.type] });
+    }
+  }
+  for (const organization of state.organizations) {
+    add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type] });
+  }
+  for (const population of state.populations) {
+    add({ id: population.id, kind: "population", regionId: population.regionId, count: population.count, rank: organizationRank.population });
+  }
+  for (const agent of state.agents) {
+    add({ id: agent.id, kind: "agent", regionId: agent.regionId, count: 1, rank: organizationRank.agent });
+  }
+  if (projection) {
+    for (const organization of projection.organizations) {
+      add({ id: organization.id, kind: organization.type, regionId: organization.regionId, count: organization.memberIds.length, rank: organizationRank[organization.type] });
+    }
+    for (const agent of projection.agents) {
+      add({ id: agent.id, kind: "agent", regionId: agent.regionId, count: 1, rank: organizationRank.agent });
+    }
+  }
+  const links = projection?.relationships.slice(0, 256).map((relationship): SceneLink => ({
+    fromId: relationship.fromId,
+    toId: relationship.toId,
+    kind: relationship.kind,
+    strength: relationship.strength,
+  })) ?? [];
+  return { entities: [...entities.values()].slice(0, 800), links };
 };
 const eventFromInput = (state: WorldState, input: WorldEventInput): WorldEvent => ({
   id: input.id,
@@ -77,6 +127,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
         : summarizeRegionState(state, observation.focusRegionId, storedSummary?.mode ?? "micro")
       : undefined;
     const projection = observation.focusRegionId ? focusRegion(state, observation.focusRegionId).projection : observation.projection;
+    const scene = sceneFor(state, projection);
     return {
       tick: state.tick,
       years: state.years,
@@ -85,6 +136,8 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       fields: cloneFields(state.fields),
       metrics: metricsFor(state),
       foodSecurityByRegion: foodSecurityByRegion(state),
+      sceneEntities: scene.entities,
+      sceneLinks: scene.links,
       ...(selectedRegion ? { selectedRegion } : {}),
       ...(projection ? { projection: structuredClone(projection) } : {}),
     };

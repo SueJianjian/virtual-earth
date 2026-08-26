@@ -1,4 +1,4 @@
-import type { RegionId, RegionProjection, RegionSummary, StepResult, WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
+import type { OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, StepResult, WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -18,9 +18,21 @@ export type WorldSnapshot = {
   fields: WorldState["fields"];
   metrics: Record<string, number>;
   foodSecurityByRegion?: Record<string, number>;
+  sceneEntities?: SceneEntity[];
+  sceneLinks?: SceneLink[];
   selectedRegion?: RegionSummary;
   projection?: RegionProjection;
 };
+
+export type SceneEntity = {
+  id: string;
+  kind: "agent" | "population" | OrganizationType;
+  regionId: RegionId;
+  count: number;
+  rank: number;
+};
+
+export type SceneLink = Pick<RelationshipState, "fromId" | "toId" | "kind" | "strength">;
 
 export type WorkerMessage =
   | { type: "snapshot"; snapshot: WorldSnapshot; paused: boolean; speed: 1 | 4 | 16 | 64 }
