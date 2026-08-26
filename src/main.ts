@@ -42,11 +42,20 @@ app.innerHTML = `
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
         <canvas id="world-map" aria-label="虚拟地球奇幻 3D 地图"></canvas>
-        <div class="map-tools" aria-label="地图缩放控制">
-          <button id="zoom-out" type="button" title="缩小地图" aria-label="缩小地图">−</button>
-          <output id="zoom-level" aria-live="polite">100%</output>
-          <button id="zoom-in" type="button" title="放大地图" aria-label="放大地图">+</button>
-          <button id="zoom-reset" type="button" title="复位地图缩放" aria-label="复位地图缩放">↺</button>
+        <div class="map-tools" aria-label="地图镜头控制">
+          <div class="map-tool-group" aria-label="地图缩放控制">
+            <button id="zoom-out" type="button" title="缩小地图" aria-label="缩小地图">−</button>
+            <output id="zoom-level" aria-live="polite">100%</output>
+            <button id="zoom-in" type="button" title="放大地图" aria-label="放大地图">+</button>
+            <button id="zoom-reset" type="button" title="复位地图缩放" aria-label="复位地图缩放">↺</button>
+          </div>
+          <div class="map-tool-group camera-tools" aria-label="地图旋转控制">
+            <button id="rotate-left" type="button" title="向左旋转镜头" aria-label="向左旋转镜头">↶</button>
+            <button id="rotate-right" type="button" title="向右旋转镜头" aria-label="向右旋转镜头">↷</button>
+            <button id="tilt-up" type="button" title="提高镜头俯角" aria-label="提高镜头俯角">▲</button>
+            <button id="tilt-down" type="button" title="降低镜头俯角" aria-label="降低镜头俯角">▼</button>
+            <button id="camera-reset" type="button" title="镜头朝北" aria-label="镜头朝北">N</button>
+          </div>
         </div>
         <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
       </section>
@@ -142,6 +151,11 @@ const syncZoomLabel = (): void => { zoomLevel.textContent = `${Math.round(map.ge
 query<HTMLButtonElement>("#zoom-in").addEventListener("click", () => { map.zoomIn(); syncZoomLabel(); });
 query<HTMLButtonElement>("#zoom-out").addEventListener("click", () => { map.zoomOut(); syncZoomLabel(); });
 query<HTMLButtonElement>("#zoom-reset").addEventListener("click", () => { map.resetZoom(); syncZoomLabel(); });
+query<HTMLButtonElement>("#rotate-left").addEventListener("click", map.rotateLeft);
+query<HTMLButtonElement>("#rotate-right").addEventListener("click", map.rotateRight);
+query<HTMLButtonElement>("#tilt-up").addEventListener("click", map.tiltUp);
+query<HTMLButtonElement>("#tilt-down").addEventListener("click", map.tiltDown);
+query<HTMLButtonElement>("#camera-reset").addEventListener("click", map.resetCamera);
 bindTimeControls(document, client);
 query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
   const regionId = selection?.regionId ?? "region:0:0" as never;

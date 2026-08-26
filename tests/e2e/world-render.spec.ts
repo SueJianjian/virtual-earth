@@ -14,6 +14,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("data-render-style", "fantasy-3d");
   await expect(canvas).toHaveAttribute("aria-label", "虚拟地球奇幻 3D 地图");
+  await expect(canvas).toHaveAttribute("data-scene-lod", "global");
   await expect(page.locator("#render-quality")).toHaveValue("480");
   await expect(canvas).toHaveJSProperty("width", 854);
   await expect(canvas).toHaveJSProperty("height", 480);
@@ -48,9 +49,11 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#zoom-level")).toHaveText("125%");
   for (let click = 0; click < 12; click += 1) await page.getByRole("button", { name: "放大地图" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("800%");
+  await expect(canvas).toHaveAttribute("data-scene-lod", "individual");
   await expect(canvas).toHaveJSProperty("width", 1920);
   await expect(canvas).toHaveJSProperty("height", 1080);
   await page.getByRole("button", { name: "复位地图缩放" }).click();
+  await expect(canvas).toHaveAttribute("data-scene-lod", "global");
   const webglSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("webgl2") ?? element.getContext("webgl");
     if (!context || element.width === 0 || element.height === 0) return 0;
@@ -100,6 +103,27 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   expect(metricOverflow).toBe(false);
 });
 
+test("rotates and tilts the constrained 2.5d camera", async ({ page }) => {
+  await page.goto("/");
+  const canvas = page.locator("#world-map");
+  await expect(canvas).toHaveAttribute("data-camera-yaw", "45");
+  await expect(canvas).toHaveAttribute("data-camera-pitch", "42");
+  await page.getByRole("button", { name: "向右旋转镜头" }).click();
+  await expect(canvas).toHaveAttribute("data-camera-yaw", "60");
+  await page.getByRole("button", { name: "提高镜头俯角" }).click();
+  await expect(canvas).toHaveAttribute("data-camera-pitch", "47");
+  const box = await canvas.boundingBox();
+  if (!box) throw new Error("Map canvas is not measurable");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down({ button: "right" });
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2 - 30);
+  await page.mouse.up({ button: "right" });
+  await expect(canvas).not.toHaveAttribute("data-camera-yaw", "60");
+  await page.getByRole("button", { name: "镜头朝北" }).click();
+  await expect(canvas).toHaveAttribute("data-camera-yaw", "0");
+  await expect(canvas).toHaveAttribute("data-camera-pitch", "42");
+});
+
 test("renders the complete society as detailed fantasy 3d models", async ({ page }) => {
   const state = createWorld(90_210, { width: 64, height: 40 });
   const species = createSpecies("fantasy-world", "consumer");
@@ -134,5 +158,6 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await page.locator("#render-quality").selectOption("1080");
   for (let click = 0; click < 8; click += 1) await page.getByRole("button", { name: "\u653e\u5927\u5730\u56fe" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("400%");
+  await expect(canvas).toHaveAttribute("data-scene-lod", "individual");
   await page.screenshot({ path: "test-results/fantasy-3d-suite.png", fullPage: true });
 });

@@ -15,6 +15,9 @@ const renderDimensions: Record<RenderQuality, { width: number; height: number }>
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 const clampZoom = (value: number): number => clamp(value, 0.6, 8);
+const radians = (degrees: number): number => degrees * Math.PI / 180;
+const degrees = (value: number): number => value * 180 / Math.PI;
+const normalizeYaw = (value: number): number => ((value % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 
 const stringSeed = (value: string): number => {
   let hash = 2166136261;
@@ -94,7 +97,17 @@ export const createMapCanvas = (
   let lastDataRender = 0;
   let panWorldX = 0;
   let panWorldZ = 0;
-  let pointerStart: { x: number; y: number; panX: number; panZ: number } | undefined;
+  let cameraYaw = radians(45);
+  let cameraPitch = radians(42);
+  let pointerStart: {
+    x: number;
+    y: number;
+    panX: number;
+    panZ: number;
+    yaw: number;
+    pitch: number;
+    mode: "pan" | "rotate";
+  } | undefined;
   let didPan = false;
   let terrainMesh: THREE.Mesh | undefined;
   let waterSurface: THREE.Mesh | undefined;
@@ -153,7 +166,12 @@ export const createMapCanvas = (
     camera.updateProjectionMatrix();
     const focus = cameraFocus();
     const distance = Math.max(22, baseSpan * 0.82);
-    camera.position.set(focus.x + distance * 0.7, focus.y + distance * 0.78, focus.z + distance * 0.7);
+    const horizontalDistance = Math.cos(cameraPitch) * distance;
+    camera.position.set(
+      focus.x + Math.sin(cameraYaw) * horizontalDistance,
+      focus.y + Math.sin(cameraPitch) * distance,
+      focus.z + Math.cos(cameraYaw) * horizontalDistance,
+    );
     camera.lookAt(focus);
     sunlight.target.position.copy(focus);
   };
@@ -171,6 +189,8 @@ export const createMapCanvas = (
     frameCount += 1;
     canvas.dataset.webglFrame = String(frameCount);
     canvas.dataset.renderStyle = "fantasy-3d";
+    canvas.dataset.cameraYaw = String(Math.round(degrees(cameraYaw)));
+    canvas.dataset.cameraPitch = String(Math.round(degrees(cameraPitch)));
   };
 
   const scheduleRender = (): void => {
@@ -359,6 +379,8 @@ export const createMapCanvas = (
       model.rotation.y = (seed % 628) / 100;
       model.userData.baseY = position.y;
       model.userData.phase = seed % 31;
+      model.userData.sceneKind = entity.kind;
+      model.userData.sceneRank = entity.rank;
       enableFantasyShadows(model);
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
@@ -375,7 +397,22 @@ export const createMapCanvas = (
       const lineMaterial = new THREE.LineBasicMaterial({ color: link.kind === "rival" ? 0xd5573e : 0xf1d36a, transparent: true, opacity: 0.62 });
       linkRoot.add(new THREE.Line(geometry, lineMaterial));
     }
-    linkRoot.visible = zoom >= 2;
+    updateSceneLod();
+  };
+
+  const updateSceneLod = (): void => {
+    const sceneLod = zoom < 1.5 ? "global" : zoom < 2.5 ? "region" : zoom < 4 ? "settlement" : "individual";
+    for (const child of entityRoot.children) {
+      const kind = child.userData.sceneKind as SceneEntity["kind"] | undefined;
+      const rank = Number(child.userData.sceneRank ?? 0);
+      child.visible = sceneLod === "individual"
+        || (sceneLod === "settlement" && kind !== "agent" && rank >= 1)
+        || (sceneLod === "region" && kind !== "agent" && rank >= 3)
+        || (sceneLod === "global" && rank >= 5);
+    }
+    propRoot.visible = zoom >= 0.8;
+    linkRoot.visible = sceneLod === "individual";
+    canvas.dataset.sceneLod = sceneLod;
   };
 
   const updateSelectionMarker = (): void => {
@@ -409,13 +446,19 @@ export const createMapCanvas = (
 
   const updateZoom = (next: number): void => {
     zoom = clampZoom(next);
-    linkRoot.visible = zoom >= 2;
+    updateSceneLod();
     onZoomChange?.(zoom);
     if (deferredCameraRender !== undefined) clearTimeout(deferredCameraRender);
     deferredCameraRender = setTimeout(() => {
       deferredCameraRender = undefined;
       render();
     }, 80);
+  };
+
+  const updateOrbit = (nextYaw: number, nextPitch: number): void => {
+    cameraYaw = normalizeYaw(nextYaw);
+    cameraPitch = clamp(nextPitch, radians(28), radians(68));
+    scheduleRender();
   };
 
   const animate = (time: number): void => {
@@ -469,7 +512,15 @@ export const createMapCanvas = (
     scheduleRender();
   });
   canvas.addEventListener("pointerdown", (event) => {
-    pointerStart = { x: event.clientX, y: event.clientY, panX: panWorldX, panZ: panWorldZ };
+    pointerStart = {
+      x: event.clientX,
+      y: event.clientY,
+      panX: panWorldX,
+      panZ: panWorldZ,
+      yaw: cameraYaw,
+      pitch: cameraPitch,
+      mode: event.button === 2 || event.shiftKey ? "rotate" : "pan",
+    };
     didPan = false;
     canvas.setPointerCapture(event.pointerId);
     canvas.style.cursor = "grabbing";
@@ -480,10 +531,16 @@ export const createMapCanvas = (
     const deltaY = event.clientY - pointerStart.y;
     if (Math.hypot(deltaX, deltaY) < 3) return;
     didPan = true;
+    if (pointerStart.mode === "rotate") {
+      cameraYaw = normalizeYaw(pointerStart.yaw - deltaX * 0.008);
+      cameraPitch = clamp(pointerStart.pitch - deltaY * 0.005, radians(28), radians(68));
+      scheduleRender();
+      return;
+    }
     const span = Math.max(snapshot.fields.elevation.width, snapshot.fields.elevation.height) / zoom;
     const unitsPerPixel = span / Math.max(1, canvas.clientHeight);
-    panWorldX = pointerStart.panX + (-deltaX - deltaY * 0.72) * unitsPerPixel * 0.72;
-    panWorldZ = pointerStart.panZ + (deltaX - deltaY * 0.72) * unitsPerPixel * 0.72;
+    panWorldX = pointerStart.panX + (-deltaX * Math.cos(cameraYaw) - deltaY * Math.sin(cameraYaw) * 0.72) * unitsPerPixel * 0.72;
+    panWorldZ = pointerStart.panZ + (deltaX * Math.sin(cameraYaw) - deltaY * Math.cos(cameraYaw) * 0.72) * unitsPerPixel * 0.72;
     scheduleRender();
   });
   const endPointer = (event?: PointerEvent): void => {
@@ -493,6 +550,7 @@ export const createMapCanvas = (
   };
   canvas.addEventListener("pointerup", endPointer);
   canvas.addEventListener("pointercancel", () => endPointer());
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   canvas.addEventListener("wheel", (event) => { event.preventDefault(); updateZoom(zoom + (event.deltaY < 0 ? 0.1 : -0.1)); }, { passive: false });
   new ResizeObserver(scheduleRender).observe(canvas);
 
@@ -533,8 +591,19 @@ export const createMapCanvas = (
     zoomIn: () => updateZoom(zoom + (zoom < 2 ? 0.25 : zoom < 4 ? 0.5 : 1)),
     zoomOut: () => updateZoom(zoom - (zoom <= 2 ? 0.25 : zoom <= 4 ? 0.5 : 1)),
     resetZoom: () => { panWorldX = 0; panWorldZ = 0; updateZoom(1); },
+    rotateLeft: () => updateOrbit(cameraYaw - radians(15), cameraPitch),
+    rotateRight: () => updateOrbit(cameraYaw + radians(15), cameraPitch),
+    tiltUp: () => updateOrbit(cameraYaw, cameraPitch + radians(5)),
+    tiltDown: () => updateOrbit(cameraYaw, cameraPitch - radians(5)),
+    resetCamera: () => {
+      panWorldX = 0;
+      panWorldZ = 0;
+      updateOrbit(0, radians(42));
+    },
     getLayer: () => layer,
     getQuality: () => quality,
     getZoom: () => zoom,
+    getCameraYaw: () => degrees(cameraYaw),
+    getCameraPitch: () => degrees(cameraPitch),
   };
 };

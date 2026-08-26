@@ -62,8 +62,11 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
   cursor: grab;
   touch-action: none;
 }
-.map-tools { position: absolute; top: 14px; right: 14px; z-index: 1; display: flex; align-items: center; gap: 3px; padding: 4px; background: rgba(17, 21, 18, 0.88); border: 1px solid var(--line); }
+.map-tools { position: absolute; top: 14px; right: 14px; z-index: 1; display: flex; max-width: calc(100% - 28px); align-items: center; gap: 4px; padding: 4px; background: rgba(17, 21, 18, 0.88); border: 1px solid var(--line); }
+.map-tool-group { display: flex; align-items: center; gap: 3px; }
+.camera-tools { padding-left: 4px; border-left: 1px solid var(--line); }
 .map-tools button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 17px; line-height: 1; cursor: pointer; }
+.camera-tools button { font-size: 13px; }
 .map-tools button:hover { border-color: var(--acid); color: #f0dda0; }
 .map-tools output { min-width: 42px; color: var(--muted); font-family: monospace; font-size: 10px; text-align: center; }
 .map-caption { position: absolute; right: 14px; bottom: 14px; display: flex; gap: 10px; padding: 7px 9px; background: rgba(17, 21, 18, 0.86); border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
