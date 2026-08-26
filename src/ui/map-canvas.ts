@@ -58,6 +58,58 @@ const shade = (color: [number, number, number], amount: number): string => {
 };
 
 const clampZoom = (value: number): number => Math.max(0.6, Math.min(2.5, value));
+const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+
+const blendColor = (
+  from: [number, number, number],
+  to: [number, number, number],
+  amount: number,
+): [number, number, number] => [
+  Math.round(from[0] + (to[0] - from[0]) * amount),
+  Math.round(from[1] + (to[1] - from[1]) * amount),
+  Math.round(from[2] + (to[2] - from[2]) * amount),
+];
+
+const sampleGrid = (values: Float32Array, width: number, height: number, x: number, y: number): number => {
+  const sampleX = clamp(x, 0, width - 1);
+  const sampleY = clamp(y, 0, height - 1);
+  const x0 = Math.floor(sampleX);
+  const y0 = Math.floor(sampleY);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const horizontal = sampleX - x0;
+  const vertical = sampleY - y0;
+  const top = (values[y0 * width + x0] ?? 0) * (1 - horizontal) + (values[y0 * width + x1] ?? 0) * horizontal;
+  const bottom = (values[y1 * width + x0] ?? 0) * (1 - horizontal) + (values[y1 * width + x1] ?? 0) * horizontal;
+  return top * (1 - vertical) + bottom * vertical;
+};
+
+const sampleColor = (
+  snapshot: WorldSnapshot,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  layer: MapLayer,
+): [number, number, number] => {
+  const sampleX = clamp(x, 0, width - 1);
+  const sampleY = clamp(y, 0, height - 1);
+  const x0 = Math.floor(sampleX);
+  const y0 = Math.floor(sampleY);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const horizontal = sampleX - x0;
+  const vertical = sampleY - y0;
+  const top = blendColor(colorForCell(snapshot, y0 * width + x0, layer), colorForCell(snapshot, y0 * width + x1, layer), horizontal);
+  const bottom = blendColor(colorForCell(snapshot, y1 * width + x0, layer), colorForCell(snapshot, y1 * width + x1, layer), horizontal);
+  return blendColor(top, bottom, vertical);
+};
+
+const surfaceDetailFor = (quality: RenderQuality, width: number, height: number): number => {
+  const requested = quality === 480 ? 2 : quality === 720 ? 3 : 4;
+  const maximum = Math.max(1, Math.floor(Math.sqrt(60_000 / Math.max(1, width * height))));
+  return Math.min(requested, maximum);
+};
 
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
@@ -99,45 +151,52 @@ export const createMapCanvas = (
     context.fillStyle = "#101713";
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.lineJoin = "round";
-    context.lineWidth = Math.max(1, ratio * 0.35);
-    const drawCell = (x: number, y: number): void => {
-      const index = y * grid.width + x;
-      const color = colorForCell(currentSnapshot, index, layer);
-      const elevation = Math.max(0, Math.min(1, grid.values[index] ?? 0));
-      const z = elevation * geometry!.heightScale;
-      const top = pointFor(x, y, z, geometry!);
-      const right = pointFor(x + 1, y, z, geometry!);
-      const bottom = pointFor(x + 1, y + 1, z, geometry!);
-      const left = pointFor(x, y + 1, z, geometry!);
-      const baseRight = pointFor(x + 1, y, 0, geometry!);
-      const baseBottom = pointFor(x + 1, y + 1, 0, geometry!);
-      const baseLeft = pointFor(x, y + 1, 0, geometry!);
-      if (z > 1) {
-        polygon(context, [right, bottom, baseBottom, baseRight]);
-        context.fillStyle = shade(color, 0.62);
-        context.fill();
-        polygon(context, [bottom, left, baseLeft, baseBottom]);
-        context.fillStyle = shade(color, 0.48);
-        context.fill();
-      }
-      polygon(context, [top, right, bottom, left]);
-      context.fillStyle = shade(color, 0.92 + elevation * 0.12);
+    context.imageSmoothingEnabled = true;
+    const detail = surfaceDetailFor(quality, grid.width, grid.height);
+    const fineWidth = grid.width * detail;
+    const fineHeight = grid.height * detail;
+    const terrainPoint = (x: number, y: number): [number, number] => pointFor(
+      x,
+      y,
+      sampleGrid(grid.values, grid.width, grid.height, x, y) * geometry!.heightScale,
+      geometry!,
+    );
+    const drawOuterEdge = (from: [number, number], to: [number, number], color: [number, number, number], amount: number): void => {
+      polygon(context, [terrainPoint(...from), terrainPoint(...to), pointFor(to[0], to[1], 0, geometry!), pointFor(from[0], from[1], 0, geometry!)]);
+      context.fillStyle = shade(color, amount);
       context.fill();
-      context.strokeStyle = "rgba(225, 232, 214, 0.12)";
-      context.stroke();
     };
-    for (let diagonal = 0; diagonal < grid.width + grid.height - 1; diagonal += 1) {
-      const minX = Math.max(0, diagonal - (grid.height - 1));
-      const maxX = Math.min(grid.width - 1, diagonal);
-      for (let x = minX; x <= maxX; x += 1) drawCell(x, diagonal - x);
+    for (let fineY = 0; fineY < fineHeight; fineY += 1) {
+      const y = fineY / detail;
+      const nextY = (fineY + 1) / detail;
+      drawOuterEdge([grid.width, y], [grid.width, nextY], sampleColor(currentSnapshot, grid.width, grid.height, grid.width - 0.5, y + 0.5 / detail, layer), 0.58);
+    }
+    for (let fineX = 0; fineX < fineWidth; fineX += 1) {
+      const x = fineX / detail;
+      const nextX = (fineX + 1) / detail;
+      drawOuterEdge([x, grid.height], [nextX, grid.height], sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, grid.height - 0.5, layer), 0.44);
+    }
+    const drawSurface = (fineX: number, fineY: number): void => {
+      const x = fineX / detail;
+      const y = fineY / detail;
+      const nextX = (fineX + 1) / detail;
+      const nextY = (fineY + 1) / detail;
+      polygon(context, [terrainPoint(x, y), terrainPoint(nextX, y), terrainPoint(nextX, nextY), terrainPoint(x, nextY)]);
+      const elevation = sampleGrid(grid.values, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail);
+      context.fillStyle = shade(sampleColor(currentSnapshot, grid.width, grid.height, x + 0.5 / detail, y + 0.5 / detail, layer), 0.92 + elevation * 0.12);
+      context.fill();
+    };
+    for (let diagonal = 0; diagonal < fineWidth + fineHeight - 1; diagonal += 1) {
+      const minX = Math.max(0, diagonal - (fineHeight - 1));
+      const maxX = Math.min(fineWidth - 1, diagonal);
+      for (let fineX = minX; fineX <= maxX; fineX += 1) drawSurface(fineX, diagonal - fineX);
     }
     if (selection) {
-      const z = Math.max(0, Math.min(1, grid.values[selection.index] ?? 0)) * geometry.heightScale;
       const corners = [
-        pointFor(selection.x, selection.y, z + ratio, geometry),
-        pointFor(selection.x + 1, selection.y, z + ratio, geometry),
-        pointFor(selection.x + 1, selection.y + 1, z + ratio, geometry),
-        pointFor(selection.x, selection.y + 1, z + ratio, geometry),
+        terrainPoint(selection.x, selection.y),
+        terrainPoint(selection.x + 1, selection.y),
+        terrainPoint(selection.x + 1, selection.y + 1),
+        terrainPoint(selection.x, selection.y + 1),
       ];
       polygon(context, corners);
       context.strokeStyle = "#f2c94c";
