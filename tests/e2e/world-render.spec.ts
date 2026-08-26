@@ -31,6 +31,14 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#zoom-level")).toHaveText("110%");
   await page.getByRole("button", { name: "复位地图缩放" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("100%");
+  const beforePan = await canvas.boundingBox();
+  if (!beforePan) throw new Error("Map canvas is not measurable");
+  await page.getByRole("button", { name: "放大地图" }).click();
+  await page.mouse.move(beforePan.x + 250, beforePan.y + 250);
+  await page.mouse.down();
+  await page.mouse.move(beforePan.x + 320, beforePan.y + 290);
+  await page.mouse.up();
+  await expect(page.locator("#zoom-level")).toHaveText("125%");
   for (let click = 0; click < 12; click += 1) await page.getByRole("button", { name: "放大地图" }).click();
   await expect(page.locator("#zoom-level")).toHaveText("800%");
   await expect(canvas).toHaveJSProperty("width", 1920);

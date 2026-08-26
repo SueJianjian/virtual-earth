@@ -117,6 +117,12 @@ const microRelief = (x: number, y: number, phase: number): number => (
   + Math.sin((x + y) * 21.4 - phase * 0.12) * 0.25
 );
 
+const sceneHash = (x: number, y: number, salt: number): number => {
+  let value = Math.imul(Math.floor(x * 1000) + 1, 374761393) ^ Math.imul(Math.floor(y * 1000) + 1, 668265263) ^ salt;
+  value = Math.imul(value ^ (value >>> 13), 1274126177);
+  return ((value ^ (value >>> 16)) >>> 0) / 0xffffffff;
+};
+
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
   onSelect: (selection: CellSelection) => void,
@@ -133,6 +139,10 @@ export const createMapCanvas = (
   let lastAnimationFrame = 0;
   let animationEnabled = false;
   let scheduledRender = 0;
+  let panX = 0;
+  let panY = 0;
+  let pointerStart: { x: number; y: number; panX: number; panY: number } | undefined;
+  let didPan = false;
   const updateZoom = (next: number): void => {
     zoom = clampZoom(next);
     if (zoom > 1 && selection) cameraTarget = { x: selection.x + 0.5, y: selection.y + 0.5 };
@@ -170,8 +180,8 @@ export const createMapCanvas = (
     const targetPoint = pointFor(target.x, target.y, targetElevation, scaledGeometry);
     geometry = {
       ...scaledGeometry,
-      originX: scaledGeometry.originX + canvas.width / 2 - targetPoint[0],
-      originY: scaledGeometry.originY + canvas.height / 2 - targetPoint[1],
+      originX: scaledGeometry.originX + canvas.width / 2 - targetPoint[0] + panX,
+      originY: scaledGeometry.originY + canvas.height / 2 - targetPoint[1] + panY,
     };
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#101713";
@@ -274,6 +284,60 @@ export const createMapCanvas = (
         }
       }
     }
+    const propStride = zoom >= 4 ? 1 : zoom >= 2 ? 2 : 5;
+    const propRadiusX = Math.ceil(canvas.width / Math.max(1, geometry.tileWidth) / 2) + 2;
+    const propRadiusY = Math.ceil(canvas.height / Math.max(1, geometry.tileHeight) / 2) + 2;
+    const propCenter = cameraTarget ?? { x: (grid.width - 1) / 2, y: (grid.height - 1) / 2 };
+    const propMinX = Math.max(0, Math.floor(propCenter.x - propRadiusX));
+    const propMaxX = Math.min(grid.width - 1, Math.ceil(propCenter.x + propRadiusX));
+    const propMinY = Math.max(0, Math.floor(propCenter.y - propRadiusY));
+    const propMaxY = Math.min(grid.height - 1, Math.ceil(propCenter.y + propRadiusY));
+    const drawProp = (cellX: number, cellY: number): void => {
+      const index = cellY * grid.width + cellX;
+      const elevation = clamp(grid.values[index] ?? 0, 0, 1);
+      const water = clamp(currentSnapshot.fields.water.values[index] ?? 0, 0, 1);
+      const base = pointFor(cellX + 0.5, cellY + 0.5, elevation * geometry!.heightScale, geometry!);
+      const size = Math.max(2, geometry!.tileWidth * 0.18);
+      const variant = sceneHash(cellX, cellY, currentSnapshot.tick + currentSnapshot.fields.elevation.width * 31);
+      if (water > 0.45) {
+        context.strokeStyle = `rgba(166, 226, 231, ${0.22 + Math.sin(animationPhase * 2 + cellX * 0.4 + cellY) * 0.08})`;
+        context.lineWidth = Math.max(1, ratio * 0.8);
+        for (let wave = 0; wave < 2; wave += 1) {
+          const waveY = base[1] - size * 0.25 + wave * size * 0.35;
+          context.beginPath();
+          context.moveTo(base[0] - size, waveY + Math.sin(animationPhase * 2 + cellX + wave) * 2);
+          context.quadraticCurveTo(base[0], waveY - size * 0.18, base[0] + size, waveY + Math.sin(animationPhase * 2.4 + cellY + wave) * 2);
+          context.stroke();
+        }
+        return;
+      }
+      if (variant < 0.48 && zoom >= 2) {
+        const trunkHeight = size * (0.9 + variant);
+        context.fillStyle = "#554634";
+        context.fillRect(base[0] - size * 0.08, base[1] - trunkHeight, size * 0.16, trunkHeight);
+        const canopy = [
+          [base[0], base[1] - trunkHeight - size * 1.1],
+          [base[0] - size * 0.75, base[1] - trunkHeight * 0.35],
+          [base[0] + size * 0.75, base[1] - trunkHeight * 0.35],
+        ] as Array<[number, number]>;
+        polygon(context, canopy);
+        context.fillStyle = elevation > 0.7 ? "#6c7560" : "#48704b";
+        context.fill();
+        return;
+      }
+      if (variant > 0.78 && zoom >= 2) {
+        polygon(context, [
+          [base[0] - size, base[1]],
+          [base[0] - size * 0.2, base[1] - size * (0.8 + variant * 0.4)],
+          [base[0] + size, base[1]],
+        ]);
+        context.fillStyle = "#777468";
+        context.fill();
+      }
+    };
+    for (let cellY = propMinY; cellY <= propMaxY; cellY += propStride) {
+      for (let cellX = propMinX; cellX <= propMaxX; cellX += propStride) drawProp(cellX, cellY);
+    }
     if (selection) {
       const corners = [
         terrainPoint(selection.x, selection.y),
@@ -308,6 +372,10 @@ export const createMapCanvas = (
 
   canvas.addEventListener("click", (event) => {
     if (!snapshot) return;
+    if (didPan) {
+      didPan = false;
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     const grid = snapshot.fields.elevation;
     const currentGeometry = geometry ?? geometryFor(grid.width, grid.height, canvas.width, canvas.height);
@@ -324,6 +392,30 @@ export const createMapCanvas = (
     onSelect(selection);
     render();
   });
+  canvas.addEventListener("pointerdown", (event) => {
+    pointerStart = { x: event.clientX, y: event.clientY, panX, panY };
+    didPan = false;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.style.cursor = "grabbing";
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!pointerStart) return;
+    const distance = Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y);
+    if (distance < 3) return;
+    didPan = true;
+    panX = pointerStart.panX + (event.clientX - pointerStart.x) * (canvas.width / Math.max(1, canvas.clientWidth));
+    panY = pointerStart.panY + (event.clientY - pointerStart.y) * (canvas.height / Math.max(1, canvas.clientHeight));
+    render();
+  });
+  canvas.addEventListener("pointerup", (event) => {
+    pointerStart = undefined;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    canvas.style.cursor = "grab";
+  });
+  canvas.addEventListener("pointercancel", () => {
+    pointerStart = undefined;
+    canvas.style.cursor = "grab";
+  });
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     updateZoom(zoom + (event.deltaY < 0 ? 0.1 : -0.1));
@@ -338,7 +430,7 @@ export const createMapCanvas = (
     setAnimating: (next: boolean) => { if (animationEnabled === next) return; animationEnabled = next; if (next) render(); },
     zoomIn: () => { zoom = clampZoom(zoom + (zoom < 2 ? 0.25 : zoom < 4 ? 0.5 : 1)); if (zoom > 1 && selection) cameraTarget = { x: selection.x + 0.5, y: selection.y + 0.5 }; onZoomChange?.(zoom); scheduleRender(); },
     zoomOut: () => { zoom = clampZoom(zoom - (zoom <= 2 ? 0.25 : zoom <= 4 ? 0.5 : 1)); if (zoom <= 1) cameraTarget = undefined; onZoomChange?.(zoom); scheduleRender(); },
-    resetZoom: () => { zoom = 1; cameraTarget = undefined; onZoomChange?.(zoom); scheduleRender(); },
+    resetZoom: () => { zoom = 1; cameraTarget = undefined; panX = 0; panY = 0; onZoomChange?.(zoom); scheduleRender(); },
     getLayer: () => layer,
     getQuality: () => quality,
     getZoom: () => zoom,

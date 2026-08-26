@@ -53,7 +53,7 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
 .legend b { background: var(--acid); }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 326px; min-height: calc(100vh - 175px); }
 .map-workspace { position: relative; min-width: 0; min-height: 640px; border-right: 1px solid var(--line); background: #141a16; }
-#world-map { display: block; width: 100%; height: calc(100vh - 215px); min-height: 600px; cursor: crosshair; }
+#world-map { display: block; width: 100%; height: calc(100vh - 215px); min-height: 600px; cursor: grab; }
 .map-tools { position: absolute; top: 14px; right: 14px; z-index: 1; display: flex; align-items: center; gap: 3px; padding: 4px; background: rgba(17, 21, 18, 0.88); border: 1px solid var(--line); }
 .map-tools button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 17px; line-height: 1; cursor: pointer; }
 .map-tools button:hover { border-color: var(--acid); color: #f0dda0; }
