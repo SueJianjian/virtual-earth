@@ -8,13 +8,20 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
   await expect(page.locator("#render-quality")).toHaveValue("480");
+  await expect(page.locator("#render-quality")).toBeDisabled();
   await expect(canvas).toHaveJSProperty("height", 480);
-  await page.locator("#render-quality").selectOption("720");
-  await expect(canvas).toHaveJSProperty("height", 720);
-  await page.locator("#render-quality").selectOption("1080");
-  await expect(canvas).toHaveJSProperty("height", 1080);
-  await page.locator("#render-quality").selectOption("480");
-  await expect(canvas).toHaveJSProperty("height", 480);
+  await expect(page.locator("#zoom-level")).toHaveText("100%");
+  await page.getByRole("button", { name: "放大地图" }).click();
+  await expect(page.locator("#zoom-level")).toHaveText("125%");
+  await page.getByRole("button", { name: "缩小地图" }).click();
+  await expect(page.locator("#zoom-level")).toHaveText("100%");
+  const mapBox = await canvas.boundingBox();
+  if (!mapBox) throw new Error("Map canvas is not measurable");
+  await page.mouse.move(mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2);
+  await page.mouse.wheel(0, -100);
+  await expect(page.locator("#zoom-level")).toHaveText("110%");
+  await page.getByRole("button", { name: "复位地图缩放" }).click();
+  await expect(page.locator("#zoom-level")).toHaveText("100%");
   const pixelSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("2d");
     if (!context || element.width === 0 || element.height === 0) return 0;

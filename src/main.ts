@@ -42,7 +42,13 @@ app.innerHTML = `
     <main class="workspace">
       <section class="map-workspace" aria-label="世界地图">
         <canvas id="world-map" aria-label="虚拟地球 2.5D 地图"></canvas>
-        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
+        <div class="map-tools" aria-label="地图缩放控制">
+          <button id="zoom-out" type="button" title="缩小地图" aria-label="缩小地图">−</button>
+          <output id="zoom-level" aria-live="polite">100%</output>
+          <button id="zoom-in" type="button" title="放大地图" aria-label="放大地图">+</button>
+          <button id="zoom-reset" type="button" title="复位地图缩放" aria-label="复位地图缩放">↺</button>
+        </div>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质" disabled><option value="480" selected>480p 标清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
@@ -90,6 +96,7 @@ const digest = query<HTMLElement>("#digest-label");
 const legendLow = query<HTMLElement>("#legend-low");
 const legendHigh = query<HTMLElement>("#legend-high");
 const renderQuality = query<HTMLSelectElement>("#render-quality");
+const zoomLevel = query<HTMLOutputElement>("#zoom-level");
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
 let detail: InspectorDetail = { level: "region" };
@@ -101,7 +108,7 @@ const map = createMapCanvas(canvas, (nextSelection) => {
   detail = { level: "region" };
   if (snapshot) renderInspector(inspector, snapshot, selection, detail);
   client.send({ type: "focusRegion", regionId: nextSelection.regionId });
-});
+}, (nextZoom) => { zoomLevel.textContent = `${Math.round(nextZoom * 100)}%`; });
 renderInspector(inspector, emptySnapshot);
 renderTimeline(timeline, []);
 
@@ -128,7 +135,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     legendHigh.textContent = legend[1];
   });
 });
-renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 480 | 720 | 1080));
+renderQuality.value = "480";
+map.setQuality(480);
+const syncZoomLabel = (): void => { zoomLevel.textContent = `${Math.round(map.getZoom() * 100)}%`; };
+query<HTMLButtonElement>("#zoom-in").addEventListener("click", () => { map.zoomIn(); syncZoomLabel(); });
+query<HTMLButtonElement>("#zoom-out").addEventListener("click", () => { map.zoomOut(); syncZoomLabel(); });
+query<HTMLButtonElement>("#zoom-reset").addEventListener("click", () => { map.resetZoom(); syncZoomLabel(); });
 bindTimeControls(document, client);
 query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
   const regionId = selection?.regionId ?? "region:0:0" as never;

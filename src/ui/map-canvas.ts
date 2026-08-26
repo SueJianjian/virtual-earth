@@ -3,7 +3,7 @@ import type { WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
-export type RenderQuality = 480 | 720 | 1080;
+export type RenderQuality = 480;
 
 type MapGeometry = {
   originX: number;
@@ -51,15 +51,24 @@ const shade = (color: [number, number, number], amount: number): string => {
   return `rgb(${channels[0]}, ${channels[1]}, ${channels[2]})`;
 };
 
+const clampZoom = (value: number): number => Math.max(0.6, Math.min(2.5, value));
+
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
   onSelect: (selection: CellSelection) => void,
+  onZoomChange?: (zoom: number) => void,
 ) => {
   let snapshot: WorldSnapshot | undefined;
   let layer: MapLayer = "natural";
   let selection: CellSelection | undefined;
   let quality: RenderQuality = 480;
+  let zoom = 1;
   let geometry: MapGeometry | undefined;
+  const updateZoom = (next: number): void => {
+    zoom = clampZoom(next);
+    onZoomChange?.(zoom);
+    render();
+  };
 
   const render = (): void => {
     if (!snapshot) return;
@@ -71,7 +80,13 @@ export const createMapCanvas = (
     canvas.height = Math.max(1, quality);
     const context = canvas.getContext("2d");
     if (!context) return;
-    geometry = geometryFor(grid.width, grid.height, canvas.width, canvas.height);
+    const baseGeometry = geometryFor(grid.width, grid.height, canvas.width, canvas.height);
+    geometry = {
+      ...baseGeometry,
+      tileWidth: baseGeometry.tileWidth * zoom,
+      tileHeight: baseGeometry.tileHeight * zoom,
+      heightScale: baseGeometry.heightScale * zoom,
+    };
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#101713";
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -140,6 +155,10 @@ export const createMapCanvas = (
     onSelect(selection);
     render();
   });
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    updateZoom(zoom + (event.deltaY < 0 ? 0.1 : -0.1));
+  }, { passive: false });
   new ResizeObserver(render).observe(canvas);
 
   return {
@@ -147,7 +166,11 @@ export const createMapCanvas = (
     setLayer: (next: MapLayer) => { layer = next; render(); },
     setQuality: (next: RenderQuality) => { quality = next; render(); },
     setSelection: (next: CellSelection | undefined) => { selection = next; render(); },
+    zoomIn: () => updateZoom(zoom + 0.25),
+    zoomOut: () => updateZoom(zoom - 0.25),
+    resetZoom: () => updateZoom(1),
     getLayer: () => layer,
     getQuality: () => quality,
+    getZoom: () => zoom,
   };
 };
