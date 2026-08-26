@@ -8,7 +8,16 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("aria-label", "虚拟地球 2.5D 地图");
   await expect(page.locator("#render-quality")).toHaveValue("480");
-  await expect(page.locator("#render-quality")).toBeDisabled();
+  await expect(canvas).toHaveJSProperty("width", 854);
+  await expect(canvas).toHaveJSProperty("height", 480);
+  await page.locator("#render-quality").selectOption("720");
+  await expect(canvas).toHaveJSProperty("width", 1280);
+  await expect(canvas).toHaveJSProperty("height", 720);
+  await page.locator("#render-quality").selectOption("1080");
+  await expect(canvas).toHaveJSProperty("width", 1920);
+  await expect(canvas).toHaveJSProperty("height", 1080);
+  await page.locator("#render-quality").selectOption("480");
+  await expect(canvas).toHaveJSProperty("width", 854);
   await expect(canvas).toHaveJSProperty("height", 480);
   await expect(page.locator("#zoom-level")).toHaveText("100%");
   await page.getByRole("button", { name: "放大地图" }).click();

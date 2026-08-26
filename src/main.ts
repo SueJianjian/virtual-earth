@@ -48,7 +48,7 @@ app.innerHTML = `
           <button id="zoom-in" type="button" title="放大地图" aria-label="放大地图">+</button>
           <button id="zoom-reset" type="button" title="复位地图缩放" aria-label="复位地图缩放">↺</button>
         </div>
-        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质" disabled><option value="480" selected>480p 标清</option></select></label></div>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
@@ -137,6 +137,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
 });
 renderQuality.value = "480";
 map.setQuality(480);
+renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 480 | 720 | 1080));
 const syncZoomLabel = (): void => { zoomLevel.textContent = `${Math.round(map.getZoom() * 100)}%`; };
 query<HTMLButtonElement>("#zoom-in").addEventListener("click", () => { map.zoomIn(); syncZoomLabel(); });
 query<HTMLButtonElement>("#zoom-out").addEventListener("click", () => { map.zoomOut(); syncZoomLabel(); });
