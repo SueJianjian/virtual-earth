@@ -458,7 +458,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       const result = stepWorld(state, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: index === 0 ? events : [] }, { computeDigest: false, mutateState: true });
       recordStepDuration(now() - started);
       state = result.state;
-      emitted.push(...result.events);
+      for (const event of result.events) emitted.push(event);
     }
     digest = worldDigest(state);
     return emitted;

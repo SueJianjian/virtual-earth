@@ -1,6 +1,6 @@
 import type { CellSelection } from "./map-canvas.ts";
 import { summarizeLineage } from "../sim/lod/lineage.ts";
-import type { CultureIdentity, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, RegionId, RegionLineageSummary, SpeciesBlueprint, SubstanceState, WorldviewEntityState } from "../sim/types.ts";
+import type { AggregateKnowledgeSummary, CultureIdentity, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SubstanceState, WorldviewEntityState } from "../sim/types.ts";
 import { governanceForOrganization } from "../sim/society/organization.ts";
 import { speciesBlueprintFor } from "../sim/ecology/blueprints.ts";
 import { facilityOperationalEffect, facilityWorkforceRequiredFor } from "../sim/society/facilities.ts";
@@ -211,6 +211,10 @@ const regionEventLabels: Record<string, string> = {
   "knowledge-diffusion": "知识跨区域传播",
   "culture-emergence": "文化形成",
   "culture-evolution": "文化演化",
+  "aggregate-culture-innovation": "聚合文化创新",
+  "aggregate-belief-emergence": "聚合信念形成",
+  "aggregate-organization-formation": "聚合组织形成",
+  "aggregate-organization-dissolution": "聚合组织解体",
   "species-emergence": "物种出现",
   "species-divergence": "物种分化",
 };
@@ -322,17 +326,26 @@ const supplyChainReport = (snapshot: WorldSnapshot, organization: { id: string }
     return `<li data-supply-resource="${route.resourceId}"><div><span>${incoming ? "输入" : "输出"} · ${supplyResourceLabels[route.resourceId]}</span><small>${format(route.shipmentCount)} 批</small></div><strong>${escapeHtml(counterparty.slice(-8))}</strong><p>累计 ${formatNumber(route.totalAmount, 2)} 单位 · ${escapeHtml(region)}</p><p>最近运输：${formatSimulationAge(route.lastYears ?? route.lastTick)}</p></li>`;
   }).join("") : '<li class="worldview-empty">尚无跨区域运输记录</li>'}</ol></section>`;
 };
+const cultureSummaryForSnapshot = (snapshot: WorldSnapshot, cultureId: string): RegionCultureSummary | undefined =>
+  snapshot.selectedRegion?.cultureSummary?.id === cultureId ? snapshot.selectedRegion.cultureSummary : undefined;
 const cultureIdentityForSnapshot = (snapshot: WorldSnapshot, cultureId: string): CultureIdentity | undefined => {
+  const summary = cultureSummaryForSnapshot(snapshot, cultureId);
   const culture = snapshot.cultures?.find((candidate) => candidate.id === cultureId);
-  return culture?.identity ?? (culture ? snapshot.cultureIdentityByRegion?.[culture.regionId] : undefined);
+  return summary?.identity ?? culture?.identity ?? (culture ? snapshot.cultureIdentityByRegion?.[culture.regionId] : undefined);
 };
-const cultureSummaryReport = (identity: CultureIdentity): string => `
+const aggregateKnowledgeName = (knowledge: AggregateKnowledgeSummary): string => knowledge.name ?? knowledge.kind;
+const cultureSummaryReport = (identity: CultureIdentity, summary?: RegionCultureSummary): string => `
   <section class="organization-governance culture-summary" aria-label="本地文化">
     <div class="detail-heading"><strong>本地文化</strong><span>${escapeHtml(identity.name)} · 第 ${format(identity.generation)} 代</span></div>
-    <div class="detail-tags"><span>${cultureLanguageLabels[identity.languageFamily]}</span><span>${cultureCommunicationLabels[identity.communicationStyle]}</span><span>传统 ${format(identity.traditions.length)} 项</span></div>
+    <div class="detail-tags"><span>${cultureLanguageLabels[identity.languageFamily]}</span><span>${cultureCommunicationLabels[identity.communicationStyle]}</span><span>传统 ${format(identity.traditions.length)} 项</span>${summary ? `<span>文化记忆 ${formatPercent(summary.memoryStrength).value}%</span><span>知识创新 ${format(summary.innovationCount)} 项</span>` : ""}</div>
   </section>
 `;
-const cultureDetailReport = (cultureId: string, identity: CultureIdentity): string => `
+const cultureDetailReport = (cultureId: string, identity: CultureIdentity, summary?: RegionCultureSummary): string => {
+  const knowledge = summary?.knowledge ?? [];
+  const knowledgeRows = knowledge.length > 0
+    ? knowledge.slice(0, 12).map((record) => `<li><div><span>${record.domain ? knowledgeDomainLabels[record.domain] : "基础实践"}</span><small>形成于 ${formatSimulationAge(record.originYears)}</small></div><strong>${escapeHtml(aggregateKnowledgeName(record))}</strong><p>可信度 ${formatPercent(record.credibility).value}% · 传承成本 ${formatPercent(record.transmissionCost).value}% · 遗忘率 ${formatPercent(record.forgettingRate).value}% · ${record.parentIds.length > 0 ? `源自 ${format(record.parentIds.length)} 条知识` : "当地原生记录"}</p></li>`).join("")
+    : "<li class=\"worldview-empty\">尚未形成可记录知识</li>";
+  return `
   <div class="detail-report">
     <div class="detail-title"><strong>文化报告</strong><span>${escapeHtml(cultureId)}</span></div>
     <dl class="detail-grid">
@@ -345,6 +358,7 @@ const cultureDetailReport = (cultureId: string, identity: CultureIdentity): stri
       <div><dt>象征</dt><dd>${escapeHtml(identity.symbol)}</dd></div>
       <div><dt>创新签名</dt><dd>${escapeHtml(identity.noveltySignature)}</dd></div>
       <div><dt>母文化</dt><dd>${identity.parentCultureIds?.length ? identity.parentCultureIds.map(escapeHtml).join("、") : "本地原生文化"}</dd></div>
+      ${summary ? `<div><dt>文化记忆</dt><dd>${formatPercent(summary.memoryStrength).value}%</dd></div><div><dt>传承效率</dt><dd>${formatPercent(summary.transmissionRate).value}%</dd></div><div><dt>知识创新</dt><dd>${format(summary.innovationCount)} 项</dd></div><div><dt>信念记录</dt><dd>${format(summary.beliefCount)} 条</dd></div><div><dt>最近变化</dt><dd>${formatSimulationAge(summary.lastChangeTick)}</dd></div>` : ""}
     </dl>
     <section class="organization-governance" aria-label="文化价值">
       <div class="detail-heading"><strong>文化价值</strong><span>会影响组织形成、治理、联盟与冲突</span></div>
@@ -354,8 +368,21 @@ const cultureDetailReport = (cultureId: string, identity: CultureIdentity): stri
       <div class="detail-heading"><strong>传承传统</strong><span>由区域环境、成员特征与知识共同演化</span></div>
       <div class="detail-tags">${identity.traditions.length > 0 ? identity.traditions.map((tradition) => `<span>${escapeHtml(tradition)}</span>`).join("") : "<span>尚未形成稳定传统</span>"}</div>
     </section>
+    <section class="worldview-records knowledge-records" aria-label="文化记忆">
+      <div class="worldview-heading"><strong>文化记忆</strong><span>保留知识来源、传承成本与遗忘速率</span></div>
+      <ol class="worldview-list">${knowledgeRows}</ol>
+    </section>
   </div>
 `;
+};
+const aggregateSocietyReport = (society: RegionSocietySummary, ecologicalPopulation: number, socialPopulation: number): string => {
+  const organizations = Object.entries(society.organizationCounts)
+    .filter(([, count]) => count > 0)
+    .sort(([, left], [, right]) => right - left)
+    .map(([type, count]) => `<span>${organizationLabels[type as OrganizationType]} ${format(count)} 个</span>`)
+    .join("");
+  return `<section class="organization-governance aggregate-society" aria-label="社会演化"><div class="detail-heading"><strong>社会演化</strong><span>聚合模型持续记录文化、组织与公共能力</span></div><dl class="detail-grid"><div><dt>生态总量</dt><dd>${format(ecologicalPopulation)} 个体</dd></div><div><dt>社会人口</dt><dd>${format(socialPopulation)} 人</dd></div><div><dt>组织承载</dt><dd>${format(society.organizationCapacity)} 人</dd></div><div><dt>基础设施</dt><dd>${formatPercent(society.infrastructureLevel).value}%</dd></div><div><dt>凝聚力</dt><dd>${formatPercent(society.cohesion).value}%</dd></div><div><dt>稳定度</dt><dd>${formatPercent(society.stability).value}%</dd></div><div><dt>合法性</dt><dd>${formatPercent(society.legitimacy).value}%</dd></div><div><dt>公共资源</dt><dd>${formatPercent(society.publicGoods).value}%</dd></div><div><dt>军力</dt><dd>${formatPercent(society.military).value}%</dd></div><div><dt>贸易累计</dt><dd>${formatNumber(society.tradeVolume, 2)} 单位</dd></div><div><dt>冲突压力</dt><dd>${formatPercent(society.conflictPressure).value}%</dd></div><div><dt>最近变化</dt><dd>${formatSimulationAge(society.lastChangeTick)}</dd></div></dl><div class="detail-tags">${organizations || "<span>尚未形成稳定组织</span>"}</div></section>`;
+};
 const observationMetric = (label: string, formatted: FormattedMetric, note?: string): string => `
   <div class="observation-row">
     <dt>${label}${note ? `<small>${note}</small>` : ""}</dt>
@@ -443,9 +470,18 @@ const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"])
     return { id: population.id, label: `${species?.name ?? population.id.slice(-8)} · ${format(population.count)} 个体` };
   });
   if (level === "agent") return (snapshot.projection?.agents ?? []).map((agent) => ({ id: agent.id, label: `${agent.id.slice(-8)} · ${Math.floor(agent.age)}岁` }));
-  if (level === "culture") return (snapshot.cultures ?? [])
-    .filter((culture) => culture.regionId === snapshot.focusRegionId)
-    .map((culture) => ({ id: culture.id, label: cultureIdentityForSnapshot(snapshot, culture.id)?.name ?? culture.id.slice(-8) }));
+  if (level === "culture") {
+    const targets = new Map<string, { id: string; label: string }>();
+    const summary = snapshot.selectedRegion?.cultureSummary;
+    if (summary && (!snapshot.focusRegionId || summary.identity.originRegionId === snapshot.focusRegionId)) {
+      targets.set(summary.id, { id: summary.id, label: `${summary.identity.name} · 聚合文化` });
+    }
+    for (const culture of snapshot.cultures ?? []) {
+      if (culture.regionId !== snapshot.focusRegionId) continue;
+      targets.set(culture.id, { id: culture.id, label: cultureIdentityForSnapshot(snapshot, culture.id)?.name ?? culture.id.slice(-8) });
+    }
+    return [...targets.values()];
+  }
   if (level === "worldview") return (snapshot.worldviewEntities ?? [])
     .filter((entity) => entity.regionId === snapshot.focusRegionId)
     .map((entity) => ({ id: entity.id, label: `${worldviewEntityLabels[entity.kind]} · ${entity.name ?? entity.id.slice(-8)}` }));
@@ -477,14 +513,22 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const facilities = (snapshot.facilities ?? []).filter((facility) => facility.regionId === snapshot.focusRegionId);
     const substances = (snapshot.substances ?? []).filter((substance) => substance.regionId === snapshot.focusRegionId);
     const regionalCulture = (snapshot.cultures ?? []).find((culture) => culture.regionId === snapshot.focusRegionId);
-    const regionalIdentity = regionalCulture ? cultureIdentityForSnapshot(snapshot, regionalCulture.id) : undefined;
-    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${regionalIdentity ? cultureSummaryReport(regionalIdentity) : ""}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
+    const regionalCultureSummary = snapshot.selectedRegion?.cultureSummary;
+    const regionalIdentity = regionalCulture
+      ? cultureIdentityForSnapshot(snapshot, regionalCulture.id)
+      : regionalCultureSummary?.identity;
+    const regionalSocietySummary = snapshot.selectedRegion?.societySummary;
+    const aggregateSociety = lineage.source === "aggregate" && regionalSocietySummary
+      ? aggregateSocietyReport(regionalSocietySummary, snapshot.selectedRegion?.population ?? 0, snapshot.selectedRegion?.socialPopulation ?? snapshot.selectedRegion?.population ?? 0)
+      : "";
+    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${regionalIdentity ? cultureSummaryReport(regionalIdentity, regionalCultureSummary) : ""}${aggregateSociety}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
   }
   if (!detail.id) return `<div class="empty-state"><strong>请选择${detailLevelLabel(detail.level)}</strong><span>对象选择器会列出当前区域可查看的实体</span></div>`;
   if (detail.level === "culture") {
     const identity = cultureIdentityForSnapshot(snapshot, detail.id);
+    const summary = cultureSummaryForSnapshot(snapshot, detail.id);
     return identity
-      ? cultureDetailReport(detail.id, identity)
+      ? cultureDetailReport(detail.id, identity, summary)
       : `<div class="empty-state"><strong>文化暂不可用</strong><span>该文化记录尚未同步到当前快照</span></div>`;
   }
   if (detail.level === "substance") {

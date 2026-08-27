@@ -7,7 +7,7 @@ import { projectMicroRegion, summarizeRegionState } from "../../src/sim/lod/inde
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import { lineageForSnapshot, renderInspector } from "../../src/ui/inspector.ts";
-import type { RegionId } from "../../src/sim/types.ts";
+import type { RegionCultureSummary, RegionId, RegionSocietySummary } from "../../src/sim/types.ts";
 import type { WorldSnapshot } from "../../src/worker/protocol.ts";
 
 const region = "region:0:0" as RegionId;
@@ -456,5 +456,74 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("环境守护");
     expect(element.innerHTML).toContain("传承传统");
     expect(element.innerHTML).toContain(identity.traditions[0]!);
+  });
+
+  it("renders aggregate culture memory and society metrics without detailed records", () => {
+    const snapshot = lineageSnapshot();
+    const identity = createCultureIdentity("aggregate:inspector", region, 12, 3, [], { water: 0.7, nutrients: 0.6, biomass: 0.5 });
+    const cultureSummary: RegionCultureSummary = {
+      id: "culture:aggregate:inspector" as never,
+      identity,
+      knowledge: [{
+        id: "aggregate-knowledge:construction",
+        kind: "aggregate-innovation:construction",
+        name: "叠岩承重法",
+        domain: "construction",
+        credibility: 0.82,
+        transmissionCost: 0.22,
+        forgettingRate: 0.01,
+        originRegionId: region,
+        originTick: 18,
+        originYears: 18,
+        parentIds: [],
+      }],
+      beliefCount: 4,
+      transmissionRate: 0.76,
+      memoryStrength: 0.68,
+      innovationCount: 3,
+      lastChangeTick: 24,
+    };
+    const societySummary: RegionSocietySummary = {
+      organizationCounts: { family: 8, clan: 2, tribe: 1, settlement: 1, city: 1, state: 0, federation: 0, empire: 0 },
+      organizationCapacity: 68,
+      cohesion: 0.72,
+      stability: 0.64,
+      legitimacy: 0.61,
+      military: 0.28,
+      publicGoods: 0.55,
+      tradeVolume: 38.5,
+      conflictPressure: 0.12,
+      infrastructureLevel: 0.48,
+      lastChangeTick: 24,
+    };
+    snapshot.focusRegionId = region;
+    snapshot.cultures = [];
+    snapshot.projection = { ...snapshot.projection!, agents: [], relationships: [], organizations: [] };
+    snapshot.selectedRegion = {
+      ...snapshot.selectedRegion!,
+      mode: "aggregate",
+      population: 420,
+      socialPopulation: 68,
+      cultureSummary,
+      societySummary,
+      organizations: [],
+    };
+    const element = { innerHTML: "" } as HTMLElement;
+    const selection = { x: 0, y: 0, index: 0, regionId: region };
+
+    renderInspector(element, snapshot, selection);
+    expect(element.innerHTML).toContain("社会演化");
+    expect(element.innerHTML).toContain("生态总量");
+    expect(element.innerHTML).toContain("社会人口");
+    expect(element.innerHTML).toContain("文化记忆");
+    expect(element.innerHTML).toContain("城市 1 个");
+    expect(element.innerHTML).toContain("基础设施");
+
+    renderInspector(element, snapshot, selection, { level: "culture", id: cultureSummary.id });
+    expect(element.innerHTML).toContain("聚合文化");
+    expect(element.innerHTML).toContain("叠岩承重法");
+    expect(element.innerHTML).toContain("传承成本");
+    expect(element.innerHTML).toContain("知识创新");
+    expect(element.innerHTML).toContain("信念记录");
   });
 });

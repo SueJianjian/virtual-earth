@@ -22,6 +22,10 @@ const emptyDelta = (): WorldDelta => ({
   eventDrafts: [],
 });
 
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
+
 const mean = (values: Float32Array): number => {
   if (values.length === 0) return 0;
   let sum = 0;
@@ -30,13 +34,13 @@ const mean = (values: Float32Array): number => {
 };
 
 const mergeDelta = (target: WorldDelta, source: WorldDelta): void => {
-  target.fieldChanges.push(...source.fieldChanges);
-  target.chemistryChanges.push(...source.chemistryChanges);
-  target.entityEffects.push(...source.entityEffects);
-  target.relationshipEffects.push(...source.relationshipEffects);
-  target.resourceTransactions.push(...source.resourceTransactions);
-  target.worldviewEffects.push(...source.worldviewEffects);
-  target.eventDrafts.push(...source.eventDrafts);
+  appendItems(target.fieldChanges, source.fieldChanges);
+  appendItems(target.chemistryChanges, source.chemistryChanges);
+  appendItems(target.entityEffects, source.entityEffects);
+  appendItems(target.relationshipEffects, source.relationshipEffects);
+  appendItems(target.resourceTransactions, source.resourceTransactions);
+  appendItems(target.worldviewEffects, source.worldviewEffects);
+  appendItems(target.eventDrafts, source.eventDrafts);
 };
 
 const neighborRegions = (regionId: string, width: number, height: number): string[] => {

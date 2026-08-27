@@ -25,6 +25,10 @@ const emptyDelta = (): EnvironmentDelta => ({
   eventDrafts: [],
 });
 
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
+
 const isEmpty = (values: Float32Array): boolean =>
   values.every((value) => value <= 0);
 
@@ -174,9 +178,9 @@ export const stepEnvironment = (
     }
   }
   delta.chemistryChanges = calculateChemistry(workingState, elapsedYears);
-  delta.fieldChanges.push(...hazardResult.delta.fieldChanges);
-  delta.chemistryChanges.push(...hazardResult.delta.chemistryChanges);
-  delta.eventDrafts.push(...hazardResult.delta.eventDrafts);
+  appendItems(delta.fieldChanges, hazardResult.delta.fieldChanges);
+  appendItems(delta.chemistryChanges, hazardResult.delta.chemistryChanges);
+  appendItems(delta.eventDrafts, hazardResult.delta.eventDrafts);
   const technologyByRegion = technologyProfilesForState(state);
   for (let index = 0; index < state.fields.elevation.values.length; index += 1) {
     const x = index % state.fields.elevation.width;
@@ -194,7 +198,7 @@ export const stepEnvironment = (
   }
   const nextChemistry = applyChemistryChanges(workingState, delta.chemistryChanges);
   addEnvironmentalMilestones(state, delta, water, nextChemistry, elapsedYears);
-  delta.fieldChanges.push(...calculateGeology(workingState, elapsedYears));
+  appendItems(delta.fieldChanges, calculateGeology(workingState, elapsedYears));
   const width = state.fields.elevation.width;
   for (const event of activeEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
@@ -221,8 +225,8 @@ export const stepEnvironment = (
     },
     chemistry: nextChemistry,
   }, elapsedYears);
-  delta.entityEffects.push(...substanceDelta.entityEffects);
-  delta.eventDrafts.push(...substanceDelta.eventDrafts);
+  appendItems(delta.entityEffects, substanceDelta.entityEffects);
+  appendItems(delta.eventDrafts, substanceDelta.eventDrafts);
   return delta;
 };
 

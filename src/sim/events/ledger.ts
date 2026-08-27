@@ -15,6 +15,7 @@ const MILESTONE_KINDS = new Set([
   "abiogenesis", "species-emergence", "species-divergence", "family-formation", "organization-formation", "organization-split", "organization-conflict", "organization-dissolved",
   "population-migration", "population-dispersal", "territory-expansion", "territory-transfer", "war-displacement", "border-conflict", "organization-war", "diplomatic-alliance",
   "substance-formation", "substance-discovery", "substance-engineering", "knowledge-innovation", "culture-emergence", "worldview-entity-dormant", "worldview-entity-revived",
+  "aggregate-culture-innovation", "aggregate-belief-emergence", "aggregate-organization-formation", "aggregate-organization-dissolution",
 ]);
 const MILESTONE_DETAIL_KEYS = [
   "regionId", "fromRegion", "toRegion", "originRegionId", "organizationId", "fromOrganizationId", "toOrganizationId", "leftOrganizationId", "rightOrganizationId",
@@ -136,7 +137,9 @@ export const eventRegionIds = (event: WorldEvent): string[] => {
     event.evidence.toRegion,
     event.evidence.originRegionId,
   ];
-  if (Array.isArray(event.payload.territoryRegionIds)) values.push(...event.payload.territoryRegionIds);
+  if (Array.isArray(event.payload.territoryRegionIds)) {
+    for (const regionId of event.payload.territoryRegionIds) values.push(regionId);
+  }
   return [...new Set(values.filter((value): value is string => typeof value === "string" && value.startsWith("region:")))];
 };
 
@@ -253,7 +256,7 @@ const archiveEvents = (state: WorldState, events: readonly WorldEvent[]): void =
     increment(archive.kindCounts, event.kind);
     for (const regionId of eventRegionIds(event)) increment(archive.regionCounts, regionId);
     for (const organizationId of eventOrganizationIds(event)) increment(archive.organizationCounts, organizationId);
-    if (event.kind === "organization-formation" && typeof event.payload.type === "string") {
+    if ((event.kind === "organization-formation" || event.kind === "aggregate-organization-formation") && typeof event.payload.type === "string") {
       increment(archive.organizationFormationCounts, event.payload.type);
     }
     if (event.kind === "organization-trade" || event.kind === "interregional-trade") {

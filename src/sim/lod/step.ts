@@ -1,8 +1,12 @@
 import type { AgentsDelta, CultureDelta, EcologyDelta, PopulationState, RegionId, SocietyDelta, StepInput, WorldDelta, WorldState } from "../types.ts";
 import { promoteRegion } from "./promote.ts";
-import { refreshAggregateSummary, summarizeRegionState } from "./summarize.ts";
+import { refreshAggregateSummaryWithEvents, summarizeRegionState } from "./summarize.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
+
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
 
 const isNaturalHotspot = (state: WorldState, regionId: RegionId): boolean => {
   const agents = state.agents.filter((candidate) => candidate.regionId === regionId);
@@ -12,7 +16,7 @@ const isNaturalHotspot = (state: WorldState, regionId: RegionId): boolean => {
   for (let index = state.events.length - 1; index >= 0; index -= 1) {
     const event = state.events[index];
     if (!event || state.tick - event.tick > 2) break;
-    if (event.source !== "natural") continue;
+    if (event.source !== "natural" || event.kind.startsWith("aggregate-")) continue;
     const eventRegion = event.payload.regionId ?? event.evidence.regionId;
     if (eventRegion === regionId) {
       recentNaturalEvent = true;
@@ -60,14 +64,17 @@ export const stepLod = (
         if (hotspot) {
           merge(delta, promoteRegion(state, regionId, "rapid-change"));
         } else {
-          upsertSummary(delta, refreshAggregateSummary(state, summary, projectedPopulations));
+          const refreshed = refreshAggregateSummaryWithEvents(state, summary, projectedPopulations);
+          upsertSummary(delta, refreshed.summary);
+          appendItems(delta.eventDrafts, refreshed.events);
         }
       }
       continue;
     }
     if (summary?.mode === "micro" && !hasAgents && !hotspot) {
-      const refreshed = refreshAggregateSummary(state, { ...summary, mode: "aggregate" }, projectedPopulations);
-      upsertSummary(delta, refreshed);
+      const refreshed = refreshAggregateSummaryWithEvents(state, { ...summary, mode: "aggregate" }, projectedPopulations);
+      upsertSummary(delta, refreshed.summary);
+      appendItems(delta.eventDrafts, refreshed.events);
       delta.eventDrafts.push({
         kind: "region-summarized",
         ruleId: "natural-deaggregation",
@@ -88,12 +95,12 @@ export const stepLod = (
 };
 
 const merge = (target: WorldDelta, source: WorldDelta): void => {
-  target.fieldChanges.push(...source.fieldChanges);
-  target.chemistryChanges.push(...source.chemistryChanges);
-  target.entityEffects.push(...source.entityEffects);
-  target.relationshipEffects.push(...source.relationshipEffects);
-  target.resourceTransactions.push(...source.resourceTransactions);
-  target.worldviewEffects.push(...source.worldviewEffects);
-  target.eventDrafts.push(...source.eventDrafts);
+  appendItems(target.fieldChanges, source.fieldChanges);
+  appendItems(target.chemistryChanges, source.chemistryChanges);
+  appendItems(target.entityEffects, source.entityEffects);
+  appendItems(target.relationshipEffects, source.relationshipEffects);
+  appendItems(target.resourceTransactions, source.resourceTransactions);
+  appendItems(target.worldviewEffects, source.worldviewEffects);
+  appendItems(target.eventDrafts, source.eventDrafts);
   if (source.lodEffects) target.lodEffects = [...(target.lodEffects ?? []), ...source.lodEffects];
 };

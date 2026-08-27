@@ -4,6 +4,10 @@ import { getWorldviewPack } from "./registry.ts";
 
 const emptyDelta = (): WorldviewDelta => ({ worldviewEffects: [], resourceTransactions: [], eventDrafts: [] });
 
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
+
 const sourceIdsFor = (effect: WorldviewEffect): string[] => {
   if (effect.kind === "record-phenomenon") return [...effect.parentIds];
   if (effect.kind === "propagate-belief") return [...effect.sourceIds];
@@ -77,7 +81,7 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
       if (outcome.status !== "applied" || !outcome.value) continue;
       const effect = outcome.value as WorldviewEffect;
       delta.worldviewEffects.push(effect);
-      delta.resourceTransactions.push(...energyTransactionsFor(effect, context.state, context.random.value));
+      appendItems(delta.resourceTransactions, energyTransactionsFor(effect, context.state, context.random.value));
       delta.eventDrafts.push({
         kind: `worldview-${rule.id}`,
         ruleId: rule.id,

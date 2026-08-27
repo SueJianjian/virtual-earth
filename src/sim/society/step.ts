@@ -12,6 +12,10 @@ const emptyDelta = (): WorldDelta => ({
   resourceTransactions: [], worldviewEffects: [], eventDrafts: [],
 });
 
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
+
 const agentsAfter = (state: WorldState, delta: WorldDelta): WorldState["agents"] => {
   const agents = new Map(state.agents.map((agent) => [agent.id, agent]));
   for (const effect of delta.entityEffects) {
@@ -52,13 +56,13 @@ const relationshipsAfter = (state: WorldState, delta: AgentsDelta): WorldState["
 };
 
 const merge = (target: WorldDelta, source: WorldDelta): void => {
-  target.fieldChanges.push(...source.fieldChanges);
-  target.chemistryChanges.push(...source.chemistryChanges);
-  target.entityEffects.push(...source.entityEffects);
-  target.relationshipEffects.push(...source.relationshipEffects);
-  target.resourceTransactions.push(...source.resourceTransactions);
-  target.worldviewEffects.push(...source.worldviewEffects);
-  target.eventDrafts.push(...source.eventDrafts);
+  appendItems(target.fieldChanges, source.fieldChanges);
+  appendItems(target.chemistryChanges, source.chemistryChanges);
+  appendItems(target.entityEffects, source.entityEffects);
+  appendItems(target.relationshipEffects, source.relationshipEffects);
+  appendItems(target.resourceTransactions, source.resourceTransactions);
+  appendItems(target.worldviewEffects, source.worldviewEffects);
+  appendItems(target.eventDrafts, source.eventDrafts);
 };
 
 const resourceKey = (resourceId: string, regionId: string, holderId?: string): string =>

@@ -403,11 +403,48 @@ export type FamilyLineageSummary = RegionLineageSummary & {
   memberCount: number;
   relationshipCount: number;
 };
+export type AggregateKnowledgeSummary = {
+  id: string;
+  kind: string;
+  name?: string;
+  domain?: KnowledgeDomain;
+  credibility: number;
+  transmissionCost: number;
+  forgettingRate: number;
+  originRegionId: RegionId;
+  originTick: number;
+  originYears: number;
+  parentIds: string[];
+};
+export type RegionCultureSummary = {
+  id: EntityId;
+  identity: CultureIdentity;
+  knowledge: AggregateKnowledgeSummary[];
+  beliefCount: number;
+  transmissionRate: number;
+  memoryStrength: number;
+  innovationCount: number;
+  lastChangeTick: number;
+};
+export type RegionSocietySummary = {
+  organizationCounts: Record<OrganizationType, number>;
+  organizationCapacity: number;
+  cohesion: number;
+  stability: number;
+  legitimacy: number;
+  military: number;
+  publicGoods: number;
+  tradeVolume: number;
+  conflictPressure: number;
+  infrastructureLevel: number;
+  lastChangeTick: number;
+};
 export type RegionSummary = {
   regionId: RegionId;
   version: number;
   mode: RegionMode;
   population: number;
+  socialPopulation?: number;
   populationByAge: Distribution;
   skillHistogram: Distribution;
   cultureHistogram: Distribution;
@@ -420,6 +457,8 @@ export type RegionSummary = {
   relationshipRecords: RelationshipState[];
   lineage: RegionLineageSummary;
   familyLineages: FamilyLineageSummary[];
+  cultureSummary?: RegionCultureSummary;
+  societySummary?: RegionSocietySummary;
   foodBalance: number;
   foodPerAgent: number;
   foodSecurity: number;

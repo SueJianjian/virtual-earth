@@ -50,6 +50,10 @@ const emptyDelta = (): WorldDelta => ({
   eventDrafts: [],
 });
 
+const appendItems = <T>(target: T[], source: readonly T[]): void => {
+  for (const item of source) target.push(item);
+};
+
 export const registerSimulationStage = (stage: SimulationStage): void => {
   if (stageRegistry.has(stage.id)) throw new Error(`Duplicate simulation stage: ${stage.id}`);
   if (stage.id.includes("phase") || stage.id.includes("tick")) {
@@ -617,13 +621,13 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   for (const stage of listSimulationStages()) {
     const delta = stage.run(previous, { ...input, externalEvents: acceptedExternalEvents }, priorDeltas);
     priorDeltas.set(stage.id, delta);
-    merged.fieldChanges.push(...delta.fieldChanges);
-    merged.chemistryChanges.push(...delta.chemistryChanges);
-    merged.entityEffects.push(...delta.entityEffects);
-    merged.relationshipEffects.push(...delta.relationshipEffects);
-    merged.resourceTransactions.push(...delta.resourceTransactions);
-    merged.worldviewEffects.push(...delta.worldviewEffects);
-    merged.eventDrafts.push(...delta.eventDrafts);
+    appendItems(merged.fieldChanges, delta.fieldChanges);
+    appendItems(merged.chemistryChanges, delta.chemistryChanges);
+    appendItems(merged.entityEffects, delta.entityEffects);
+    appendItems(merged.relationshipEffects, delta.relationshipEffects);
+    appendItems(merged.resourceTransactions, delta.resourceTransactions);
+    appendItems(merged.worldviewEffects, delta.worldviewEffects);
+    appendItems(merged.eventDrafts, delta.eventDrafts);
     if (delta.lodEffects) merged.lodEffects = [...(merged.lodEffects ?? []), ...delta.lodEffects];
     if (delta.formationEffect) merged.formationEffect = delta.formationEffect;
   }
@@ -634,7 +638,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   if (options.mutateState) validateDeltaBeforeMutation(next, merged);
   synchronizeEventArchive(next.eventArchive, next.events);
   applyDelta(next, merged);
-  merged.eventDrafts.push(...pruneTransientState(next));
+  appendItems(merged.eventDrafts, pruneTransientState(next));
   const [, nextRandom] = nextRandomValue(previous.random);
   next.random = nextRandom;
   next.tick += 1;

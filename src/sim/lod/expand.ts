@@ -5,7 +5,7 @@ const asEntityId = (value: string): EntityId => value as EntityId;
 const asOrganizationId = (value: string): OrganizationState["id"] => value as OrganizationState["id"];
 
 export const projectRegion = (summary: RegionSummary, version: number): RegionProjection => {
-  const count = Math.max(0, Math.min(128, Math.floor(summary.population)));
+  const count = Math.max(0, Math.min(128, Math.floor(summary.socialPopulation ?? summary.population)));
   const sourceAgentIds = [...summary.agentIds].sort();
   const sourceRecords = new Map((summary.agentRecords ?? []).map((record) => [record.id, record]));
   const agents: AgentState[] = [];

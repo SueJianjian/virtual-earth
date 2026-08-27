@@ -184,7 +184,46 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     entity.revivalCount ?? 0,
     ...Object.values(entity.resourceBalances),
   ].every(Number.isFinite));
-  return finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finiteWorldviews;
+  const finiteLod = state.lod.summaries.every((summary) => {
+    const culture = summary.cultureSummary;
+    const society = summary.societySummary;
+    const summaryValues = [
+      summary.version,
+      summary.population,
+      summary.socialPopulation ?? 0,
+      summary.householdCount,
+      summary.relationshipCount,
+      summary.foodBalance,
+      summary.foodPerAgent,
+      summary.foodSecurity,
+      summary.migrationRate,
+      summary.random?.value,
+    ];
+    const cultureValues = culture ? [
+      culture.beliefCount,
+      culture.transmissionRate,
+      culture.memoryStrength,
+      culture.innovationCount,
+      culture.lastChangeTick,
+      ...(culture.identity?.values ? Object.values(culture.identity.values) : [Number.NaN]),
+      ...(Array.isArray(culture.knowledge) ? culture.knowledge.flatMap((knowledge) => [knowledge.credibility, knowledge.transmissionCost, knowledge.forgettingRate, knowledge.originTick, knowledge.originYears]) : [Number.NaN]),
+    ] : [];
+    const societyValues = society ? [
+      society.organizationCapacity,
+      society.cohesion,
+      society.stability,
+      society.legitimacy,
+      society.military,
+      society.publicGoods,
+      society.tradeVolume,
+      society.conflictPressure,
+      society.infrastructureLevel,
+      society.lastChangeTick,
+      ...Object.values(society.organizationCounts ?? {}),
+    ] : [];
+    return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite);
+  });
+  return finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finiteWorldviews && finiteLod;
 };
 
 export const regionIdForCell = (x: number, y: number): RegionId =>

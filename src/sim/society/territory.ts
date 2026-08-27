@@ -213,7 +213,7 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
       const [roll] = randomFloat(forkRandom(state.random, `border:${organization.id}:${peer.id}:${target.regionId}:${state.tick}`));
       if (roll >= probability) continue;
       const conflict = applyOrganizationConflict(organization, peer, state.tick);
-      delta.relationshipEffects.push(...conflict.relationshipEffects);
+      for (const relationshipEffect of conflict.relationshipEffects) delta.relationshipEffects.push(relationshipEffect);
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: withRelation(organization, peer, "rival") });
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: peer.id, value: withRelation(peer, organization, "rival") });
       delta.eventDrafts.push({

@@ -5,7 +5,8 @@ export { focusRegion, projectMicroRegion } from "./focus.ts";
 export { summarizeLineage } from "./lineage.ts";
 export { projectRegion } from "./expand.ts";
 export { promoteRegion } from "./promote.ts";
-export { aggregatePopulationForRegion, refreshAggregateSummary, summarizeRegion, summarizeRegionState } from "./summarize.ts";
+export { aggregatePopulationForRegion, refreshAggregateSummary, refreshAggregateSummaryWithEvents, summarizeRegion, summarizeRegionState } from "./summarize.ts";
+export { evolveAggregateRegion, initialAggregateCulture, initialAggregateSociety, organizationSummariesForAggregate, socialPotentialForRegion, socialPopulationForRegion, MAX_AGGREGATE_COUNTER, MAX_AGGREGATE_ORGANIZATIONS } from "./aggregate.ts";
 export { stepLod } from "./step.ts";
 
 export const lodStage: SimulationStage = {
