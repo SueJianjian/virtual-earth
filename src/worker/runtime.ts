@@ -1,5 +1,5 @@
 import { stepWorld, metricsFor } from "../sim/engine.ts";
-import { focusRegion, summarizeRegionState } from "../sim/lod/index.ts";
+import { aggregatePopulationForRegion, focusRegion, summarizeRegionState } from "../sim/lod/index.ts";
 import { deserializeWorld, serializeWorld } from "../persistence/serialize.ts";
 import { createWorld, worldDigest } from "../sim/world.ts";
 import { foodSecurityFromBalance } from "../sim/agents/food.ts";
@@ -32,7 +32,10 @@ const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
   for (const agent of state.agents) agentCounts.set(agent.regionId, (agentCounts.get(agent.regionId) ?? 0) + 1);
   const populationCounts = new Map<string, number>();
   for (const population of state.populations) populationCounts.set(population.regionId, (populationCounts.get(population.regionId) ?? 0) + population.count);
-  const summaryCounts = new Map<string, number>(state.lod.summaries.map((summary): [string, number] => [summary.regionId, summary.population]));
+  const summaryCounts = new Map<string, number>(state.lod.summaries.map((summary): [string, number] => [
+    summary.regionId,
+    summary.mode === "aggregate" ? aggregatePopulationForRegion(state, summary.regionId, summary.population) : summary.population,
+  ]));
   const result: Record<string, number> = {};
   for (let y = 0; y < state.fields.elevation.height; y += 1) {
     for (let x = 0; x < state.fields.elevation.width; x += 1) {
@@ -350,7 +353,8 @@ export type SimulationRuntime = {
 };
 
 export const createSimulationRuntime = (initial: WorldState = createWorld(1, { enabledPackIds: [...DEFAULT_WORLDVIEW_PACK_IDS] })): SimulationRuntime => {
-  let state = structuredClone(initial);
+  const initialState = structuredClone(initial);
+  let state = structuredClone(initialState);
   let paused = true;
   let speed: 1 | 4 | 16 | 64 = 1;
   let digest = worldDigest(state);
@@ -393,11 +397,13 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
         const foodBalance = state.resources
           .filter((resource) => resource.resourceId === "food" && resource.regionId === storedSummary.regionId)
           .reduce((sum, resource) => sum + resource.amount, 0);
+        const population = aggregatePopulationForRegion(state, storedSummary.regionId, storedSummary.population);
         return {
           ...storedSummary,
+          population,
           foodBalance,
-          foodPerAgent: foodBalance / Math.max(1, storedSummary.population),
-          foodSecurity: foodSecurityFromBalance(foodBalance, storedSummary.population),
+          foodPerAgent: foodBalance / Math.max(1, population),
+          foodSecurity: foodSecurityFromBalance(foodBalance, population),
           resources: structuredClone(state.resources.filter((resource) => resource.regionId === storedSummary.regionId)),
         };
       })()
@@ -461,6 +467,13 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
     try {
       if (command.type === "start") { paused = false; return messages(); }
       if (command.type === "pause") { paused = true; return messages(); }
+      if (command.type === "reset") {
+        state = structuredClone(initialState);
+        digest = worldDigest(state);
+        resetStepDiagnostics();
+        paused = true;
+        return messages();
+      }
       if (command.type === "setSpeed") { speed = command.multiplier; return messages(); }
       if (command.type === "step") {
         const count = Math.max(1, Math.min(10_000, Math.trunc(command.count)));

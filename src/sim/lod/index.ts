@@ -5,7 +5,7 @@ export { focusRegion, projectMicroRegion } from "./focus.ts";
 export { summarizeLineage } from "./lineage.ts";
 export { projectRegion } from "./expand.ts";
 export { promoteRegion } from "./promote.ts";
-export { summarizeRegion, summarizeRegionState } from "./summarize.ts";
+export { aggregatePopulationForRegion, refreshAggregateSummary, summarizeRegion, summarizeRegionState } from "./summarize.ts";
 export { stepLod } from "./step.ts";
 
 export const lodStage: SimulationStage = {
@@ -17,5 +17,6 @@ export const lodStage: SimulationStage = {
     priorDeltas.get("culture") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
     priorDeltas.get("society") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
     priorDeltas.get("agents") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
+    priorDeltas.get("ecology") ?? { fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] },
   ),
 };

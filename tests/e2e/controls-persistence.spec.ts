@@ -35,4 +35,7 @@ test("keeps controls, causal events, and save/load state consistent", async ({ p
   await page.locator("#world-map").click({ position: { x: 120, y: 100 } });
   await expect(page.locator("#inspector")).toContainText("region:");
   await expect(page.locator("#digest-label")).toHaveText(beforeFocus ?? initialDigest ?? "");
+  await page.locator("#reset-button").click();
+  await expect(page.locator("#simulation-status")).toContainText("暂停");
+  await expect(page.locator("#world-year")).toHaveText("0 年 0 天");
 });

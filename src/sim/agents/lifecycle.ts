@@ -231,6 +231,9 @@ export const stepAgents = (
   const deadIds = new Set<EntityId>();
   const foodIndex = createFoodBalanceIndex(state);
   const facilityEffects = facilityEffectProfilesForState(state);
+  const aggregateRegions = new Set(state.lod.summaries
+    .filter((summary) => summary.mode === "aggregate")
+    .map((summary) => summary.regionId));
   const deathRolls: number[] = [];
   const deathContexts: Array<{ foodSecurity: number; hungerRisk: number; oldAgeRisk: number }> = [];
   const movedPopulations = new Map<string, string>();
@@ -297,6 +300,7 @@ export const stepAgents = (
   }
 
   for (const population of state.populations) {
+    if (aggregateRegions.has(population.regionId)) continue;
     const species = speciesById.get(population.speciesId);
     if (!species) continue;
     const index = state.fields.elevation.values.length === 0

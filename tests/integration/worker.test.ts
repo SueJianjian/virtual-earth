@@ -51,6 +51,24 @@ describe("simulation worker runtime", () => {
     expect(runtime.dispatch({ type: "setSpeed", multiplier: 4 })[0]).toMatchObject({ type: "snapshot", speed: 4 });
   });
 
+  it("resets to the initial seed state and clears runtime diagnostics", () => {
+    const initial = createWorld(148, { width: 8, height: 8 });
+    const runtime = createSimulationRuntime(initial);
+    const initialDigest = worldDigest(initial);
+    runtime.dispatch({ type: "step", count: 3 });
+    runtime.dispatch({ type: "start" });
+
+    const messages = runtime.dispatch({ type: "reset" });
+    const snapshot = messages.find((message) => message.type === "snapshot");
+
+    expect(runtime.isPaused()).toBe(true);
+    expect(worldDigest(runtime.getState())).toBe(initialDigest);
+    expect(runtime.getState().tick).toBe(0);
+    expect(runtime.getState().years).toBe(0);
+    expect(snapshot).toMatchObject({ type: "snapshot", paused: true, speed: 1 });
+    if (snapshot?.type === "snapshot") expect(snapshot.snapshot.runtime).toMatchObject({ measuredSteps: 0, hotEventCount: 0, archivedEventCount: 0 });
+  });
+
   it("pauses after a simulation failure and preserves the last valid world", () => {
     const runtime = createSimulationRuntime(createWorld(135, { width: 8, height: 8 }));
     const before = worldDigest(runtime.getState());

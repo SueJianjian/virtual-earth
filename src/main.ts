@@ -28,6 +28,7 @@ app.innerHTML = `
         <button id="play-button" class="icon-button primary" type="button" title="开始模拟" aria-label="开始模拟">▶</button>
         <button id="pause-button" class="icon-button" type="button" title="暂停模拟" aria-label="暂停模拟">Ⅱ</button>
         <button id="step-button" class="icon-button" type="button" title="单步推进" aria-label="单步推进">›</button>
+        <button id="reset-button" class="icon-button" type="button" title="重置世界" aria-label="重置世界">↺</button>
       </div>
       <div class="speed-control" aria-label="模拟速度">
         ${([1, 4, 16, 64] as const).map((speed, index) => `<button type="button" data-speed="${speed}" class="speed-button${index === 0 ? " active" : ""}">${speed}×</button>`).join("")}

@@ -3,6 +3,7 @@ import type { CultureIdentity, FacilityStatus, OrganizationState, OrganizationTy
 export type WorkerCommand =
   | { type: "start" }
   | { type: "pause" }
+  | { type: "reset" }
   | { type: "step"; count: number }
   | { type: "setSpeed"; multiplier: 1 | 4 | 16 | 64 }
   | { type: "applyEvent"; event: WorldEventInput }

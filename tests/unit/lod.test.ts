@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { createAgent } from "../../src/sim/agents/index.ts";
+import { createAgent, stepAgents } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { focusRegion, projectRegion, promoteRegion, stepLod, summarizeRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
@@ -151,6 +151,55 @@ describe("conserved multi-scale state", () => {
     expect(delta.eventDrafts[0]?.kind).toBe("region-promoted");
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "create")).toHaveLength(summary.population);
     expect(delta.lodEffects?.[0]?.operation === "upsert-summary" && delta.lodEffects[0].summary.mode).toBe("micro");
+  });
+
+  it("refreshes quiet aggregate regions from ecological populations without recreating agents", () => {
+    const state = populatedWorld();
+    const aggregate = summarizeRegionState(state, region, "aggregate");
+    state.lod.summaries = [{ ...aggregate, mode: "aggregate" }];
+    state.agents = [];
+    state.relationships = [];
+    state.organizations = [];
+    state.populations[0]!.count = 32;
+    state.resources = [{ id: "resource:food:aggregate", resourceId: "food", regionId: region, amount: 8, cap: 16, originEventId: "event:food" }];
+
+    const empty = emptyDelta();
+    const delta = stepLod(state, { elapsedYears: 1, externalEvents: [] }, empty, empty, empty);
+    const refreshed = delta.lodEffects?.[0];
+
+    expect(refreshed?.operation).toBe("upsert-summary");
+    if (refreshed?.operation === "upsert-summary") {
+      expect(refreshed.summary.mode).toBe("aggregate");
+      expect(refreshed.summary.population).toBe(32);
+      expect(refreshed.summary.foodBalance).toBe(8);
+      expect(refreshed.summary.foodPerAgent).toBe(0.25);
+      expect(refreshed.summary.foodSecurity).toBe(0.5);
+      expect(refreshed.summary.version).toBe(state.tick);
+    }
+    expect(delta.entityEffects.filter((effect) => effect.collection === "agents")).toHaveLength(0);
+    expect(stepAgents(state, empty, 1).entityEffects.filter((effect) => effect.collection === "agents")).toHaveLength(0);
+  });
+
+  it("clears aggregate population when the last ecological record leaves the region", () => {
+    const state = populatedWorld();
+    const aggregate = summarizeRegionState(state, region, "aggregate");
+    state.lod.summaries = [{ ...aggregate, mode: "aggregate" }];
+    state.agents = [];
+    state.relationships = [];
+    state.organizations = [];
+
+    const delta = stepLod(
+      state,
+      { elapsedYears: 1, externalEvents: [] },
+      emptyDelta(),
+      emptyDelta(),
+      emptyDelta(),
+      { ...emptyDelta(), entityEffects: [{ collection: "populations", operation: "remove", id: state.populations[0]!.id }] },
+    );
+    const refreshed = delta.lodEffects?.[0];
+
+    expect(refreshed?.operation).toBe("upsert-summary");
+    if (refreshed?.operation === "upsert-summary") expect(refreshed.summary.population).toBe(0);
   });
 
   it("keeps population and relationship counts stable across explicit summarize and promote", () => {

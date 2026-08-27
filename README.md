@@ -17,8 +17,8 @@ npm run dev -- --host 127.0.0.1
 Open the URL printed by Vite. The browser communicates with the simulation
 through a Web Worker and starts autonomous evolution after the first snapshot.
 Controls submit commands or external events; they do not mutate authoritative
-state directly. Pause the simulation before inspecting a fixed instant or use
-single-step to advance it explicitly.
+state directly. Pause the simulation before inspecting a fixed instant, use
+single-step to advance it explicitly, or reset to the original seed state.
 
 ## Verify
 
@@ -124,7 +124,10 @@ last valid authoritative state for inspection.
   vacancies that local organizations refill, while active workers accumulate
   profession skill and an auditable workplace memory.
 - LOD summaries preserve region resources, organization history, source agent
-  IDs and relationship records for deterministic read-only projections.
+  IDs and relationship records for deterministic read-only projections. Quiet
+  aggregate regions continue to refresh population, food and migration
+  statistics from authoritative records without recreating detailed agents;
+  natural hotspots can still promote a region back to a detailed projection.
 - The region inspector exposes household lineages, generation depth, kinship
   composition and descendant knowledge or belief carriers in both live micro
   projections and conserved aggregate summaries.
