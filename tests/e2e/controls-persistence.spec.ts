@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("keeps controls, causal events, and save/load state consistent", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#pause-button").click();
   await expect(page.locator("#simulation-status")).toContainText("暂停");
 
   const initialDigest = await page.locator("#digest-label").textContent();

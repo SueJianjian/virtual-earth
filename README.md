@@ -15,8 +15,10 @@ npm run dev -- --host 127.0.0.1
 ```
 
 Open the URL printed by Vite. The browser communicates with the simulation
-through a Web Worker. Controls submit commands or external events; they do not
-mutate authoritative state directly.
+through a Web Worker and starts autonomous evolution after the first snapshot.
+Controls submit commands or external events; they do not mutate authoritative
+state directly. Pause the simulation before inspecting a fixed instant or use
+single-step to advance it explicitly.
 
 ## Verify
 

@@ -10,6 +10,8 @@ import { serializeWorld } from "../../src/persistence/serialize.ts";
 test("renders a non-empty world map and interactive observation panels", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "虚拟地球" })).toBeVisible();
+  await expect(page.locator("#simulation-status")).toHaveAttribute("data-state", "running");
+  await page.locator("#pause-button").click();
   await expect(page.locator("#simulation-status")).toContainText("暂停");
   await expect(page.locator("#status-panel")).toContainText("世界年龄");
   await expect(page.locator("#status-panel")).toContainText("模型均温");
@@ -128,6 +130,7 @@ test("renders a non-empty world map and interactive observation panels", async (
 test("keeps the map and panels usable on a narrow viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await page.locator("#pause-button").click();
   await expect(page.locator("#world-map")).toBeVisible();
   await expect(page.locator(".right-rail")).toBeVisible();
   await expect(page.locator("#simulation-status")).toHaveAttribute("data-state", "paused");

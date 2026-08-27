@@ -250,4 +250,4 @@ const applyMessage = (message: WorkerMessage): void => {
 };
 
 client.subscribe(applyMessage);
-client.send({ type: "pause" });
+client.send({ type: "start" });
