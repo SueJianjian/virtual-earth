@@ -3,6 +3,11 @@ import { calculateClimate } from "./climate.ts";
 import { simulateWater } from "./hydrology.ts";
 import { initializeTerrainWater } from "./terrain.ts";
 import { calculateGeology } from "./geology.ts";
+import { stepPlanetFormation } from "./formation.ts";
+import { stepSubstances } from "./substances.ts";
+import { applyNaturalHazardWaterEffects, naturalHazardDelta } from "./hazards.ts";
+import { OCEAN_MILESTONE_THRESHOLD, PREBIOTIC_ORGANICS_THRESHOLD } from "./thresholds.ts";
+import { technologyProfilesForState } from "../culture/technology.ts";
 import type {
   EnvironmentDelta,
   EnvironmentInput,
@@ -23,6 +28,61 @@ const emptyDelta = (): EnvironmentDelta => ({
 const isEmpty = (values: Float32Array): boolean =>
   values.every((value) => value <= 0);
 
+const average = (values: Float32Array): number => {
+  if (values.length === 0) return 0;
+  let total = 0;
+  for (const value of values) total += value;
+  return total / values.length;
+};
+
+const fractionAtLeast = (values: Float32Array, threshold: number): number => {
+  if (values.length === 0) return 0;
+  let count = 0;
+  for (const value of values) if (value >= threshold) count += 1;
+  return count / values.length;
+};
+
+
+const addEnvironmentalMilestones = (
+  state: WorldState,
+  delta: EnvironmentDelta,
+  nextWater: Float32Array,
+  nextChemistry: WorldState["chemistry"],
+  elapsedYears: number,
+): void => {
+  const beforeOcean = fractionAtLeast(state.fields.water.values, 0.5);
+  const afterOcean = fractionAtLeast(nextWater, 0.5);
+  const eventYears = state.years + Math.max(0, elapsedYears);
+  if (beforeOcean < OCEAN_MILESTONE_THRESHOLD && afterOcean >= OCEAN_MILESTONE_THRESHOLD) {
+    delta.eventDrafts.push({
+      kind: "ocean-formation",
+      ruleId: "environment:ocean-condensation",
+      years: eventYears,
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: { oceanCoverage: afterOcean, waterCoverage: average(nextWater) },
+      payload: { name: "稳定海洋形成", threshold: OCEAN_MILESTONE_THRESHOLD },
+      source: "natural",
+    });
+  }
+  const beforeOrganics = average(state.chemistry.organics.values);
+  const afterOrganics = average(nextChemistry.organics.values);
+  if (beforeOrganics < PREBIOTIC_ORGANICS_THRESHOLD && afterOrganics >= PREBIOTIC_ORGANICS_THRESHOLD) {
+    delta.eventDrafts.push({
+      kind: "prebiotic-chemistry",
+      ruleId: "environment:prebiotic-organics",
+      years: eventYears,
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: { organics: afterOrganics, oceanCoverage: afterOcean },
+      payload: { name: "前生物有机化学建立", threshold: PREBIOTIC_ORGANICS_THRESHOLD },
+      source: "natural",
+    });
+  }
+};
+
 const terrainNutrients = (state: WorldState): Float32Array => {
   const nutrients = new Float32Array(state.fields.elevation.values.length);
   for (let index = 0; index < nutrients.length; index += 1) {
@@ -35,7 +95,7 @@ const terrainNutrients = (state: WorldState): Float32Array => {
 };
 
 const activeUserEvents = (state: WorldState, incoming: WorldEvent[]): WorldEvent[] => {
-  const events = [...state.events, ...incoming];
+  const events = incoming.length > 0 ? [...state.events, ...incoming] : state.events;
   const seen = new Set<string>();
   return events.filter((event) => {
     if (seen.has(event.id)) return false;
@@ -64,11 +124,24 @@ export const stepEnvironment = (
   state: WorldState,
   input: EnvironmentInput,
 ): EnvironmentDelta => {
-  const delta = emptyDelta();
   const activeEvents = activeUserEvents(state, input.externalEvents);
-  const isBlankStart = state.tick === 0 && isEmpty(state.fields.water.values);
-  const needsNutrients = state.tick === 0 && isEmpty(state.fields.nutrients.values);
-  const workingState = structuredClone(state);
+  if (state.formation.phase !== "stable-crust") return stepPlanetFormation(state, { ...input, externalEvents: activeEvents });
+  const delta = emptyDelta();
+  const elapsedYears = Math.max(0, input.elapsedYears ?? 1);
+  const isBlankStart = isEmpty(state.fields.water.values);
+  const needsNutrients = isEmpty(state.fields.nutrients.values);
+  // Only the fields recalculated below need writable copies. Cloning the full
+  // world here also cloned the entire historical event ledger every year.
+  const workingState = {
+    ...state,
+    fields: {
+      ...state.fields,
+      water: { ...state.fields.water, values: new Float32Array(state.fields.water.values) },
+      temperature: { ...state.fields.temperature, values: new Float32Array(state.fields.temperature.values) },
+      humidity: { ...state.fields.humidity, values: new Float32Array(state.fields.humidity.values) },
+      nutrients: { ...state.fields.nutrients, values: new Float32Array(state.fields.nutrients.values) },
+    },
+  } as WorldState;
   if (isBlankStart) {
     workingState.fields.water.values.set(initializeTerrainWater(workingState));
   }
@@ -78,7 +151,12 @@ export const stepEnvironment = (
   const climate = calculateClimate(workingState, input.solarFlux);
   workingState.fields.temperature.values.set(climate.temperature);
   workingState.fields.humidity.values.set(climate.humidity);
-  const water = simulateWater(workingState, activeEvents);
+  const hazardResult = naturalHazardDelta(workingState, elapsedYears);
+  const water = applyNaturalHazardWaterEffects(
+    workingState,
+    simulateWater(workingState, activeEvents, elapsedYears),
+    hazardResult.hazards,
+  );
   for (let index = 0; index < water.length; index += 1) {
     delta.fieldChanges.push(
       { field: "temperature", index, operation: "set", value: climate.temperature[index] ?? 0, causeRuleId: "climate-field" },
@@ -95,8 +173,28 @@ export const stepEnvironment = (
       });
     }
   }
-  delta.chemistryChanges = calculateChemistry(workingState);
-  delta.fieldChanges.push(...calculateGeology(workingState));
+  delta.chemistryChanges = calculateChemistry(workingState, elapsedYears);
+  delta.fieldChanges.push(...hazardResult.delta.fieldChanges);
+  delta.chemistryChanges.push(...hazardResult.delta.chemistryChanges);
+  delta.eventDrafts.push(...hazardResult.delta.eventDrafts);
+  const technologyByRegion = technologyProfilesForState(state);
+  for (let index = 0; index < state.fields.elevation.values.length; index += 1) {
+    const x = index % state.fields.elevation.width;
+    const y = Math.floor(index / state.fields.elevation.width);
+    const technology = technologyByRegion.get(`region:${x}:${y}` as WorldState["cultures"][number]["regionId"]);
+    if (!technology) continue;
+    const organics = state.chemistry.organics.values[index] ?? 0;
+    const conversion = Math.min(0.0015, organics * technology.energy * 0.004) * elapsedYears;
+    if (conversion <= 0.000001) continue;
+    delta.chemistryChanges.push(
+      { field: "organics", index, operation: "add", value: -conversion, causeRuleId: "culture:energy-conversion" },
+      { field: "carbon", index, operation: "add", value: conversion * 0.18, causeRuleId: "culture:energy-conversion" },
+      { field: "oxygen", index, operation: "add", value: conversion * 0.06, causeRuleId: "culture:energy-conversion" },
+    );
+  }
+  const nextChemistry = applyChemistryChanges(workingState, delta.chemistryChanges);
+  addEnvironmentalMilestones(state, delta, water, nextChemistry, elapsedYears);
+  delta.fieldChanges.push(...calculateGeology(workingState, elapsedYears));
   const width = state.fields.elevation.width;
   for (const event of activeEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
@@ -115,6 +213,16 @@ export const stepEnvironment = (
     else if (event.kind === "add-minerals" || event.kind === "earthquake") addField("nutrients", intensity * 0.2);
     else if (event.kind === "add-organics" || event.kind === "seed-life") addChemistry("organics", intensity * 0.2);
   }
+  const substanceDelta = stepSubstances({
+    ...workingState,
+    fields: {
+      ...workingState.fields,
+      water: { ...workingState.fields.water, values: water },
+    },
+    chemistry: nextChemistry,
+  }, elapsedYears);
+  delta.entityEffects.push(...substanceDelta.entityEffects);
+  delta.eventDrafts.push(...substanceDelta.eventDrafts);
   return delta;
 };
 
@@ -135,3 +243,7 @@ export const applyEnvironmentDelta = (
 
 export { calculateChemistry, calculateClimate, initializeTerrainWater, simulateWater };
 export { calculateGeology } from "./geology.ts";
+export { applyNaturalHazardWaterEffects, naturalHazardDelta, naturalHazardsFor, MAX_NATURAL_HAZARDS_PER_STEP, type NaturalHazard, type NaturalHazardKind } from "./hazards.ts";
+export { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceEffectProfilesForState } from "./substances.ts";
+export { ABIOGENESIS_WATER_THRESHOLD, OCEAN_MILESTONE_THRESHOLD, PREBIOTIC_ORGANICS_THRESHOLD } from "./thresholds.ts";
+export { completedPlanetFormationState, createPlanetFormationState, formationPhaseForProgress, formedElevation, FORMATION_DURATION_DAYS, primordialDustElevation, stepPlanetFormation } from "./formation.ts";

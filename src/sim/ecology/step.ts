@@ -1,7 +1,10 @@
 import { forkRandom, hashString, randomFloat } from "../random.ts";
-import { attemptAbiogenesis, attemptTrophicSpecies } from "./species.ts";
-import { foodSecurityForRegion } from "../agents/food.ts";
+import { attemptAbiogenesis, attemptAdaptiveSpeciation, attemptTrophicSpecies } from "./species.ts";
+import { foodSecurityFromBalance } from "../agents/food.ts";
+import { technologyProfilesForState } from "../culture/technology.ts";
+import { facilityEffectProfilesForState } from "../society/facilities.ts";
 import { nextPopulationCount, populationCellIndex, suitability } from "./populations.ts";
+import { MAX_POPULATION_RECORDS } from "./archive.ts";
 import type {
   EcologyDelta,
   RuleContext,
@@ -36,37 +39,78 @@ const mergeDelta = (target: WorldDelta, source: WorldDelta): void => {
   target.eventDrafts.push(...source.eventDrafts);
 };
 
-const neighborRegion = (regionId: string, width: number, height: number): string | undefined => {
-  const match = /^region:(\d+):(\d+)$/.exec(regionId);
-  if (!match) return undefined;
-  const x = Number(match[1] ?? 0);
-  const y = Number(match[2] ?? 0);
-  if (x + 1 < width) return `region:${x + 1}:${y}`;
-  if (x > 0) return `region:${x - 1}:${y}`;
-  if (y + 1 < height) return `region:${x}:${y + 1}`;
-  return y > 0 ? `region:${x}:${y - 1}` : undefined;
-};
-
 const neighborRegions = (regionId: string, width: number, height: number): string[] => {
   const match = /^region:(\d+):(\d+)$/.exec(regionId);
   if (!match) return [];
   const x = Number(match[1] ?? 0);
   const y = Number(match[2] ?? 0);
-  return [
-    x + 1 < width ? `region:${x + 1}:${y}` : undefined,
-    x > 0 ? `region:${x - 1}:${y}` : undefined,
+  return [...new Set([
+    width > 1 ? `region:${(x + 1) % width}:${y}` : undefined,
+    width > 1 ? `region:${(x + width - 1) % width}:${y}` : undefined,
     y + 1 < height ? `region:${x}:${y + 1}` : undefined,
     y > 0 ? `region:${x}:${y - 1}` : undefined,
-  ].filter((candidate): candidate is string => Boolean(candidate));
-};
-
-const cellIndexForRegion = (regionId: string, width: number): number => {
-  const match = /^region:(\d+):(\d+)$/.exec(regionId);
-  return match ? Number(match[2] ?? 0) * width + Number(match[1] ?? 0) : 0;
+  ].filter((candidate): candidate is string => Boolean(candidate)))];
 };
 
 export const stepEcology = (state: WorldState, context: RuleContext): EcologyDelta => {
   const delta = emptyDelta();
+  const width = state.fields.elevation.width;
+  const height = state.fields.elevation.height;
+  const fallbackTemperature = mean(state.fields.temperature.values);
+  const fallbackHumidity = mean(state.fields.humidity.values);
+  const regionIndexCache = new Map<string, number>();
+  const neighborCache = new Map<string, string[]>();
+  const suitabilityCache = new Map<string, number>();
+  const regionIndexFor = (regionId: string): number => {
+    const cached = regionIndexCache.get(regionId);
+    if (cached !== undefined) return cached;
+    const match = /^(?:region:)(\d+):(\d+)$/.exec(regionId);
+    if (!match) {
+      regionIndexCache.set(regionId, 0);
+      return 0;
+    }
+    const x = Math.max(0, Math.min(width - 1, Number(match[1] ?? 0)));
+    const y = Math.max(0, Math.min(height - 1, Number(match[2] ?? 0)));
+    const index = y * width + x;
+    regionIndexCache.set(regionId, index);
+    return index;
+  };
+  const neighborsFor = (regionId: string): string[] => {
+    const cached = neighborCache.get(regionId);
+    if (cached) return cached;
+    const neighbors = neighborRegions(regionId, width, height);
+    neighborCache.set(regionId, neighbors);
+    return neighbors;
+  };
+  const suitabilityFor = (species: WorldState["species"][number], regionId: string): number => {
+    const key = `${species.id}|${regionId}`;
+    const cached = suitabilityCache.get(key);
+    if (cached !== undefined) return cached;
+    const index = regionIndexFor(regionId);
+    const value = suitability(
+      species,
+      state.fields.temperature.values[index] ?? fallbackTemperature,
+      state.fields.humidity.values[index] ?? fallbackHumidity,
+    );
+    suitabilityCache.set(key, value);
+    return value;
+  };
+  const facilityEffects = facilityEffectProfilesForState(state);
+  const technologyProfiles = technologyProfilesForState(state);
+  const speciesById = new Map(state.species.map((species) => [species.id, species]));
+  const occupiedPopulationRegions = new Set(state.populations.map((population) => `${population.speciesId}|${population.regionId}`));
+  const plannedPopulationRegions = new Set<string>();
+  const foodByRegion = new Map<string, number>();
+  for (const resource of state.resources) {
+    if (resource.resourceId !== "food") continue;
+    foodByRegion.set(resource.regionId, (foodByRegion.get(resource.regionId) ?? 0) + resource.amount);
+  }
+  const regionalDescendants = new Set<string>();
+  for (const population of state.populations) {
+    if (population.count < 1) continue;
+    const parentId = speciesById.get(population.speciesId)?.parentId;
+    if (parentId) regionalDescendants.add(`${parentId}|${population.regionId}`);
+  }
   for (let index = 0; index < state.fields.biomass.values.length; index += 1) {
     const biomass = state.fields.biomass.values[index] ?? 0;
     if (biomass > 0) {
@@ -82,25 +126,47 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     populationCount: state.populations.reduce((sum, population) => sum + population.count, 0),
   };
   const ruleContext: RuleContext = { ...context, metrics };
-  if (state.species.length === 0 || !state.species.some((species) => species.role === "producer")) {
+  const livingSpeciesForRole = (role: "producer" | "consumer" | "decomposer") => {
+    const speciesIds = new Set(state.species.filter((species) => species.role === role).map((species) => species.id));
+    const minimumViableCount = role === "producer" ? 1 : 4;
+    const livingIds = new Set(state.populations.filter((population) => speciesIds.has(population.speciesId) && population.count >= minimumViableCount).map((population) => population.speciesId));
+    return state.species.filter((species) => livingIds.has(species.id));
+  };
+  if (livingSpeciesForRole("producer").length === 0) {
     mergeDelta(delta, attemptAbiogenesis(ruleContext).delta);
   }
 
   const producerPopulations = state.populations.filter((population) =>
-    state.species.find((species) => species.id === population.speciesId)?.role === "producer",
+    speciesById.get(population.speciesId)?.role === "producer",
   );
   const producerFood = producerPopulations.reduce((sum, population) => sum + population.count, 0) /
     Math.max(1, producerPopulations.length);
-  if (!state.species.some((species) => species.role === "consumer")) {
+  if (livingSpeciesForRole("consumer").length < 2) {
     mergeDelta(delta, attemptTrophicSpecies(ruleContext, "consumer", producerFood).delta);
   }
-  if (!state.species.some((species) => species.role === "decomposer")) {
+  if (livingSpeciesForRole("decomposer").length < 1) {
     mergeDelta(delta, attemptTrophicSpecies(ruleContext, "decomposer", producerFood * 0.7).delta);
   }
 
+  const plannedSpeciesCount = new Map([
+    ["producer", state.species.filter((species) => species.role === "producer").length],
+    ["consumer", state.species.filter((species) => species.role === "consumer").length],
+    ["decomposer", state.species.filter((species) => species.role === "decomposer").length],
+  ] as const);
+  let speciationOccurred = false;
+
   for (const population of state.populations) {
-    const species = state.species.find((candidate) => candidate.id === population.speciesId);
+    const species = speciesById.get(population.speciesId);
     if (!species) continue;
+    const technology = technologyProfiles.get(population.regionId) ?? {
+      subsistence: 0,
+      construction: 0,
+      navigation: 0,
+      medicine: 0,
+      governance: 0,
+      energy: 0,
+    };
+    const facilities = facilityEffects.get(population.regionId);
     const index = populationCellIndex(population, state.fields.elevation.width, state.fields.elevation.height);
     const temperature = state.fields.temperature.values[index] ?? metrics.meanTemperature;
     const humidity = state.fields.humidity.values[index] ?? metrics.meanHumidity;
@@ -111,49 +177,74 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       : Math.min(1, producerFood * (species.role === "consumer" ? 0.2 : 0.12));
     const count = nextPopulationCount(population, species, suitabilityScore, food);
     let nextRegionId = population.regionId;
-    const candidateRegionId = neighborRegion(population.regionId, state.fields.elevation.width, state.fields.elevation.height);
-    if (suitabilityScore < 0.35 && candidateRegionId) {
-      const candidateMatch = /^region:(\d+):(\d+)$/.exec(candidateRegionId);
-      const candidateIndex = candidateMatch
-        ? Number(candidateMatch[2] ?? 0) * state.fields.elevation.width + Number(candidateMatch[1] ?? 0)
-        : index;
-      const candidateTemperature = state.fields.temperature.values[candidateIndex] ?? metrics.meanTemperature;
-      const candidateHumidity = state.fields.humidity.values[candidateIndex] ?? metrics.meanHumidity;
-      const candidateSuitability = suitability(species, candidateTemperature, candidateHumidity);
-      const originFoodSecurity = foodSecurityForRegion(state, population.regionId, population.count);
-      const destinationFoodSecurity = foodSecurityForRegion(state, candidateRegionId as typeof population.regionId, population.count);
-      const foodAdvantage = Math.max(0, destinationFoodSecurity - originFoodSecurity);
+    if (suitabilityScore < 0.35) {
+      const originFoodSecurity = foodSecurityFromBalance(foodByRegion.get(population.regionId) ?? 0, population.count);
+      const candidates = neighborsFor(population.regionId)
+        .map((regionId) => {
+          const candidateIndex = regionIndexFor(regionId);
+          const habitat = suitabilityFor(species, regionId);
+          const foodSecurity = foodSecurityFromBalance(foodByRegion.get(regionId) ?? 0, population.count);
+          const ecologicalResource = species.role === "producer"
+            ? state.fields.nutrients.values[candidateIndex] ?? 0
+            : state.fields.biomass.values[candidateIndex] ?? 0;
+          const foodAdvantage = Math.max(0, foodSecurity - originFoodSecurity);
+          const habitatAdvantage = habitat > suitabilityScore + 0.1;
+          const foodDriven = foodAdvantage > 0.1 && habitat >= suitabilityScore - 0.05;
+          return {
+            regionId,
+            habitat,
+            foodSecurity,
+            foodAdvantage,
+            ecologicalResource,
+            habitatAdvantage,
+            foodDriven,
+            score: habitat * 0.7 + foodSecurity * 0.2 + ecologicalResource * 0.1,
+          };
+        })
+        .filter((candidate) => candidate.habitatAdvantage || candidate.foodDriven)
+        .sort((left, right) => right.score - left.score || left.regionId.localeCompare(right.regionId));
+      const destination = candidates[0];
       const foodStress = Math.max(0, 0.5 - originFoodSecurity);
-      const migrationProbability = Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * 0.35 + foodAdvantage * 0.25 + foodStress * 0.1));
+      const migrationProbability = destination
+        ? Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * (0.35 + technology.navigation * 0.12 + (facilities?.navigation ?? 0) * 0.18) + destination.foodAdvantage * 0.25 + foodStress * 0.1))
+        : 0;
       const [roll] = randomFloat(forkRandom(state.random, `migration:${population.id}:${state.tick}`));
-      const habitatAdvantage = candidateSuitability > suitabilityScore + 0.1;
-      const foodDriven = foodAdvantage > 0.1 && candidateSuitability >= suitabilityScore - 0.05;
-      if ((habitatAdvantage || foodDriven) && roll < migrationProbability) {
-        nextRegionId = candidateRegionId as typeof population.regionId;
+      if (destination && roll < migrationProbability) {
+        nextRegionId = destination.regionId as typeof population.regionId;
         delta.eventDrafts.push({
           kind: "population-migration",
           ruleId: "ecology:local-migration",
           sourceIds: [population.id],
           probability: migrationProbability,
           roll,
-          evidence: { fromRegion: population.regionId, toRegion: candidateRegionId, suitability: suitabilityScore, destinationSuitability: candidateSuitability, mobility: species.traits.mobility ?? 0, originFoodSecurity, destinationFoodSecurity, foodAdvantage, foodDriven },
-          payload: { populationId: population.id, fromRegion: population.regionId, toRegion: candidateRegionId },
+          evidence: {
+            fromRegion: population.regionId,
+            toRegion: destination.regionId,
+            suitability: suitabilityScore,
+            destinationSuitability: destination.habitat,
+            destinationScore: destination.score,
+            mobility: species.traits.mobility ?? 0,
+            originFoodSecurity,
+            destinationFoodSecurity: destination.foodSecurity,
+            foodAdvantage: destination.foodAdvantage,
+            foodDriven: destination.foodDriven,
+          },
+          payload: { populationId: population.id, fromRegion: population.regionId, toRegion: destination.regionId },
           source: "natural",
         });
       }
     }
     let retainedCount = count;
-    if (nextRegionId === population.regionId && count >= 80 && (species.traits.mobility ?? 0) >= 0.25) {
-      const candidates = neighborRegions(population.regionId, state.fields.elevation.width, state.fields.elevation.height)
-        .filter((regionId) => !state.populations.some((candidate) => candidate.speciesId === population.speciesId && candidate.regionId === regionId)
-          && !delta.entityEffects.some((effect) => effect.collection === "populations" && effect.operation === "create" && effect.value?.speciesId === population.speciesId && effect.value.regionId === regionId))
+    if (nextRegionId === population.regionId
+      && count >= 80
+      && (species.traits.mobility ?? 0) >= 0.25
+      && state.populations.length + plannedPopulationRegions.size < MAX_POPULATION_RECORDS) {
+      const candidates = neighborsFor(population.regionId)
+        .filter((regionId) => !occupiedPopulationRegions.has(`${population.speciesId}|${regionId}`)
+          && !plannedPopulationRegions.has(`${population.speciesId}|${regionId}`))
         .map((regionId) => {
-          const candidateIndex = cellIndexForRegion(regionId, state.fields.elevation.width);
-          const habitat = suitability(
-            species,
-            state.fields.temperature.values[candidateIndex] ?? metrics.meanTemperature,
-            state.fields.humidity.values[candidateIndex] ?? metrics.meanHumidity,
-          );
+          const candidateIndex = regionIndexFor(regionId);
+          const habitat = suitabilityFor(species, regionId);
           const resources = species.role === "producer"
             ? state.fields.nutrients.values[candidateIndex] ?? 0
             : state.fields.biomass.values[candidateIndex] ?? 0;
@@ -174,6 +265,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
             id: branchId,
             value: { ...population, id: branchId, regionId: destination.regionId as typeof population.regionId, count: branchCount, energy: Math.max(0.1, population.energy * 0.72) },
           });
+          plannedPopulationRegions.add(`${population.speciesId}|${destination.regionId}`);
           delta.eventDrafts.push({
             kind: "population-dispersal",
             ruleId: "ecology:population-dispersal",
@@ -187,11 +279,36 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         }
       }
     }
+    if (!speciationOccurred && retainedCount >= 250) {
+      const adaptationIndex = regionIndexFor(nextRegionId);
+      const localTemperature = state.fields.temperature.values[adaptationIndex] ?? metrics.meanTemperature;
+      const localHumidity = state.fields.humidity.values[adaptationIndex] ?? metrics.meanHumidity;
+      const localSuitability = suitabilityFor(species, nextRegionId);
+      const outcome = attemptAdaptiveSpeciation(
+        ruleContext,
+        species,
+        { ...population, regionId: nextRegionId, count: retainedCount },
+        localTemperature,
+        localHumidity,
+        localSuitability,
+        plannedSpeciesCount.get(species.role) ?? 0,
+        regionalDescendants.has(`${species.id}|${nextRegionId}`),
+      );
+      if (outcome.status === "applied") {
+        const branchPopulation = outcome.delta.entityEffects.find((effect) => effect.collection === "populations" && effect.operation === "create");
+        const branchCount = branchPopulation?.collection === "populations" ? branchPopulation.value?.count ?? 0 : 0;
+        retainedCount = Math.max(0, retainedCount - branchCount);
+        plannedSpeciesCount.set(species.role, (plannedSpeciesCount.get(species.role) ?? 0) + 1);
+        speciationOccurred = true;
+        mergeDelta(delta, outcome.delta);
+      }
+    }
+    const minimumViableCount = species.role === "producer" ? 1 : 4;
     delta.entityEffects.push({
       collection: "populations",
-      operation: retainedCount <= 0.001 ? "remove" : "update",
+      operation: retainedCount < minimumViableCount ? "remove" : "update",
       id: population.id,
-      ...(retainedCount > 0.001 ? { value: { ...population, regionId: nextRegionId, count: retainedCount, energy: Math.max(0, population.energy + suitabilityScore * 0.02 - 0.01) } } : {}),
+      ...(retainedCount >= minimumViableCount ? { value: { ...population, regionId: nextRegionId, count: retainedCount, energy: Math.max(0, Math.min(1, population.energy + suitabilityScore * 0.02 - 0.01)) } } : {}),
     });
     if (species.role === "producer") {
       const primaryProduction = Math.min(0.02, count * 0.000001 * (0.5 + suitabilityScore) * (0.6 + nutrients * 0.4));
@@ -207,7 +324,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         { field: "carbon", index, operation: "add", value: -primaryProduction * 0.025, causeRuleId: "ecology:photosynthesis" },
         { field: "oxygen", index, operation: "add", value: primaryProduction * 0.032, causeRuleId: "ecology:photosynthesis" },
       );
-      const foodAmount = Math.max(0, Math.min(4, count * suitabilityScore * 0.002));
+      const foodAmount = Math.max(0, Math.min(4, count * suitabilityScore * 0.002 * (1 + technology.subsistence * 0.45 + (facilities?.subsistence ?? 0) * 0.65)));
       if (foodAmount > 0.001) {
         delta.resourceTransactions.push({
           id: `resource:food:production:${state.tick}:${population.id}`,

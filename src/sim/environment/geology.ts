@@ -21,10 +21,13 @@ const plateForcing = (state: WorldState, x: number, y: number): number => {
   return platePattern * pulse * 0.000004;
 };
 
-export const calculateGeology = (state: WorldState): FieldChange[] => {
-  if ((state.tick + 1) % 8 !== 0) return [];
+export const calculateGeology = (state: WorldState, elapsedYears = 1): FieldChange[] => {
+  const intervalYears = 8;
+  const completedIntervals = Math.floor((state.years + Math.max(0, elapsedYears) + Number.EPSILON) / intervalYears)
+    - Math.floor((state.years + Number.EPSILON) / intervalYears);
+  if (completedIntervals <= 0) return [];
   const { elevation, water, humidity, nutrients } = state.fields;
-  const elapsedYears = 8;
+  const geologicalYears = completedIntervals * intervalYears;
   const changes: FieldChange[] = [];
   for (let index = 0; index < elevation.values.length; index += 1) {
     const x = index % elevation.width;
@@ -38,12 +41,12 @@ export const calculateGeology = (state: WorldState): FieldChange[] => {
     const erosion = Math.max(0, relief) * wetness * 0.0008;
     const deposition = Math.max(0, -relief) * (water.values[index] ?? 0) * 0.00022;
     const tectonics = plateForcing(state, x, y);
-    const elevationDelta = (tectonics - erosion + deposition) * elapsedYears;
+    const elevationDelta = (tectonics - erosion + deposition) * geologicalYears;
     const nutrientDelta = Math.abs(erosion) * 1.4 + Math.max(0, deposition) * 0.35
       - (nutrients.values[index] ?? 0) * 0.000025;
     changes.push(
       { field: "elevation", index, operation: "add", value: elevationDelta, causeRuleId: "geology:tectonics-erosion" },
-      { field: "nutrients", index, operation: "add", value: nutrientDelta * elapsedYears, causeRuleId: "geology:mineral-cycle" },
+      { field: "nutrients", index, operation: "add", value: nutrientDelta * geologicalYears, causeRuleId: "geology:mineral-cycle" },
     );
   }
   return changes;

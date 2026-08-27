@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatCount, formatElevation, formatIndex, formatModelTemperature, formatPercent, formatRegionCoordinates, formatResource } from "../../src/ui/formatters.ts";
+import { formatCount, formatElevation, formatIndex, formatModelTemperature, formatPercent, formatRegionCoordinates, formatResource, formatSimulationAge } from "../../src/ui/formatters.ts";
 
 describe("observation metric formatters", () => {
+  it("formats simulation time with years and days", () => {
+    expect(formatSimulationAge(1 / 365)).toBe("0 年 1 天");
+    expect(formatSimulationAge(1 + 32 / 365)).toBe("1 年 32 天");
+  });
+
   it("formats zero, small percentages and normalized indices without false precision", () => {
     expect(formatPercent(0)).toEqual({ value: "0", unit: "%" });
     expect(formatPercent(0.0009)).toEqual({ value: "<0.1", unit: "%" });

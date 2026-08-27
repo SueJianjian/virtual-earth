@@ -15,6 +15,7 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
     const id = asEntityId(`agent:${hashString(`${summary.canonicalDigest}:${version}:${index}`).toString(16)}`);
     agents.push({
       id,
+      ...(sourceId ? { sourceId } : {}),
       populationId: asEntityId(`population:${summary.regionId}`),
       regionId: summary.regionId,
       age: source?.age ?? hashString(`${summary.canonicalDigest}:age:${index}`) % 60,
@@ -85,6 +86,8 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
       territoryRegionIds: [...summaryOrganization.territoryRegionIds],
       resources: Object.fromEntries(summaryOrganization.resourceIds.map((resourceId) => [resourceId, 0])),
       status: "active",
+      ...(summaryOrganization.governance ? { governance: { ...summaryOrganization.governance } } : {}),
+      ...(summaryOrganization.diplomacy ? { diplomacy: { ...summaryOrganization.diplomacy } } : {}),
     });
   }
   return { regionId: summary.regionId, sourceRevision: version, readOnly: true, generatedFromDigest: summary.canonicalDigest, agents, relationships, organizations };

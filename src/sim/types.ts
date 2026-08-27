@@ -3,9 +3,11 @@ export type OrganizationId = string & { readonly __organizationId: unique symbol
 export type RegionId = string & { readonly __regionId: unique symbol };
 
 export type RandomState = { value: number };
-export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[] };
+export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[]; formation?: "dust" | "formed" };
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
+export type KnowledgeDomain = "subsistence" | "construction" | "navigation" | "medicine" | "governance" | "energy";
+export type FacilityStatus = "planned" | "active" | "damaged" | "abandoned";
 export type OrganizationType =
   | "family"
   | "clan"
@@ -15,6 +17,7 @@ export type OrganizationType =
   | "state"
   | "federation"
   | "empire";
+export type DiplomaticStance = "neutral" | "trade" | "allied" | "rival";
 export type HotspotReason =
   | "user-focus"
   | "city"
@@ -31,6 +34,27 @@ export type FieldName =
   | "water"
   | "nutrients"
   | "biomass";
+
+export type PlanetFormationPhase =
+  | "dust-cloud"
+  | "planetesimals"
+  | "accretion"
+  | "differentiation"
+  | "cooling"
+  | "stable-crust";
+
+export type PlanetFormationState = {
+  phase: PlanetFormationPhase;
+  progress: number;
+  dustDensity: number;
+  bodyCount: number;
+  planetaryMass: number;
+  collisionEnergy: number;
+  coreFraction: number;
+  surfaceHeat: number;
+  atmosphere: number;
+  volatileFraction: number;
+};
 
 export type FieldChange = {
   field: FieldName;
@@ -53,6 +77,35 @@ export type ChemistryChange = {
   operation: "set" | "add";
   value: number;
   causeRuleId: string;
+};
+
+export type SubstanceKind = "mineral" | "crystal" | "organic-compound" | "engineered-composite";
+export type SubstanceFormation = "geological" | "hydrothermal" | "biochemical" | "engineered";
+export type SubstanceStatus = "latent" | "known";
+export type SubstanceProperties = {
+  hardness: number;
+  density: number;
+  reactivity: number;
+  conductivity: number;
+  energyPotential: number;
+  biologicalAffinity: number;
+  stability: number;
+};
+export type SubstanceState = {
+  id: string;
+  name: string;
+  kind: SubstanceKind;
+  formation: SubstanceFormation;
+  status: SubstanceStatus;
+  regionId: RegionId;
+  originTick: number;
+  originYears: number;
+  parentIds: string[];
+  composition: Record<ChemistryFieldName, number>;
+  properties: SubstanceProperties;
+  discoveredByIds: EntityId[];
+  discoveryTick?: number;
+  discoveryYears?: number;
 };
 
 export type RelationshipState = {
@@ -116,6 +169,18 @@ export type EntityEffect =
       value?: OrganizationState;
     }
   | {
+      collection: "facilities";
+      operation: "create" | "update" | "remove";
+      id: string;
+      value?: FacilityState;
+    }
+  | {
+      collection: "substances";
+      operation: "create" | "update" | "remove";
+      id: string;
+      value?: SubstanceState;
+    }
+  | {
       collection: "worldviewEntities";
       operation: "create" | "update" | "remove";
       id: EntityId;
@@ -149,6 +214,7 @@ export type ResourceTransaction = {
 export type WorldEventDraft = {
   kind: string;
   ruleId: string;
+  years?: number;
   position?: [number, number];
   sourceIds: string[];
   probability: number;
@@ -167,6 +233,7 @@ export type WorldDelta = {
   worldviewEffects: WorldviewEffect[];
   eventDrafts: WorldEventDraft[];
   lodEffects?: LodEffect[];
+  formationEffect?: PlanetFormationState;
 };
 
 export type StateMetric =
@@ -196,6 +263,8 @@ export type RuleContext = {
   state: Readonly<Omit<WorldState, "tick" | "years" | "observation">>;
   random: RandomState;
   metrics: Record<StateMetric, number>;
+  tick?: number;
+  years?: number;
   regionId?: RegionId;
 };
 
@@ -231,6 +300,7 @@ export type RuleOutcome<T = unknown, D extends Partial<WorldDelta> = WorldDelta>
 export type EnvironmentInput = {
   solarFlux: number;
   externalEvents: WorldEvent[];
+  elapsedYears?: number;
 };
 export type EnvironmentDelta = WorldDelta;
 export type EcologyDelta = WorldDelta;
@@ -254,6 +324,20 @@ export type AgentContext = RuleContext & { candidateIds: EntityId[] };
 export type SocietyContext = RuleContext & {
   regionId: RegionId;
   candidateMemberIds: EntityId[];
+  foodIndex?: FoodBalanceIndex;
+  eligibilityIndex?: SocietyEligibilityIndex;
+};
+export type FoodBalanceIndex = {
+  byEntry: ReadonlyMap<string, number>;
+  byRegion: ReadonlyMap<string, number>;
+  byAgent: ReadonlyMap<string, number>;
+};
+export type SocietyEligibilityIndex = {
+  agentsById: ReadonlyMap<string, AgentState>;
+  relationshipIdsByAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  activeOrganizations: ReadonlyArray<OrganizationState>;
+  activeOrganizationsByRegion: ReadonlyMap<string, ReadonlyArray<OrganizationState>>;
+  culturesByRegion: ReadonlyMap<string, CultureState>;
 };
 export type WorldviewContext = RuleContext & { enabledPackIds: string[] };
 export type MotifDefinition = { id: string; tags: string[]; predicates: StatePredicate[] };
@@ -301,7 +385,10 @@ export type OrganizationSummary = {
   childIds: OrganizationId[];
   resourceIds: string[];
   historyIds: string[];
+  archivedHistoryCount?: number;
   territoryRegionIds: RegionId[];
+  governance?: GovernanceState;
+  diplomacy?: Record<string, DiplomaticStance>;
 };
 export type RegionLineageSummary = {
   descendantCount: number;
@@ -339,6 +426,7 @@ export type RegionSummary = {
   resources: ResourceLedgerEntry[];
   migrationRate: number;
   historyIds: string[];
+  archivedHistoryCount?: number;
   random: RandomState;
   canonicalDigest: string;
 };
@@ -363,11 +451,49 @@ export type ObservationState = {
   projection?: RegionProjection;
 };
 
+export type LifeBiochemistry = "carbon-nitrogen" | "phosphorus-lattice" | "silicate-organic" | "metal-organic" | "crystal-colloid";
+export type GeneticCarrier = "double-ribbon" | "triple-ribbon" | "branched-polymer" | "vesicle-lattice" | "mineral-template";
+export type CellArchitecture = "membrane-cell" | "porous-cell" | "syncytial-web" | "crystal-cell" | "modular-colony";
+export type MetabolismMode = "radiant-harvesting" | "mineral-chemosynthesis" | "thermal-gradient" | "ingestive-predation" | "osmotic-parasitism" | "symbiotic-exchange" | "detrital-catalysis" | "mineral-recycling" | "anaerobic-fermentation";
+export type BodySymmetry = "bilateral" | "radial" | "spiral" | "fractal" | "asymmetric";
+export type BodyStructure = "membrane" | "segmented" | "shell" | "filament" | "network";
+export type LocomotionMode = "rooted" | "gliding" | "contractile" | "ciliary" | "jet" | "drifting";
+export type SensoryMode = "chemical-gradient" | "thermal-field" | "polarized-light" | "vibration" | "electric-field" | "pressure-wave";
+export type ReproductionMode = "fission" | "budding" | "spore-cycle" | "paired-fusion" | "brood-pod" | "colony-fragmentation";
+export type SpeciesBlueprint = {
+  biochemistry: LifeBiochemistry;
+  geneticCarrier: GeneticCarrier;
+  cellArchitecture: CellArchitecture;
+  metabolism: MetabolismMode;
+  bodyPlan: {
+    symmetry: BodySymmetry;
+    structure: BodyStructure;
+    locomotion: LocomotionMode;
+    appendagePairs: number;
+    colonial: boolean;
+  };
+  senses: SensoryMode[];
+  reproduction: ReproductionMode;
+  lifespanYears: number;
+  adultScale: number;
+  metabolicEfficiency: number;
+  fecundity: number;
+  thermalTolerance: number;
+  hydrationRetention: number;
+  mutationRate: number;
+  inheritanceFidelity: number;
+  noveltySignature: string;
+};
 export type SpeciesState = {
   id: EntityId;
+  name?: string;
   role: SpeciesRole;
   traits: Record<string, number>;
   parentId?: EntityId;
+  originRegionId?: RegionId;
+  originTick?: number;
+  originYears?: number;
+  blueprint?: SpeciesBlueprint;
 };
 export type PopulationState = {
   id: EntityId;
@@ -378,6 +504,7 @@ export type PopulationState = {
 };
 export type AgentState = {
   id: EntityId;
+  sourceId?: EntityId;
   populationId: EntityId;
   regionId: RegionId;
   age: number;
@@ -398,6 +525,36 @@ export type KnowledgeState = {
   credibility: number;
   transmissionCost: number;
   forgettingRate: number;
+  name?: string;
+  domain?: KnowledgeDomain;
+  originRegionId?: RegionId;
+  originTick?: number;
+  originYears?: number;
+  parentIds?: string[];
+};
+export type CultureLanguageFamily = "pulse-tonal" | "scent-glyph" | "gesture-lattice" | "resonant-vowel" | "light-pattern";
+export type CultureCommunicationStyle = "consensus" | "council" | "lineage" | "merit" | "ritual";
+export type CultureValues = {
+  cooperation: number;
+  reciprocity: number;
+  hierarchy: number;
+  curiosity: number;
+  tradition: number;
+  stewardship: number;
+};
+export type CultureIdentity = {
+  name: string;
+  languageFamily: CultureLanguageFamily;
+  communicationStyle: CultureCommunicationStyle;
+  values: CultureValues;
+  traditions: string[];
+  symbol: string;
+  originRegionId: RegionId;
+  originTick: number;
+  originYears: number;
+  generation: number;
+  noveltySignature: string;
+  parentCultureIds?: EntityId[];
 };
 export type CultureState = {
   id: EntityId;
@@ -405,6 +562,7 @@ export type CultureState = {
   knowledgeIds: string[];
   beliefIds: string[];
   transmissionRate: number;
+  identity?: CultureIdentity;
 };
 export type OrganizationState = {
   id: OrganizationId;
@@ -415,14 +573,65 @@ export type OrganizationState = {
   territoryRegionIds: RegionId[];
   resources: Record<string, number>;
   status: "active" | "migrating" | "fragmenting" | "collapsed";
+  archivedHistoryCount?: number;
+  governance?: GovernanceState;
+  diplomacy?: Record<string, DiplomaticStance>;
 };
+export type FacilityState = {
+  id: string;
+  type: KnowledgeDomain;
+  regionId: RegionId;
+  ownerOrganizationId: OrganizationId;
+  level: 1 | 2 | 3;
+  condition: number;
+  status: FacilityStatus;
+  workforceIds: EntityId[];
+  workforceRequired?: number;
+  workforceEfficiency?: number;
+  materialInvested: number;
+  plannedTick: number;
+  builtTick: number;
+  lastMaintainedTick: number;
+  lastIncidentTick: number;
+  lastInspectedEventTick?: number;
+  abandonedTick?: number;
+};
+export type GovernanceState = {
+  stability: number;
+  legitimacy: number;
+  military: number;
+  treasury: number;
+  publicGoods: number;
+  warWeariness: number;
+  taxRate: number;
+  taxRevenue: number;
+  cohesion: number;
+  lastConflictTick: number;
+};
+export type WorldviewEntityKind = "deity" | "sect" | "cultivation-path";
+export type WorldviewEntityStatus = "active" | "dormant";
 export type WorldviewEntityState = {
   id: EntityId;
   packId: string;
-  kind: string;
+  kind: WorldviewEntityKind;
+  name?: string;
   regionId: RegionId;
   influence: number;
   resourceBalances: Record<string, number>;
+  originTick?: number;
+  sourcePhenomenonId?: string;
+  founderId?: EntityId;
+  memberIds?: EntityId[];
+  sponsorOrganizationId?: OrganizationId;
+  status: WorldviewEntityStatus;
+  supporterCount?: number;
+  activePractitionerCount?: number;
+  sponsorCount?: number;
+  viability?: number;
+  lastStatusChangeTick?: number;
+  lastActiveTick?: number;
+  dormantSinceTick?: number;
+  revivalCount?: number;
 };
 export type WorldviewPhenomenonKind =
   | "natural-anomaly"
@@ -458,6 +667,7 @@ export type WorldviewPracticeState = {
   attempts: number;
   failures: number;
   status: WorldviewPracticeStatus;
+  organizationId?: OrganizationId;
 };
 export type WorldviewEffect =
   | {
@@ -478,10 +688,16 @@ export type WorldviewEffect =
   | {
       kind: "propose-entity";
       packId: string;
-      entityKind: "deity" | "sect" | "cultivation-path";
+      entityKind: WorldviewEntityKind;
+      name?: string;
       regionId: RegionId;
       evidence: Record<string, number | string | boolean>;
       probability: number;
+      influence?: number;
+      sourcePhenomenonId?: string;
+      founderId?: EntityId;
+      memberIds?: EntityId[];
+      sponsorOrganizationId?: OrganizationId;
     }
   | {
       kind: "record-phenomenon";
@@ -502,6 +718,8 @@ export type WorldviewEffect =
       regionId: RegionId;
       practitionerId: EntityId;
       teacherId?: EntityId;
+      organizationId?: OrganizationId;
+      resourceHolderId?: string;
       evidence: Record<string, number | string | boolean>;
     }
   | {
@@ -512,6 +730,11 @@ export type WorldviewEffect =
       energyGain: number;
       energySpent: number;
       attunementDelta: number;
+      resourceId?: string;
+      resourceHolderId?: string;
+      resourceMinted?: number;
+      resourceConsumed?: number;
+      organizationId?: OrganizationId;
       evidence: Record<string, number | string | boolean>;
     }
   | { kind: "resource-transaction"; transaction: ResourceTransaction };
@@ -534,6 +757,7 @@ export type SimulationStage = {
 export type WorldEvent = {
   id: string;
   tick: number;
+  years?: number;
   kind: string;
   ruleId: string;
   position?: [number, number];
@@ -545,12 +769,51 @@ export type WorldEvent = {
   payload: Record<string, unknown>;
 };
 
+export type EventMilestone = {
+  id: string;
+  tick: number;
+  years?: number;
+  kind: string;
+  ruleId: string;
+  source: "natural" | "user";
+  sourceIds: string[];
+  regionIds: RegionId[];
+  organizationIds: string[];
+  probability: number;
+  roll: number;
+  position?: [number, number];
+  details: Record<string, number | string | boolean>;
+};
+
+export type EventArchive = {
+  totalEventCount: number;
+  archivedEventCount: number;
+  archivedSpeciesCount: number;
+  archivedKnowledgeCount: number;
+  archivedCultureCount: number;
+  archivedRelationshipCount: number;
+  firstEventTick?: number;
+  firstEventYears?: number;
+  latestEventTick?: number;
+  latestEventYears?: number;
+  archivedThroughTick?: number;
+  archivedThroughYears?: number;
+  kindCounts: Record<string, number>;
+  regionCounts: Record<string, number>;
+  organizationCounts: Record<string, number>;
+  organizationFormationCounts: Record<string, number>;
+  tradeVolumeByResource: Record<string, number>;
+  archivedSpeciesRoleCounts: Partial<Record<SpeciesRole, number>>;
+  milestones: EventMilestone[];
+};
+
 export type WorldState = {
   version: 1;
   seed: number;
   tick: number;
   years: number;
   random: RandomState;
+  formation: PlanetFormationState;
   fields: {
     elevation: Grid;
     temperature: Grid;
@@ -566,6 +829,7 @@ export type WorldState = {
     organics: Grid;
     oxygen: Grid;
   };
+  substances: SubstanceState[];
   species: SpeciesState[];
   populations: PopulationState[];
   agents: AgentState[];
@@ -573,9 +837,11 @@ export type WorldState = {
   relationships: RelationshipState[];
   cultures: CultureState[];
   organizations: OrganizationState[];
+  facilities: FacilityState[];
   resources: ResourceLedgerEntry[];
   worldview: WorldviewState;
   events: WorldEvent[];
+  eventArchive: EventArchive;
   lod: LodState;
   observation: ObservationState;
 };

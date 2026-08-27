@@ -1,4 +1,5 @@
 import { SEA_LEVEL } from "../sim/environment/terrain.ts";
+import { simulationAgeFromYears } from "../sim/time.ts";
 
 export type FormattedMetric = {
   value: string;
@@ -9,6 +10,16 @@ const finite = (value: number | undefined): number => Number.isFinite(value) ? v
 
 export const formatNumber = (value: number | undefined, maximumFractionDigits = 0): string =>
   new Intl.NumberFormat("zh-CN", { maximumFractionDigits }).format(finite(value));
+
+export const formatSimulationAge = (elapsedYears: number | undefined): string => {
+  const age = simulationAgeFromYears(finite(elapsedYears));
+  return `${formatNumber(age.years)} 年 ${formatNumber(age.days)} 天`;
+};
+
+export const formatSimulationAgeMetric = (elapsedYears: number | undefined): FormattedMetric => {
+  const age = simulationAgeFromYears(finite(elapsedYears));
+  return { value: formatNumber(age.years), unit: `年 ${formatNumber(age.days)} 天` };
+};
 
 export const formatCount = (value: number | undefined, unit: string): FormattedMetric => {
   const amount = finite(value);

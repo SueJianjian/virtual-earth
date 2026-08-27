@@ -12,7 +12,9 @@ export const temperatureAt = (
 ): number => {
   const latitudeDistance = Math.abs(y / Math.max(1, height - 1) - 0.5) * 2;
   const latitudeHeat = 1 - latitudeDistance * 0.68;
-  const elevationCooling = Math.max(0, elevation - 0.35) * 0.42;
+  // A higher surface loses enough heat to remain cooler than nearby lowland,
+  // even when the lowland benefits from oceanic thermal moderation.
+  const elevationCooling = Math.max(0, elevation - 0.35) * 0.9;
   const oceanModeration = oceanFraction * 0.08;
   return clamp01((latitudeHeat + oceanModeration - elevationCooling) * solarFlux * 0.72 + 0.14);
 };
@@ -43,8 +45,9 @@ export const calculateClimate = (
       oceanFraction,
       orbitalFlux,
     ) + greenhouse + axialCycle);
-    const previousTemperature = state.fields.temperature.values[index] ?? equilibrium;
-    const thermalInertia = oceanFraction * 0.42;
+    const previousTemperature = state.fields.temperature.values[index] ?? 0;
+    // No thermal history exists while the first climate field is initialized.
+    const thermalInertia = previousTemperature > 0 ? oceanFraction * 0.42 : 0;
     temperature[index] = clamp01(equilibrium * (1 - thermalInertia) + previousTemperature * thermalInertia);
     const previousHumidity = state.fields.humidity.values[index] ?? 0;
     const localWater = state.fields.water.values[index] ?? 0;

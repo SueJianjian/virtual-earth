@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
-import { applyCultureDelta, stepCulture } from "../../src/sim/culture/index.ts";
+import { applyCultureDelta, attemptKnowledgeDiffusion, attemptKnowledgeInnovation, createKnowledge, knowledgeDiffusionRoutes, stepCulture } from "../../src/sim/culture/index.ts";
+import { createOrganization } from "../../src/sim/society/organization.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import type { PopulationState, WorldDelta } from "../../src/sim/types.ts";
 
@@ -36,5 +37,70 @@ describe("knowledge and culture", () => {
     expect(next.knowledge.every((knowledge) => knowledge.kind.startsWith("practice:"))).toBe(true);
     expect(next.agents.every((agent) => agent.knowledgeIds.length > 0)).toBe(true);
     expect(next.cultures[0]?.beliefIds).toEqual([]);
+  });
+
+  it("creates traceable local innovations from conditions rather than a fixed year", () => {
+    const world = createWorld(311, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("innovator", "consumer");
+    const population: PopulationState = { id: "population:innovator" as never, speciesId: species.id, regionId: "region:2:2" as never, count: 40, energy: 1 };
+    const members = Array.from({ length: 8 }, (_, index) => createAgent(population, species, index, "innovator"));
+    for (const member of members) {
+      member.traits.curiosity = 0.95;
+      member.traits.cooperation = 0.8;
+      member.skills.observation = 0.9;
+      member.skills.communication = 0.8;
+      member.skills.toolUse = 0.85;
+    }
+    const foundations = ["observation", "communication", "toolUse"].map((kind) => createKnowledge(population.regionId, `practice:${kind}`, members));
+    const culture = { id: "culture:innovator" as never, regionId: population.regionId, knowledgeIds: foundations.map((knowledge) => knowledge.id), beliefIds: [], transmissionRate: 0.85 };
+    world.species = [species];
+    world.populations = [population];
+    world.agents = members;
+    world.knowledge = foundations;
+    world.cultures = [culture];
+    world.fields.biomass.values.fill(0.18);
+    world.fields.nutrients.values.fill(0.7);
+
+    let outcome: ReturnType<typeof attemptKnowledgeInnovation>;
+    for (let tick = 0; tick < 256 && !outcome; tick += 1) {
+      world.tick = tick;
+      world.years = tick * 0.5;
+      outcome = attemptKnowledgeInnovation(world, culture, members, new Map(foundations.map((knowledge) => [knowledge.id, knowledge])));
+    }
+
+    expect(outcome?.knowledge).toMatchObject({ name: expect.any(String), domain: expect.any(String), originRegionId: population.regionId, parentIds: expect.arrayContaining([foundations[0]!.id]) });
+    expect(outcome?.knowledge.sourceIds.length).toBeGreaterThan(0);
+    expect(outcome?.event).toMatchObject({ kind: "knowledge-innovation", ruleId: "culture:autonomous-innovation", payload: { knowledgeId: outcome?.knowledge.id } });
+    expect(outcome?.event.evidence).toMatchObject({ domainScore: expect.any(Number), curiosity: expect.any(Number), observation: expect.any(Number) });
+  });
+
+  it("diffuses recorded knowledge only across an auditable civilization route", () => {
+    const world = createWorld(312, { width: 8, height: 8, formation: "formed" });
+    const firstRegion = "region:2:2" as never;
+    const secondRegion = "region:3:2" as never;
+    const sourceCulture = { id: "culture:source" as never, regionId: firstRegion, knowledgeIds: ["knowledge:route"], beliefIds: [], transmissionRate: 0.9 };
+    const destinationCulture = { id: "culture:destination" as never, regionId: secondRegion, knowledgeIds: [], beliefIds: [], transmissionRate: 0.8 };
+    const knowledge = { id: "knowledge:route", kind: "innovation:navigation:1", name: "潮星定向法", domain: "navigation" as const, sourceIds: [], credibility: 0.9, transmissionCost: 0.12, forgettingRate: 0.01, originRegionId: firstRegion, originTick: 2, originYears: 2, parentIds: [] };
+    const first = createOrganization("city", firstRegion, []);
+    const second = createOrganization("city", secondRegion, []);
+    first.diplomacy = { [second.id]: "trade" };
+    second.diplomacy = { [first.id]: "trade" };
+    world.cultures = [sourceCulture, destinationCulture];
+    world.knowledge = [knowledge];
+    world.organizations = [first, second];
+    const culturesByRegion = new Map(world.cultures.map((culture) => [culture.regionId, culture]));
+    const knowledgeById = new Map([[knowledge.id, knowledge]]);
+    expect(knowledgeDiffusionRoutes({ ...world, organizations: [] })).toEqual([]);
+    const route = knowledgeDiffusionRoutes(world)[0];
+    expect(route).toMatchObject({ kind: "trade", strength: expect.any(Number) });
+
+    let outcome: ReturnType<typeof attemptKnowledgeDiffusion>;
+    for (let tick = 0; tick < 256 && !outcome; tick += 1) {
+      world.tick = tick;
+      outcome = attemptKnowledgeDiffusion(world, culturesByRegion, knowledgeById, route!);
+    }
+
+    expect(outcome).toMatchObject({ destinationCultureId: destinationCulture.id, knowledgeId: knowledge.id });
+    expect(outcome?.event).toMatchObject({ kind: "knowledge-diffusion", evidence: { route: "trade", fromRegion: firstRegion, toRegion: secondRegion }, payload: { originRegionId: firstRegion } });
   });
 });

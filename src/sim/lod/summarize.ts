@@ -15,7 +15,19 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     return eventRegion === regionId || event.payload.fromRegion === regionId || event.payload.toRegion === regionId || event.sourceIds.some((sourceId) => organizations.some((organization) => organization.id === sourceId));
   });
   const historyIds = regionEvents.map((event) => event.id).sort();
-  const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({ id: organization.id, type: organization.type, memberCount: organization.memberIds.length, memberIds: [...organization.memberIds], childIds: [...organization.childOrganizationIds], resourceIds: Object.keys(organization.resources).sort(), historyIds: regionEvents.filter((event) => event.sourceIds.includes(organization.id) || event.payload.organizationId === organization.id).map((event) => event.id).sort(), territoryRegionIds: [...organization.territoryRegionIds] }));
+  const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({
+    id: organization.id,
+    type: organization.type,
+    memberCount: organization.memberIds.length,
+    memberIds: [...organization.memberIds],
+    childIds: [...organization.childOrganizationIds],
+    resourceIds: Object.keys(organization.resources).sort(),
+    historyIds: regionEvents.filter((event) => event.sourceIds.includes(organization.id) || event.payload.organizationId === organization.id).map((event) => event.id).sort(),
+    archivedHistoryCount: Math.max(organization.archivedHistoryCount ?? 0, state.eventArchive.organizationCounts[organization.id] ?? 0),
+    territoryRegionIds: [...organization.territoryRegionIds],
+    ...(organization.governance ? { governance: { ...organization.governance } } : {}),
+    ...(organization.diplomacy ? { diplomacy: { ...organization.diplomacy } } : {}),
+  }));
   const agentRecords: RegionAgentRecord[] = agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: [...agent.parentIds], skills: { ...agent.skills }, knowledgeIds: [...agent.knowledgeIds], beliefIds: [...agent.beliefIds] }));
   const relationshipRecords: RelationshipState[] = state.relationships.filter((relationship) => agentIds.includes(relationship.fromId) && agentIds.includes(relationship.toId)).map((relationship) => structuredClone(relationship));
   const relationshipIds = relationshipRecords.map((relationship) => relationship.id).sort();
@@ -36,6 +48,7 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
   const foodBalance = state.resources.filter((resource) => resource.resourceId === "food" && resource.regionId === regionId).reduce((sum, resource) => sum + resource.amount, 0);
   const foodPerAgent = foodBalance / Math.max(1, agents.length);
   const foodSecurity = meanFoodSecurity({ resources: state.resources, organizations, agents });
+  const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal");
   const canonical = { regionId, mode, agentRecords: [...agentRecords].sort((left, right) => left.id.localeCompare(right.id)), organizations: organizationSummaries, relationships: relationshipIds, lineage, familyLineages, resources: state.resources.filter((resource) => resource.regionId === regionId) };
   return {
     regionId,
@@ -58,8 +71,9 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     foodPerAgent,
     foodSecurity,
     resources: structuredClone(state.resources.filter((resource) => resource.regionId === regionId)),
-    migrationRate: regionEvents.filter((event) => event.kind === "agent-migration").length / Math.max(1, agents.length),
+    migrationRate: Math.min(1, migrationEvents.length / Math.max(1, agents.length)),
     historyIds,
+    archivedHistoryCount: state.eventArchive.regionCounts[regionId] ?? 0,
     random: { ...state.random },
     canonicalDigest: hashString(JSON.stringify(canonical)).toString(16),
   };

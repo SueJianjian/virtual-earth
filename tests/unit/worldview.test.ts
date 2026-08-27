@@ -5,7 +5,9 @@ import { createWorldviewState, DEFAULT_WORLDVIEW_PACK_IDS, listWorldviewPacks, s
 import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
+import { createOrganization } from "../../src/sim/society/organization.ts";
 import type { WorldDelta, WorldviewContext } from "../../src/sim/types.ts";
+import { originalEmergence } from "../../src/sim/worldview/packs/original-emergence.ts";
 
 const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext => ({
   state,
@@ -73,6 +75,50 @@ describe("worldview packs", () => {
     expect(result.state.worldview.entities[0]?.kind).toBe("cultivation-path");
   });
 
+  it("deduplicates a worldview entity by pack, kind, and region across repeated evidence", () => {
+    let world = createWorld(105, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
+    let evidence = 0.2;
+    registerSimulationStage({
+      id: "worldview-repeat",
+      order: 1,
+      run: () => ({
+        fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [],
+        worldviewEffects: [{ kind: "propose-entity", packId: "cultivation.path", entityKind: "cultivation-path", regionId: "region:1:1" as never, evidence: { eligible: true, strength: evidence }, probability: 1 }],
+      }),
+    });
+
+    world = stepWorld(world, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
+    evidence = 0.8;
+    world = stepWorld(world, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
+
+    expect(world.worldview.entities).toHaveLength(1);
+  });
+
+  it("retires practices and personal energy after the practitioner leaves the live simulation", () => {
+    const world = createWorld(106, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview"] });
+    world.worldview.practices = [{
+      id: "practice:orphaned",
+      packId: "emergence.original-worldview",
+      name: "orphaned",
+      phenomenonId: "phenomenon:old",
+      regionId: "region:1:1" as never,
+      practitionerId: "agent:departed" as never,
+      originTick: 1,
+      lastTrainedTick: 2,
+      attunement: 0.3,
+      energy: 0.2,
+      attempts: 3,
+      failures: 1,
+      status: "active",
+    }];
+    world.resources = [{ id: "resource:orphaned-energy", resourceId: "attunement-energy", regionId: "region:1:1" as never, holderId: "agent:departed", amount: 1, cap: 2, originEventId: "test" }];
+
+    const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false });
+
+    expect(result.state.worldview.practices).toEqual([]);
+    expect(result.state.resources).toEqual([]);
+  });
+
   it("records energy consumption and a setback instead of silently granting progress", () => {
     const regionId = "region:1:1" as never;
     const world = createWorld(103, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview"] });
@@ -130,5 +176,158 @@ describe("worldview packs", () => {
     expect(practice?.energy).toBeCloseTo(0.11);
     expect(practice?.attunement).toBeCloseTo(0.088);
     expect(practice).toMatchObject({ attempts: 1, failures: 1, status: "active" });
+  });
+
+  it("routes verified-principle training through a sponsoring organization's energy ledger", () => {
+    const regionId = "region:2:2" as never;
+    const world = createWorld(104, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview"] });
+    const species = createSpecies("sponsored-practice", "consumer");
+    species.traits.cognitivePotential = 1;
+    const population = { id: "population:sponsored-practice" as never, speciesId: species.id, regionId, count: 32, energy: 1 };
+    const practitioner = createAgent(population, species, 0, "sponsored-practice");
+    practitioner.skills.observation = 0.9;
+    const city = createOrganization("city", regionId, [practitioner.id]);
+    city.governance = { ...city.governance!, publicGoods: 0.8, cohesion: 0.7, stability: 0.7 };
+    world.species = [species];
+    world.populations = [population];
+    world.agents = [practitioner];
+    world.organizations = [city];
+    world.worldview.phenomena = [{
+      id: "phenomenon:sponsored-principle",
+      packId: "emergence.original-worldview",
+      kind: "verified-principle",
+      epistemicStatus: "verified",
+      name: "潮痕响应定律",
+      regionId,
+      originTick: 1,
+      parentIds: [],
+      causeRuleId: "test",
+      evidence: { anomalyStrength: 0.8 },
+    }];
+    world.worldview.practices = [{
+      id: "practice:sponsored",
+      packId: "emergence.original-worldview",
+      name: "观潮训练法",
+      phenomenonId: "phenomenon:sponsored-principle",
+      regionId,
+      practitionerId: practitioner.id,
+      organizationId: city.id,
+      originTick: 1,
+      lastTrainedTick: 1,
+      attunement: 0.2,
+      energy: 0.6,
+      attempts: 0,
+      failures: 0,
+      status: "active",
+    }];
+
+    const delta = stepWorldviews(world, highContext(world));
+    const training = delta.worldviewEffects.find((effect) => effect.kind === "train-practice");
+    expect(training).toMatchObject({ organizationId: city.id, resourceId: "attunement-energy", resourceHolderId: city.id });
+    expect(delta.resourceTransactions).toContainEqual(expect.objectContaining({ operation: "mint", resourceId: "attunement-energy", toHolderId: city.id }));
+    expect(delta.resourceTransactions).toContainEqual(expect.objectContaining({ operation: "consume", resourceId: "attunement-energy", fromHolderId: city.id }));
+
+    const initialCohesion = city.governance!.cohesion;
+    registerSimulationStage({
+      id: "worldview",
+      order: 70,
+      run: () => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], ...delta }),
+    });
+    const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
+    const reserve = result.state.resources.find((resource) => resource.resourceId === "attunement-energy" && resource.holderId === city.id);
+
+    expect(reserve?.amount).toBeGreaterThan(0);
+    expect(result.state.worldview.practices[0]).toMatchObject({ attempts: 1 });
+    expect(result.state.organizations[0]?.governance?.cohesion).not.toBe(initialCohesion);
+  });
+
+  it("forms and retires an original practice institution from a real teacher lineage", () => {
+    const regionId = "region:3:3" as never;
+    let world = createWorld(107, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview"], formation: "formed" });
+    const species = createSpecies("institution", "consumer");
+    species.traits.cognitivePotential = 1;
+    const population = { id: "population:institution" as never, speciesId: species.id, regionId, count: 24, energy: 1 };
+    const teacher = createAgent(population, species, 0, "institution-teacher");
+    const students = [createAgent(population, species, 1, "institution-student"), createAgent(population, species, 2, "institution-student")];
+    const sponsor = createOrganization("city", regionId, [teacher.id, ...students.map((student) => student.id)]);
+    world.species = [species];
+    world.populations = [population];
+    world.agents = [teacher, ...students];
+    world.organizations = [sponsor];
+    world.worldview.phenomena = [{
+      id: "phenomenon:institution",
+      packId: "emergence.original-worldview",
+      kind: "verified-principle",
+      epistemicStatus: "verified",
+      name: "岩息响应定律",
+      regionId,
+      originTick: 1,
+      parentIds: [],
+      causeRuleId: "test",
+      evidence: { anomalyStrength: 0.8 },
+    }];
+    const institutionPractices = [teacher, ...students].map((agent, index) => ({
+      id: `practice:institution:${index}`,
+      packId: "emergence.original-worldview",
+      name: "听岩共鸣法",
+      phenomenonId: "phenomenon:institution",
+      regionId,
+      practitionerId: agent.id,
+      ...(index > 0 ? { teacherId: teacher.id } : {}),
+      organizationId: sponsor.id,
+      originTick: index + 2,
+      lastTrainedTick: 4,
+      attunement: 0.18 - index * 0.02,
+      energy: 0.5,
+      attempts: 3,
+      failures: 0,
+      status: "active" as const,
+    }));
+    world.worldview.practices = institutionPractices;
+    const rule = originalEmergence.rules.find((candidate) => candidate.id === "original-practice-institution");
+    if (!rule) throw new Error("Expected institution rule");
+    const context = highContext(world);
+    expect(rule.evaluate(context)).toMatchObject({ eligible: true, evidence: { practitionerCount: 3, teacherLinks: 2 } });
+    const outcome = rule.apply(context);
+    if (outcome.status !== "applied" || !outcome.value) throw new Error("Expected institution effect");
+    expect(outcome.value).toMatchObject({ kind: "propose-entity", entityKind: "sect", founderId: teacher.id, sponsorOrganizationId: sponsor.id });
+
+    registerSimulationStage({
+      id: "institution-test",
+      order: 1,
+      run: () => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [], worldviewEffects: [outcome.value!] }),
+    });
+    world = stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false }).state;
+    expect(world.worldview.entities[0]).toMatchObject({
+      kind: "sect",
+      name: expect.stringMatching(/研修会|观测院|共鸣社|循证流派/),
+      founderId: teacher.id,
+      memberIds: [teacher.id, ...students.map((student) => student.id)].sort(),
+      status: "active",
+    });
+
+    world.agents = [teacher];
+    world = stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false }).state;
+    expect(world.worldview.entities[0]).toMatchObject({
+      memberIds: [teacher.id],
+      status: "dormant",
+      activePractitionerCount: 1,
+      dormantSinceTick: world.tick,
+    });
+    expect(world.events.some((event) => event.kind === "worldview-entity-dormant")).toBe(true);
+
+    world.agents = [teacher, ...students];
+    world.worldview.practices.push(...institutionPractices.slice(1));
+    const revived = stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false });
+    world = revived.state;
+
+    expect(world.worldview.entities[0]).toMatchObject({
+      memberIds: [teacher.id, ...students.map((student) => student.id)].sort(),
+      status: "active",
+      activePractitionerCount: 3,
+      revivalCount: 1,
+      lastActiveTick: world.tick,
+    });
+    expect(revived.events.some((event) => event.kind === "worldview-entity-revived")).toBe(true);
   });
 });

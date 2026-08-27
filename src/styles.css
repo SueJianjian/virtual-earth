@@ -31,6 +31,7 @@ button:focus-visible, canvas:focus-visible { outline: 2px solid var(--acid); out
 h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-weight: 500; line-height: 1; letter-spacing: 0; }
 .time-readout { display: flex; flex-direction: column; min-width: 120px; }
 .time-readout strong { color: #f1e5b9; font-family: Georgia, "STSong", serif; font-size: 20px; font-weight: 500; letter-spacing: 0; }
+.time-readout small { margin-top: 3px; color: var(--muted); font-size: 9px; white-space: nowrap; }
 .transport { display: flex; gap: 6px; }
 .speed-control { display: flex; gap: 2px; }
 .speed-button { height: 28px; padding: 0 7px; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
@@ -58,7 +59,7 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
   width: 100%;
   height: calc(100vh - 215px);
   min-height: 600px;
-  background: #8db8c5;
+  background: #141a16;
   cursor: grab;
   touch-action: none;
 }
@@ -68,9 +69,10 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
 .map-tools button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 17px; line-height: 1; cursor: pointer; }
 .camera-tools button { font-size: 13px; }
 .map-tools button:hover { border-color: var(--acid); color: #f0dda0; }
-.map-tools output { min-width: 42px; color: var(--muted); font-family: monospace; font-size: 10px; text-align: center; }
+.map-tools output { min-width: 52px; color: var(--muted); font-family: monospace; font-size: 10px; text-align: center; }
 .map-caption { position: absolute; right: 14px; bottom: 14px; display: flex; gap: 10px; padding: 7px 9px; background: rgba(17, 21, 18, 0.86); border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .map-caption span:first-child { color: #ead991; }
+.map-caption #map-scale-level { color: #9ed6c4; }
 .map-caption label { display: flex; align-items: center; gap: 5px; }
 .map-caption select { border: 1px solid var(--line); background: #20261f; color: var(--ink); font: inherit; }
 .right-rail {
@@ -82,7 +84,7 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
   scrollbar-color: #4a524a #171c18;
   scrollbar-width: thin;
 }
-.rail-section { padding: 18px 18px 20px; border-bottom: 1px solid var(--line); }
+.rail-section { min-width: 0; padding: 18px 18px 20px; border-bottom: 1px solid var(--line); }
 .rail-section > header { display: flex; align-items: baseline; gap: 9px; margin-bottom: 16px; }
 .rail-section > header span { color: var(--acid); font-family: Georgia, serif; font-size: 11px; }
 h2 { margin: 0; color: #c7cdc7; font-size: 12px; font-weight: 600; letter-spacing: 0; }
@@ -125,6 +127,17 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .worldview-list li[data-epistemic-status="hypothesized"] span { border-color: var(--water); }
 .worldview-list li[data-epistemic-status="believed"] span { border-color: #bd7c65; }
 .worldview-list li[data-epistemic-status="verified"] span { border-color: var(--acid); color: #e2d28e; }
+.knowledge-records .worldview-list li[data-knowledge-domain="subsistence"] span { border-color: #82a06f; }
+.knowledge-records .worldview-list li[data-knowledge-domain="construction"] span { border-color: #b18b67; }
+.knowledge-records .worldview-list li[data-knowledge-domain="navigation"] span { border-color: #6d9bb0; }
+.knowledge-records .worldview-list li[data-knowledge-domain="medicine"] span { border-color: #9d7e98; }
+.knowledge-records .worldview-list li[data-knowledge-domain="governance"] span { border-color: #c0a45f; }
+.knowledge-records .worldview-list li[data-knowledge-domain="energy"] span { border-color: #b5745d; }
+.substance-records .worldview-list li[data-substance-kind="mineral"] span { border-color: #a98c64; }
+.substance-records .worldview-list li[data-substance-kind="crystal"] span { border-color: #6f9eb2; }
+.substance-records .worldview-list li[data-substance-kind="organic-compound"] span { border-color: #789b67; }
+.substance-records .worldview-list li[data-substance-kind="engineered-composite"] span { border-color: #d1b858; color: #e5d38d; }
+.substance-records .worldview-list li[data-substance-status="latent"] { opacity: 0.72; }
 .worldview-list li small { color: #707971; font-size: 8px; }
 .worldview-list li strong { color: #d7dcd7; font-size: 11px; font-weight: 500; }
 .worldview-list li p { margin: 0; color: var(--muted); font-size: 8px; text-align: right; overflow-wrap: anywhere; }
@@ -163,11 +176,11 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .family-list li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
 .family-list li strong { color: #c8cfca; font-weight: 500; }
 .family-list .family-empty { color: #737b74; }
-.detail-section { margin-top: 18px; border-top: 1px solid var(--line); }
+.detail-section { min-width: 0; margin-top: 18px; border-top: 1px solid var(--line); }
 .detail-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 13px 0 10px; }
 .detail-heading strong { color: #e8dda8; font-family: Georgia, "STSong", serif; font-size: 14px; font-weight: 500; }
 .detail-heading span { color: var(--muted); font-size: 9px; text-align: right; }
-.detail-tabs { display: flex; gap: 3px; padding-bottom: 9px; overflow-x: auto; }
+.detail-tabs { display: flex; width: 100%; max-width: 100%; min-width: 0; gap: 3px; padding-bottom: 9px; overflow-x: auto; overscroll-behavior-x: contain; }
 .detail-tab { flex: 0 0 auto; min-height: 27px; padding: 0 8px; border: 1px solid var(--line); background: #20261f; color: var(--muted); font-size: 9px; cursor: pointer; }
 .detail-tab:hover, .detail-tab.active { border-color: var(--acid); color: #f0dda0; background: #292b1d; }
 .detail-target { width: 100%; min-height: 30px; padding: 0 8px; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 10px; }
@@ -184,6 +197,18 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .detail-grid dd { font-size: 12px; }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .detail-tags span { padding: 4px 6px; border: 1px solid var(--line); color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.technology-effects { display: grid; gap: 7px; margin-top: 12px; padding-top: 2px; border-top: 1px solid var(--line); }
+.technology-effects .detail-heading { padding: 10px 0 3px; }
+.technology-effect-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.technology-effect-list > span { display: grid; min-width: 0; gap: 3px; padding: 7px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 9px; }
+.technology-effect-list b { color: #d9dfcc; font-size: 10px; font-weight: 500; }
+.technology-effect-list small { color: #949e92; font-size: 8px; overflow-wrap: anywhere; }
+.technology-effect-list [data-technology-domain="subsistence"] b { color: #b6cf7c; }
+.technology-effect-list [data-technology-domain="construction"] b { color: #d1a87c; }
+.technology-effect-list [data-technology-domain="navigation"] b { color: #82b7cf; }
+.technology-effect-list [data-technology-domain="medicine"] b { color: #d3a8c8; }
+.technology-effect-list [data-technology-domain="governance"] b { color: #e0c572; }
+.technology-effect-list [data-technology-domain="energy"] b { color: #8bd6d0; }
 .empty-state { display: flex; flex-direction: column; gap: 6px; min-height: 52px; color: var(--muted); }
 .empty-state strong { color: #b8beb8; font-size: 12px; font-weight: 500; }
 .empty-state span { font-size: 10px; }
@@ -195,8 +220,10 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .file-controls input { display: none; }
 .timeline-item { display: grid; grid-template-columns: 55px 1fr; gap: 3px 8px; padding: 9px 0; border-top: 1px solid var(--line); }
 .timeline-item time { grid-row: 1 / span 2; color: var(--acid); font-family: monospace; font-size: 9px; }
+.timeline-item[data-archived="true"] time { color: #9eb4a5; }
 .timeline-item strong { font-size: 11px; font-weight: 500; }
 .timeline-item span { color: var(--muted); font-size: 9px; overflow-wrap: anywhere; }
+.timeline-item[data-archived="true"] span { color: #87958b; }
 
 @media (max-width: 900px) {
   .app-shell { padding: 12px; }

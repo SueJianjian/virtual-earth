@@ -40,6 +40,7 @@ describe("conserved multi-scale state", () => {
     const summary = summarizeRegionState(state, region, "aggregate");
     expect(projectRegion(summary, 4)).toEqual(projectRegion(summary, 4));
     expect(projectRegion(summary, 4).generatedFromDigest).toBe(summary.canonicalDigest);
+    expect(projectRegion(summary, 4).agents.map((agent) => agent.sourceId)).toEqual([...summary.agentIds].sort());
   });
 
   it("summarizes population and relationships without losing the source counts", () => {
@@ -65,6 +66,38 @@ describe("conserved multi-scale state", () => {
     expect(summary.summary.foodPerAgent).toBe(0.25);
     expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "remove")).toHaveLength(state.agents.length);
     expect(delta.relationshipEffects.filter((effect) => effect.operation === "remove")).toHaveLength(state.relationships.length);
+  });
+
+  it("reports real population migration and dispersal events", () => {
+    const state = populatedWorld();
+    state.events = [
+      {
+        id: "event:migration",
+        tick: 1,
+        kind: "population-migration",
+        ruleId: "ecology:local-migration",
+        source: "natural",
+        sourceIds: [state.populations[0]!.id],
+        probability: 1,
+        roll: 0,
+        evidence: { fromRegion: "region:1:0", toRegion: region },
+        payload: { fromRegion: "region:1:0", toRegion: region },
+      },
+      {
+        id: "event:dispersal",
+        tick: 2,
+        kind: "population-dispersal",
+        ruleId: "ecology:population-dispersal",
+        source: "natural",
+        sourceIds: [state.populations[0]!.id],
+        probability: 1,
+        roll: 0,
+        evidence: { fromRegion: region, toRegion: "region:7:0" },
+        payload: { fromRegion: region, toRegion: "region:7:0", branchCount: 4 },
+      },
+    ];
+
+    expect(summarizeRegionState(state, region).migrationRate).toBe(0.5);
   });
 
   it("promotes only an aggregate summary and produces stable micro entities", () => {

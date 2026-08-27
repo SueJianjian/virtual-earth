@@ -8,11 +8,17 @@ const isNaturalHotspot = (state: WorldState, regionId: RegionId): boolean => {
   const agents = state.agents.filter((candidate) => candidate.regionId === regionId);
   const social = state.organizations.some((organization) =>
     organization.regionId === regionId && organization.status === "active");
-  const recentNaturalEvent = state.events.some((event) => {
-    if (event.source !== "natural" || state.tick - event.tick > 2) return false;
+  let recentNaturalEvent = false;
+  for (let index = state.events.length - 1; index >= 0; index -= 1) {
+    const event = state.events[index];
+    if (!event || state.tick - event.tick > 2) break;
+    if (event.source !== "natural") continue;
     const eventRegion = event.payload.regionId ?? event.evidence.regionId;
-    return eventRegion === regionId;
-  });
+    if (eventRegion === regionId) {
+      recentNaturalEvent = true;
+      break;
+    }
+  }
   return social || recentNaturalEvent || agents.length >= 8;
 };
 

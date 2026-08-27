@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgent, eligibleAgentCount, stepAgents } from "../../src/sim/agents/index.ts";
+import { compactAgentMemoryRecords, compactRelationshipRecords, createAgent, eligibleAgentCount, MAX_AGENT_MEMORY_IDS, MAX_RELATIONSHIPS_PER_AGENT, stepAgents } from "../../src/sim/agents/index.ts";
 import { stepWorld } from "../../src/sim/engine.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
@@ -37,7 +37,7 @@ describe("agent emergence and lifecycle", () => {
   });
 
   it("persists newly emerged agents through the world reducer", () => {
-    const world = createWorld(23, { width: 8, height: 8 });
+    const world = createWorld(23, { width: 8, height: 8, formation: "formed" });
     const species = createSpecies("emergent", "consumer");
     species.traits.cognitivePotential = 1;
     world.species = [species];
@@ -67,6 +67,118 @@ describe("agent emergence and lifecycle", () => {
     const delta = stepAgents(world, emptyDelta(), 1);
     expect(delta.entityEffects).toContainEqual({ collection: "agents", operation: "remove", id: first.id });
     expect(delta.relationshipEffects).toContainEqual({ operation: "remove", relationship });
+  });
+
+  it("lets an operational medical facility reduce end-of-life mortality risk", () => {
+    const outcomes = Array.from({ length: 64 }, (_, seed) => {
+      const world = createWorld(600 + seed, { width: 8, height: 8, formation: "formed" });
+      const species = createSpecies(`medical:${seed}`, "consumer");
+      const localPopulation = { ...population, speciesId: species.id };
+      const agent = createAgent(localPopulation, species, 0, `medical:${seed}`);
+      agent.age = agent.lifespan;
+      world.species = [species];
+      world.populations = [localPopulation];
+      world.agents = [agent];
+      const baseline = stepAgents(structuredClone(world), emptyDelta(), 1);
+      world.facilities = [{ id: `facility:medical:${seed}`, type: "medicine", regionId: agent.regionId, ownerOrganizationId: "organization:city:medical" as never, level: 3, condition: 1, status: "active", workforceIds: [agent.id], materialInvested: 8, plannedTick: 1, builtTick: 2, lastMaintainedTick: 2, lastIncidentTick: 2 }];
+      const protectedDelta = stepAgents(world, emptyDelta(), 1);
+      return {
+        baselineDied: baseline.entityEffects.some((effect) => effect.collection === "agents" && effect.operation === "remove" && effect.id === agent.id),
+        protectedDied: protectedDelta.entityEffects.some((effect) => effect.collection === "agents" && effect.operation === "remove" && effect.id === agent.id),
+      };
+    });
+
+    expect(outcomes.every((outcome) => outcome.baselineDied)).toBe(true);
+    expect(outcomes.some((outcome) => !outcome.protectedDied)).toBe(true);
+  });
+
+  it("records profession experience and workplace memory for active staff", () => {
+    const world = createWorld(665, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("worker", "consumer");
+    const localPopulation = { ...population, speciesId: species.id };
+    const agent = createAgent(localPopulation, species, 0, "worker");
+    agent.age = 25;
+    world.species = [species];
+    world.populations = [localPopulation];
+    world.agents = [agent];
+    world.facilities = [{ id: "facility:medicine:career", type: "medicine", regionId: agent.regionId, ownerOrganizationId: "organization:city:career" as never, level: 1, condition: 1, status: "active", workforceIds: [agent.id], workforceRequired: 2, workforceEfficiency: 0.5, materialInvested: 4, plannedTick: 1, builtTick: 2, lastMaintainedTick: 2, lastIncidentTick: 2 }];
+
+    const delta = stepAgents(world, emptyDelta(), 1);
+    const update = delta.entityEffects.find((effect) => effect.collection === "agents" && effect.operation === "update" && effect.id === agent.id);
+    const updated = update?.collection === "agents" ? update.value : undefined;
+
+    expect(updated?.skills["profession:medicine"]).toBeGreaterThan(0);
+    expect(updated?.memoryIds).toContain("work:facility:medicine:career");
+  });
+
+  it("bounds personal memories while retaining current knowledge and active workplace memories", () => {
+    const world = createWorld(666, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("memory", "consumer");
+    const localPopulation = { ...population, speciesId: species.id };
+    const agent = createAgent(localPopulation, species, 0, "memory");
+    agent.knowledgeIds = ["knowledge:current"];
+    agent.memoryIds = Array.from({ length: MAX_AGENT_MEMORY_IDS + 32 }, (_, index) => `memory:stale:${String(index).padStart(3, "0")}`);
+    agent.memoryIds.push("work:facility:active");
+    world.agents = [agent];
+    world.facilities = [{
+      id: "facility:active",
+      type: "medicine",
+      regionId: agent.regionId,
+      ownerOrganizationId: "organization:city:memory" as never,
+      level: 1,
+      condition: 1,
+      status: "active",
+      workforceIds: [agent.id],
+      materialInvested: 1,
+      plannedTick: 1,
+      builtTick: 1,
+      lastMaintainedTick: 1,
+      lastIncidentTick: 1,
+    }];
+
+    const removed = compactAgentMemoryRecords(world);
+
+    expect(removed).toBeGreaterThan(0);
+    expect(agent.memoryIds.length).toBeLessThanOrEqual(MAX_AGENT_MEMORY_IDS);
+    expect(agent.memoryIds).toContain("knowledge:current");
+    expect(agent.memoryIds).toContain("work:facility:active");
+    expect(agent.memoryIds).not.toContain("memory:stale:000");
+  });
+
+  it("bounds relationship history while preserving family and care ties", () => {
+    const world = createWorld(667, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("relationship-archive", "consumer");
+    const localPopulation = { ...population, speciesId: species.id };
+    const agents = Array.from({ length: MAX_RELATIONSHIPS_PER_AGENT + 12 }, (_, index) =>
+      createAgent(localPopulation, species, index, "relationship-archive"));
+    const [central, parent, caregiver, partner, ...siblings] = agents;
+    if (!central || !parent || !caregiver || !partner) throw new Error("relationship fixture requires four agents");
+    world.species = [species];
+    world.populations = [localPopulation];
+    world.agents = agents;
+    world.relationships = [
+      createRelationship("parent", parent.id, central.id, 1, 0.2),
+      createRelationship("caregiver", caregiver.id, central.id, 2, 0.2),
+      createRelationship("partner", central.id, partner.id, 3, 0.2),
+      ...siblings.map((sibling, index) => createRelationship("sibling", central.id, sibling.id, 10 + index, 1)),
+    ];
+
+    const removed = compactRelationshipRecords(world);
+    const retainedIds = new Set(world.relationships.map((relationship) => relationship.id));
+    const incidentCounts = new Map<string, number>();
+    for (const relationship of world.relationships) {
+      for (const agentId of [relationship.fromId, relationship.toId]) {
+        incidentCounts.set(agentId, (incidentCounts.get(agentId) ?? 0) + 1);
+      }
+    }
+
+    expect(removed).toBeGreaterThan(0);
+    expect(world.relationships).toHaveLength(MAX_RELATIONSHIPS_PER_AGENT);
+    expect(retainedIds).toContain(createRelationship("parent", parent.id, central.id, 1, 0.2).id);
+    expect(retainedIds).toContain(createRelationship("caregiver", caregiver.id, central.id, 2, 0.2).id);
+    expect(retainedIds).toContain(createRelationship("partner", central.id, partner.id, 3, 0.2).id);
+    expect([...incidentCounts.values()].every((count) => count <= MAX_RELATIONSHIPS_PER_AGENT)).toBe(true);
+    expect(world.eventArchive.archivedRelationshipCount).toBe(removed);
   });
 
   it("can produce a child only from an eligible family", () => {

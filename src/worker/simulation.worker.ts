@@ -1,25 +1,34 @@
 import { createSimulationRuntime } from "./runtime.ts";
 import type { WorkerCommand } from "./protocol.ts";
+import { REAL_MILLISECONDS_PER_SIMULATED_DAY } from "../sim/time.ts";
 
 const runtime = createSimulationRuntime();
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const post = (messages: ReturnType<typeof runtime.dispatch>): void => messages.forEach((message) => self.postMessage(message));
-const loopDelayFor = (speed: 1 | 4 | 16 | 64): number => speed <= 4 ? Math.floor(1000 / speed) : 100;
-const stepsFor = (speed: 1 | 4 | 16 | 64): number => Math.max(1, Math.round(speed * loopDelayFor(speed) / 1000));
+const stopLoop = (): void => {
+  if (timer === undefined) return;
+  clearInterval(timer);
+  timer = undefined;
+};
+const loopDelayFor = (speed: 1 | 4 | 16 | 64): number => REAL_MILLISECONDS_PER_SIMULATED_DAY / speed;
 const startLoop = (): void => {
-  if (timer !== undefined) clearInterval(timer);
+  stopLoop();
   const speed = runtime.getSpeed();
   timer = setInterval(() => {
-    if (!runtime.isPaused()) post(runtime.dispatch({ type: "step", count: stepsFor(speed) }));
+    if (runtime.isPaused()) return;
+    const messages = runtime.dispatch({ type: "step", count: 1 });
+    if (messages.some((message) => message.type === "error")) stopLoop();
+    post(messages);
   }, loopDelayFor(speed));
 };
 
 self.onmessage = (event: MessageEvent<WorkerCommand>): void => {
   const messages = runtime.dispatch(event.data);
-  if (event.data.type === "pause" && timer !== undefined) {
-    clearInterval(timer);
-    timer = undefined;
+  if (messages.some((message) => message.type === "error")) {
+    stopLoop();
+  } else if (event.data.type === "pause") {
+    stopLoop();
   } else if (event.data.type === "start" || event.data.type === "setSpeed") {
     startLoop();
   }

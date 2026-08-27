@@ -27,6 +27,7 @@ export const totalWater = (grid: Grid): number => total(grid.values);
 export const simulateWater = (
   state: WorldState,
   externalEvents: WorldEvent[] = [],
+  elapsedYears = 1,
 ): Float32Array => {
   const { water, humidity, elevation } = state.fields;
   const next = new Float32Array(water.values.length);
@@ -58,7 +59,8 @@ export const simulateWater = (
     const rain = humidityValue * (0.018 + (1 - elevationValue) * 0.012);
     const diffusion = (neighborWater - waterValue) * 0.045;
     const runoff = Math.max(0, elevationValue - neighborElevation) * waterValue * 0.035;
-    next[index] = clamp01(waterValue - evaporation + rain + diffusion - runoff);
+    const years = Math.max(0, elapsedYears);
+    next[index] = clamp01(waterValue + (-evaporation + rain + diffusion - runoff) * years);
   }
   return rebalance(next, targetTotal);
 };

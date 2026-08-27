@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { initializeEnvironment, stepEnvironment, applyEnvironmentDelta, calculateClimate } from "../../src/sim/environment/index.ts";
+import { applyEnvironmentDelta, applyNaturalHazardWaterEffects, calculateClimate, initializeEnvironment, MAX_NATURAL_HAZARDS_PER_STEP, naturalHazardDelta, stepEnvironment } from "../../src/sim/environment/index.ts";
 import { totalWater } from "../../src/sim/environment/hydrology.ts";
 import { createWorld } from "../../src/sim/world.ts";
 
-const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8 }));
+const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
 describe("environment simulation", () => {
   it("creates deterministic ocean, temperature and humidity fields", () => {
@@ -69,6 +69,32 @@ describe("environment simulation", () => {
     expect(totalWater(after.fields.water)).toBeGreaterThan(before);
   });
 
+  it("records environmental milestones when oceans and prebiotic chemistry cross thresholds", () => {
+    const state = createWorld(10, { width: 16, height: 8, formation: "formed" });
+    state.fields.water.values.fill(0);
+    const delta = stepEnvironment(state, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+
+    expect(delta.eventDrafts.map((event) => event.kind)).toContain("ocean-formation");
+    expect(delta.eventDrafts.every((event) => event.source === "natural")).toBe(true);
+
+    const prebiotic = createWorld(11, { width: 16, height: 8, formation: "formed" });
+    prebiotic.fields.water.values.fill(0.8);
+    prebiotic.fields.temperature.values.fill(0.6);
+    prebiotic.fields.humidity.values.fill(0.6);
+    prebiotic.chemistry.organics.values.fill(0.00049);
+    const prebioticDelta = stepEnvironment(prebiotic, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+    expect(prebioticDelta.eventDrafts.map((event) => event.kind)).toContain("prebiotic-chemistry");
+  });
+
+  it("does not repeat an ocean milestone after its threshold has been crossed", () => {
+    const state = makeEnvironment();
+    const first = stepEnvironment(state, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+    const after = applyEnvironmentDelta(state, first);
+    const second = stepEnvironment(after, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+
+    expect(second.eventDrafts.some((event) => event.kind === "ocean-formation")).toBe(false);
+  });
+
   it("warms under a stronger atmospheric carbon greenhouse forcing", () => {
     const baseline = makeEnvironment();
     const carbonRich = structuredClone(baseline);
@@ -89,5 +115,39 @@ describe("environment simulation", () => {
     expect(delta.fieldChanges.some((change) => change.causeRuleId === "geology:tectonics-erosion")).toBe(true);
     expect(Array.from(next.fields.elevation.values)).not.toEqual(beforeElevation);
     expect(next.fields.nutrients.values.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
+  });
+
+  it("derives bounded, replayable climate disasters and conserves redistributed water", () => {
+    const drought = createWorld(991, { width: 8, height: 8, formation: "formed" });
+    drought.fields.elevation.values.fill(0.05);
+    drought.fields.temperature.values.fill(0.95);
+    drought.fields.humidity.values.fill(0.04);
+    drought.fields.water.values.fill(0.04);
+    drought.fields.nutrients.values.fill(0.4);
+
+    const first = naturalHazardDelta(drought, 10_000);
+    const second = naturalHazardDelta(structuredClone(drought), 10_000);
+
+    expect(first).toEqual(second);
+    expect(first.hazards).toHaveLength(MAX_NATURAL_HAZARDS_PER_STEP);
+    expect(first.hazards.every((hazard) => hazard.kind === "drought")).toBe(true);
+    expect(first.hazards.every((hazard) => Number(hazard.evidence.samplingScale) === 2)).toBe(true);
+    expect(first.delta.eventDrafts.every((event) => event.source === "natural" && event.ruleId === "environment:natural-drought")).toBe(true);
+    expect(first.delta.fieldChanges).toContainEqual(expect.objectContaining({ field: "biomass", operation: "add", value: expect.any(Number), causeRuleId: "environment:natural-drought" }));
+    const droughtWater = applyNaturalHazardWaterEffects(drought, drought.fields.water.values, first.hazards);
+    expect(totalWater({ ...drought.fields.water, values: droughtWater })).toBeCloseTo(totalWater(drought.fields.water), 6);
+
+    const flood = createWorld(992, { width: 8, height: 8, formation: "formed" });
+    flood.fields.elevation.values.fill(0.02);
+    flood.fields.temperature.values.fill(0.5);
+    flood.fields.humidity.values.fill(0.99);
+    flood.fields.water.values.fill(0.99);
+    const floodResult = naturalHazardDelta(flood, 10_000);
+    const floodWater = applyNaturalHazardWaterEffects(flood, flood.fields.water.values, floodResult.hazards);
+
+    expect(floodResult.hazards).not.toHaveLength(0);
+    expect(floodResult.hazards.every((hazard) => hazard.kind === "flood")).toBe(true);
+    expect(totalWater({ ...flood.fields.water, values: floodWater })).toBeCloseTo(totalWater(flood.fields.water), 6);
+    expect(floodWater.every((value) => value >= 0 && value <= 1)).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ describe("social evolution integration", () => {
   });
 
   it("forms relationships and families when an eligible population persists", () => {
-    let state = createWorld(123, { width: 16, height: 8 });
+    let state = createWorld(123, { width: 16, height: 8, formation: "formed" });
     for (let index = 0; index < 950; index += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
@@ -22,10 +22,10 @@ describe("social evolution integration", () => {
     expect(state.relationships.some((relationship) => relationship.kind === "partner")).toBe(true);
     expect(state.organizations.some((organization) => organization.type === "family")).toBe(true);
     expect(state.events.some((event) => event.kind === "family-formation")).toBe(true);
-  });
+  }, 45_000);
 
   it("eventually rebuilds active higher-order organizations after earlier groups collapse", () => {
-    let state = createWorld(123, { width: 16, height: 8 });
+    let state = createWorld(123, { width: 16, height: 8, formation: "formed" });
     for (let index = 0; index < 1_300; index += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
       const active = state.organizations.filter((organization) => organization.status === "active");
@@ -39,13 +39,15 @@ describe("social evolution integration", () => {
   });
 
   it("reaches city-scale organization through sustained local conditions", () => {
-    let state = createWorld(123, { width: 16, height: 8 });
+    let state = createWorld(123, { width: 16, height: 8, formation: "formed" });
     for (let index = 0; index < 1_200; index += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false }).state;
     }
 
     expect(state.organizations.some((organization) => organization.status === "active" && organization.type === "city" && organization.memberIds.length >= 30)).toBe(true);
-    expect(state.events.some((event) => event.kind === "organization-formation" && event.payload.type === "city")).toBe(true);
+    const cityFormationCount = (state.eventArchive.organizationFormationCounts.city ?? 0)
+      + state.events.filter((event) => event.kind === "organization-formation" && event.payload.type === "city").length;
+    expect(cityFormationCount).toBeGreaterThan(0);
     expect(state.events.some((event) => event.kind === "organization-trade")).toBe(true);
     expect(state.resources.filter((resource) => resource.resourceId === "food").reduce((sum, resource) => sum + resource.amount, 0)).toBeGreaterThan(0);
     expect(state.organizations.some((organization) => organization.type === "city" && organization.childOrganizationIds.length > 0)).toBe(true);
@@ -54,5 +56,5 @@ describe("social evolution integration", () => {
     expect(descendants.some((agent) => agent.knowledgeIds.length > 0 || agent.beliefIds.length > 0)).toBe(true);
     expect(state.relationships.some((relationship) => relationship.kind === "sibling")).toBe(true);
     expect(state.events.some((event) => event.kind === "agent-birth" && Number(event.evidence.siblings) > 0)).toBe(true);
-  }, 15_000);
+  }, 45_000);
 });

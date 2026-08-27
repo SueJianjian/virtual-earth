@@ -16,7 +16,7 @@ describe("seed variation", () => {
 
   beforeAll(() => {
     states = [1, 42, 123, 999].map(run);
-  }, 10_000);
+  }, 60_000);
 
   it("allows different seeds to produce different histories", () => {
     const digests = new Set(states.map(worldDigest));

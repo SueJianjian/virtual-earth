@@ -1,5 +1,7 @@
 import * as THREE from "three";
-import type { OrganizationType } from "../sim/types.ts";
+import type { OrganizationType, SpeciesBlueprint, WorldviewEntityKind } from "../sim/types.ts";
+
+export type FacilityKind = "subsistence" | "construction" | "navigation" | "medicine" | "governance" | "energy";
 
 const material = (color: number, roughness = 0.72, metalness = 0): THREE.MeshStandardMaterial => {
   const result = new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -22,6 +24,24 @@ const palette = {
   roofBlue: material(0x2d6574, 0.82),
   gold: material(0xd4a62b, 0.35, 0.45),
   flame: material(0xff7626, 0.35),
+  crop: material(0x8ea83b, 0.88),
+  healing: material(0xcfe4dc, 0.68),
+  energy: material(0x62d4d6, 0.3, 0.35),
+};
+
+const lifeMaterials: Record<SpeciesBlueprint["biochemistry"], THREE.MeshStandardMaterial> = {
+  "carbon-nitrogen": material(0x5c9c58, 0.78),
+  "phosphorus-lattice": material(0x5d9cba, 0.58, 0.12),
+  "silicate-organic": material(0xb88952, 0.72),
+  "metal-organic": material(0x778d7b, 0.42, 0.26),
+  "crystal-colloid": material(0x8c76b8, 0.38, 0.22),
+};
+const lifeAccents: Record<SpeciesBlueprint["biochemistry"], THREE.MeshStandardMaterial> = {
+  "carbon-nitrogen": material(0xc7d85d, 0.62),
+  "phosphorus-lattice": material(0x9ee1de, 0.34, 0.16),
+  "silicate-organic": material(0xe0bf6a, 0.5),
+  "metal-organic": material(0xc4c8a2, 0.32, 0.3),
+  "crystal-colloid": material(0xd2b8ee, 0.28, 0.32),
 };
 
 const mesh = (geometry: THREE.BufferGeometry, meshMaterial: THREE.Material): THREE.Mesh => {
@@ -193,6 +213,103 @@ export const createPopulationCamp = (seed: number): THREE.Group => {
   return group;
 };
 
+const lifeBodyScaleFor = (blueprint: SpeciesBlueprint): number => 0.24 + Math.min(0.48, Math.sqrt(blueprint.adultScale) * 0.14);
+
+// The models are assembled from reusable low-poly primitives so every evolved
+// lineage is visually distinct without depending on copied game assets.
+export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): THREE.Group => {
+  const group = new THREE.Group();
+  const bodyMaterial = lifeMaterials[blueprint.biochemistry];
+  const accentMaterial = lifeAccents[blueprint.biochemistry];
+  const bodyScale = lifeBodyScaleFor(blueprint);
+  const appendagePairs = Math.min(4, Math.max(0, blueprint.bodyPlan.appendagePairs));
+  const bodyParts = blueprint.bodyPlan.colonial ? 3 : blueprint.bodyPlan.structure === "segmented" ? 3 : 1;
+  const addCore = (offset: number, scale = 1): void => {
+    let core: THREE.Mesh;
+    if (blueprint.bodyPlan.structure === "shell") {
+      core = mesh(new THREE.DodecahedronGeometry(bodyScale * 0.66 * scale, 1), bodyMaterial);
+    } else if (blueprint.bodyPlan.structure === "network") {
+      core = mesh(new THREE.TorusGeometry(bodyScale * 0.5 * scale, bodyScale * 0.14 * scale, 6, 10), bodyMaterial);
+      core.rotation.x = Math.PI / 2;
+    } else if (blueprint.bodyPlan.structure === "filament") {
+      core = cylinder(bodyScale * 0.16 * scale, bodyScale * 0.28 * scale, bodyScale * 1.18 * scale, 7, bodyMaterial);
+    } else {
+      core = mesh(new THREE.SphereGeometry(bodyScale * (blueprint.bodyPlan.structure === "membrane" ? 0.72 : 0.58) * scale, 9, 7), bodyMaterial);
+      core.scale.z = blueprint.bodyPlan.symmetry === "spiral" ? 1.45 : 1;
+    }
+    core.position.set(offset, bodyScale * 0.5 * scale, 0);
+    group.add(core);
+  };
+  for (let index = 0; index < bodyParts; index += 1) addCore((index - (bodyParts - 1) / 2) * bodyScale * 0.9, 1 - index * 0.09);
+
+  if (blueprint.bodyPlan.symmetry === "radial" || blueprint.bodyPlan.symmetry === "fractal") {
+    const rays = blueprint.bodyPlan.symmetry === "fractal" ? 5 : 4;
+    for (let index = 0; index < rays; index += 1) {
+      const angle = index / rays * Math.PI * 2;
+      const ray = cylinder(bodyScale * 0.06, bodyScale * 0.11, bodyScale * 0.52, 6, accentMaterial);
+      ray.position.set(Math.cos(angle) * bodyScale * 0.27, bodyScale * 0.48, Math.sin(angle) * bodyScale * 0.27);
+      ray.rotation.z = Math.cos(angle) * Math.PI / 2;
+      ray.rotation.x = Math.sin(angle) * Math.PI / 2;
+      group.add(ray);
+    }
+  }
+
+  if (blueprint.bodyPlan.locomotion === "rooted") {
+    for (let index = 0; index < 3; index += 1) {
+      const angle = index / 3 * Math.PI * 2 + (seed % 11) * 0.08;
+      const root = cylinder(bodyScale * 0.04, bodyScale * 0.1, bodyScale * 0.8, 6, accentMaterial);
+      root.position.set(Math.cos(angle) * bodyScale * 0.3, bodyScale * 0.16, Math.sin(angle) * bodyScale * 0.3);
+      root.rotation.z = Math.cos(angle) * 0.65;
+      root.rotation.x = Math.sin(angle) * 0.65;
+      group.add(root);
+    }
+  } else {
+    for (let pair = 0; pair < appendagePairs; pair += 1) {
+      for (const side of [-1, 1]) {
+        const limb = cylinder(bodyScale * 0.045, bodyScale * 0.085, bodyScale * 0.82, 6, accentMaterial);
+        limb.position.set(side * bodyScale * (0.45 + pair * 0.09), bodyScale * 0.36, (pair - appendagePairs / 2) * bodyScale * 0.18);
+        limb.rotation.z = side * (blueprint.bodyPlan.locomotion === "gliding" ? Math.PI / 2.7 : Math.PI / 5);
+        group.add(limb);
+      }
+    }
+  }
+
+  if (blueprint.senses.includes("polarized-light") || blueprint.senses.includes("electric-field")) {
+    const sensor = mesh(new THREE.SphereGeometry(bodyScale * 0.13, 8, 6), accentMaterial);
+    sensor.position.set(0, bodyScale * 1.18, bodyScale * 0.5);
+    group.add(sensor);
+  }
+  if (blueprint.senses.includes("vibration") || blueprint.senses.includes("pressure-wave")) {
+    const crest = mesh(new THREE.ConeGeometry(bodyScale * 0.18, bodyScale * 0.58, 5), accentMaterial);
+    crest.position.y = bodyScale * 1.36;
+    group.add(crest);
+  }
+  if (blueprint.reproduction === "brood-pod" || blueprint.reproduction === "budding") {
+    const pod = mesh(new THREE.SphereGeometry(bodyScale * 0.22, 7, 6), accentMaterial);
+    pod.position.set(bodyScale * 0.56, bodyScale * 0.5, 0);
+    group.add(pod);
+  }
+  group.userData.lifeform = true;
+  group.userData.lifeBlueprint = blueprint.noveltySignature;
+  return group;
+};
+
+export const createLifeformPopulation = (blueprint: SpeciesBlueprint, seed: number): THREE.Group => {
+  const group = new THREE.Group();
+  const count = blueprint.bodyPlan.colonial ? 4 : 3;
+  for (let index = 0; index < count; index += 1) {
+    const organism = createLifeformModel(blueprint, seed + index * 37);
+    const angle = index / count * Math.PI * 2;
+    organism.position.set(Math.cos(angle) * 0.36, 0, Math.sin(angle) * 0.32);
+    organism.rotation.y = angle + 0.5;
+    organism.scale.setScalar(0.5);
+    group.add(organism);
+  }
+  group.userData.lifeform = true;
+  group.userData.lifeBlueprint = blueprint.noveltySignature;
+  return group;
+};
+
 export const createOrganizationModel = (kind: OrganizationType, seed: number): THREE.Group => {
   const group = new THREE.Group();
   switch (kind) {
@@ -220,6 +337,101 @@ export const createOrganizationModel = (kind: OrganizationType, seed: number): T
     case "empire":
       group.add(tower(seed, 3.5, 1.05), place(tower(seed + 1, 2.4, 0.72), -1.25, 0, 0.55), place(tower(seed + 2, 2.4, 0.72), 1.25, 0, 0.55));
       break;
+  }
+  return group;
+};
+
+export const createWorldviewModel = (kind: WorldviewEntityKind, seed: number): THREE.Group => {
+  const group = new THREE.Group();
+  const base = cylinder(0.72, 0.88, 0.28, 10, palette.darkStone);
+  base.position.y = 0.14;
+  group.add(base);
+  if (kind === "sect") {
+    const hall = tower(seed, 1.9, 0.62);
+    hall.position.y = 0.18;
+    const core = mesh(new THREE.SphereGeometry(0.2, 12, 8), palette.energy);
+    core.position.y = 2.15;
+    core.userData.flame = true;
+    const ring = mesh(new THREE.TorusGeometry(0.46, 0.055, 8, 24), palette.gold);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 2.15;
+    group.add(hall, core, ring, place(banner(seed), 0.72, 0, 0.25));
+  } else if (kind === "cultivation-path") {
+    for (let index = 0; index < 3; index += 1) {
+      const step = cylinder(0.5 - index * 0.1, 0.58 - index * 0.1, 0.18, 8, index === 2 ? palette.gold : palette.stone);
+      step.position.y = 0.34 + index * 0.2;
+      group.add(step);
+    }
+    const core = mesh(new THREE.OctahedronGeometry(0.3, 0), palette.energy);
+    core.position.y = 1.35;
+    core.userData.flame = true;
+    group.add(core);
+  } else {
+    const core = mesh(new THREE.SphereGeometry(0.38, 16, 10), palette.energy);
+    core.position.y = 1.25;
+    core.userData.flame = true;
+    const firstRing = mesh(new THREE.TorusGeometry(0.66, 0.055, 8, 28), palette.gold);
+    firstRing.position.y = 1.25;
+    firstRing.rotation.x = Math.PI / 2.8;
+    const secondRing = mesh(new THREE.TorusGeometry(0.56, 0.04, 8, 24), palette.steel);
+    secondRing.position.y = 1.25;
+    secondRing.rotation.y = Math.PI / 2;
+    group.add(core, firstRing, secondRing);
+  }
+  return group;
+};
+
+export const createFacilityModel = (kind: FacilityKind, seed: number): THREE.Group => {
+  const group = new THREE.Group();
+  switch (kind) {
+    case "subsistence": {
+      const field = box(1.6, 0.08, 1.2, palette.lightWood);
+      field.position.y = 0.04;
+      group.add(field);
+      for (let row = -2; row <= 2; row += 1) for (let column = -2; column <= 2; column += 1) {
+        const crop = cylinder(0.035, 0.055, 0.28 + (seed + row + column) % 3 * 0.04, 5, palette.crop);
+        crop.position.set(column * 0.25, 0.22, row * 0.2);
+        group.add(crop);
+      }
+      break;
+    }
+    case "construction":
+      group.add(place(box(1.35, 0.22, 1.15, palette.stone), 0, 0.11, 0), place(tower(seed, 1.45, 0.42), 0, 0.2, 0));
+      break;
+    case "navigation": {
+      const dock = box(1.55, 0.12, 0.6, palette.wood);
+      dock.position.y = 0.08;
+      const mast = cylinder(0.035, 0.055, 1.5, 7, palette.wood);
+      mast.position.set(0, 0.82, 0);
+      const sail = box(0.62, 0.82, 0.035, palette.cloth[seed % palette.cloth.length] ?? palette.cloth[0]!);
+      sail.position.set(0.28, 0.87, 0);
+      group.add(dock, mast, sail);
+      break;
+    }
+    case "medicine": {
+      const clinic = cottage(seed, 0.72);
+      const crossVertical = box(0.1, 0.44, 0.04, palette.roof);
+      const crossHorizontal = box(0.3, 0.1, 0.04, palette.roof);
+      crossVertical.position.set(0, 1.1, 0.48);
+      crossHorizontal.position.set(0, 1.1, 0.48);
+      group.add(clinic, crossVertical, crossHorizontal);
+      break;
+    }
+    case "governance":
+      group.add(tower(seed, 2.05, 0.62), place(banner(seed), 0, 0, 0.2));
+      break;
+    case "energy": {
+      const base = cylinder(0.56, 0.7, 0.28, 8, palette.darkStone);
+      base.position.y = 0.14;
+      const core = mesh(new THREE.SphereGeometry(0.35, 12, 8), palette.energy);
+      core.position.y = 0.8;
+      core.userData.flame = true;
+      const ring = mesh(new THREE.TorusGeometry(0.52, 0.06, 8, 20), palette.gold);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.y = 0.8;
+      group.add(base, core, ring);
+      break;
+    }
   }
   return group;
 };

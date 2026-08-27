@@ -3,12 +3,14 @@ import { createWorkerClient } from "./worker/client.ts";
 import type { WorkerMessage, WorldSnapshot } from "./worker/protocol.ts";
 import type { WorldEvent } from "./sim/types.ts";
 import { createMapCanvas, type CellSelection } from "./ui/map-canvas.ts";
+import { mapSceneLodLabel } from "./ui/map-lod.ts";
 import { layerLabels, type MapLayer } from "./ui/layers.ts";
 import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
 import { renderInspector, type InspectorDetail } from "./ui/inspector.ts";
 import { renderTimeline } from "./ui/timeline.ts";
 import { bindTimeControls, downloadSave } from "./ui/controls.ts";
 import { createGodEvent, godToolLabels, type GodTool } from "./ui/god-mode.ts";
+import { formatSimulationAge } from "./ui/formatters.ts";
 
 const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("Application root was not found");
@@ -21,7 +23,7 @@ app.innerHTML = `
         <span class="brand-mark" aria-hidden="true"></span>
         <div><p>自主世界观测站</p><h1>虚拟地球</h1></div>
       </div>
-      <div class="time-readout"><span>世界时间</span><strong id="world-year">0 年</strong></div>
+      <div class="time-readout"><span>世界时间</span><strong id="world-year">0 年 0 天</strong><small>1×：现实 1 分钟 = 世界 1 天</small></div>
       <div class="transport" aria-label="模拟控制">
         <button id="play-button" class="icon-button primary" type="button" title="开始模拟" aria-label="开始模拟">▶</button>
         <button id="pause-button" class="icon-button" type="button" title="暂停模拟" aria-label="暂停模拟">Ⅱ</button>
@@ -57,7 +59,7 @@ app.innerHTML = `
             <button id="camera-reset" type="button" title="镜头朝北" aria-label="镜头朝北">N</button>
           </div>
         </div>
-        <div class="map-caption"><span id="phase-label">原始地质</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
+        <div class="map-caption"><span id="phase-label">原始地质</span><span id="map-scale-level">全球观察</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
         <section class="rail-section"><header><span>01</span><h2>世界状态</h2></header><div id="status-panel"></div></section>
@@ -79,6 +81,7 @@ const query = <T extends Element>(selector: string): T => {
 };
 
 const emptySnapshot: WorldSnapshot = {
+  seed: 1,
   fields: {
     elevation: { width: 1, height: 1, values: new Float32Array(1) },
     temperature: { width: 1, height: 1, values: new Float32Array(1) },
@@ -96,6 +99,11 @@ const emptySnapshot: WorldSnapshot = {
   },
   tick: 0,
   years: 0,
+  formation: {
+    phase: "dust-cloud", progress: 0, dustDensity: 1, bodyCount: 120_000,
+    planetaryMass: 0, collisionEnergy: 0, coreFraction: 0.04, surfaceHeat: 0.12,
+    atmosphere: 0, volatileFraction: 0,
+  },
   digest: "",
   metrics: {},
   foodSecurityByRegion: {},
@@ -113,6 +121,7 @@ const legendLow = query<HTMLElement>("#legend-low");
 const legendHigh = query<HTMLElement>("#legend-high");
 const renderQuality = query<HTMLSelectElement>("#render-quality");
 const zoomLevel = query<HTMLOutputElement>("#zoom-level");
+const mapScaleLevel = query<HTMLElement>("#map-scale-level");
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
 let detail: InspectorDetail = { level: "region" };
@@ -124,7 +133,10 @@ const map = createMapCanvas(canvas, (nextSelection) => {
   detail = { level: "region" };
   if (snapshot) renderInspector(inspector, snapshot, selection, detail);
   client.send({ type: "focusRegion", regionId: nextSelection.regionId });
-}, (nextZoom) => { zoomLevel.textContent = `${Math.round(nextZoom * 100)}%`; });
+}, (nextZoom) => {
+  zoomLevel.textContent = `${Math.round(nextZoom * 100)}%`;
+  mapScaleLevel.textContent = mapSceneLodLabel(nextZoom);
+});
 renderInspector(inspector, emptySnapshot);
 renderTimeline(timeline, []);
 
@@ -146,7 +158,15 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     const layer = button.dataset.layer as MapLayer;
     map.setLayer(layer);
     document.querySelectorAll("[data-layer]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
-    const legend: [string, string] = layer === "natural" ? ["海洋", "高地"] : layer === "foodSecurity" ? ["低保障", "高保障"] : ["低", "高"];
+    const legend: [string, string] = layer === "natural"
+      ? ["海洋", "高地"]
+      : layer === "foodSecurity"
+        ? ["低保障", "高保障"]
+        : layer === "substances"
+          ? ["稀少", "富集"]
+          : layer === "culture"
+            ? ["未形成", "文化特征强"]
+          : ["低", "高"];
     legendLow.textContent = legend[0];
     legendHigh.textContent = legend[1];
   });
@@ -154,7 +174,11 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
 renderQuality.value = "480";
 map.setQuality(480);
 renderQuality.addEventListener("change", () => map.setQuality(Number(renderQuality.value) as 480 | 720 | 1080));
-const syncZoomLabel = (): void => { zoomLevel.textContent = `${Math.round(map.getZoom() * 100)}%`; };
+const syncZoomLabel = (): void => {
+  const currentZoom = map.getZoom();
+  zoomLevel.textContent = `${Math.round(currentZoom * 100)}%`;
+  mapScaleLevel.textContent = mapSceneLodLabel(currentZoom);
+};
 query<HTMLButtonElement>("#zoom-in").addEventListener("click", () => { map.zoomIn(); syncZoomLabel(); });
 query<HTMLButtonElement>("#zoom-out").addEventListener("click", () => { map.zoomOut(); syncZoomLabel(); });
 query<HTMLButtonElement>("#zoom-reset").addEventListener("click", () => { map.resetZoom(); syncZoomLabel(); });
@@ -174,7 +198,11 @@ query<HTMLButtonElement>("#save-button").addEventListener("click", () => client.
 query<HTMLInputElement>("#load-input").addEventListener("change", async (event) => {
   const input = event.currentTarget as HTMLInputElement;
   const file = input.files?.[0];
-  if (file) client.send({ type: "load", payload: await file.text() });
+  if (file) {
+    events = [];
+    renderTimeline(timeline, events, snapshot?.eventArchive?.milestones ?? []);
+    client.send({ type: "load", payload: await file.text() });
+  }
 });
 
 const applyMessage = (message: WorkerMessage): void => {
@@ -190,7 +218,7 @@ const applyMessage = (message: WorkerMessage): void => {
       seen.add(event.id);
       return true;
     }).slice(-64);
-    renderTimeline(timeline, events);
+    renderTimeline(timeline, events, snapshot?.eventArchive?.milestones ?? []);
     return;
   }
   if (message.type === "saved") {
@@ -213,7 +241,8 @@ const applyMessage = (message: WorkerMessage): void => {
   map.update(snapshot, message.paused, message.speed <= 4);
   renderStatusPanel(statusPanel, snapshot);
   renderInspector(inspector, snapshot, selection, detail);
-  year.textContent = `${Math.floor(snapshot.years).toLocaleString("zh-CN")} 年`;
+  renderTimeline(timeline, events, message.snapshot.eventArchive?.milestones ?? []);
+  year.textContent = formatSimulationAge(snapshot.years);
   phase.textContent = phaseForSnapshot(snapshot);
   digest.textContent = `状态 ${snapshot.digest.slice(0, 8)}`;
   status.textContent = message.paused ? "模拟已暂停" : `${message.speed}× 自主演化中`;

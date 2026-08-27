@@ -89,6 +89,25 @@ describe("emergent society", () => {
     }));
   });
 
+  it("derives auditable governance values from supply, cohesion, and membership", () => {
+    const context = makeContext(731, 36);
+    const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds);
+    const delta = governOrganization(context.state, city);
+    const update = delta.entityEffects.find((effect) => effect.collection === "organizations" && effect.id === city.id && effect.operation === "update");
+
+    expect(update?.collection === "organizations" ? update.value?.governance : undefined).toMatchObject({
+      stability: expect.any(Number),
+      legitimacy: expect.any(Number),
+      military: expect.any(Number),
+      taxRate: expect.any(Number),
+      taxRevenue: expect.any(Number),
+    });
+    const governance = update?.collection === "organizations" ? update.value?.governance : undefined;
+    expect(governance?.stability).toBeGreaterThanOrEqual(0);
+    expect(governance?.stability).toBeLessThanOrEqual(1);
+    expect(governance?.taxRevenue).toBeGreaterThan(0);
+  });
+
   it("puts a large organization under food-driven fragmentation pressure", () => {
     const context = makeContext(74, 80);
     const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds);
@@ -106,6 +125,30 @@ describe("emergent society", () => {
     expect(richDelta.entityEffects).not.toContainEqual(expect.objectContaining({
       value: expect.objectContaining({ status: "fragmenting" }),
     }));
+  });
+
+  it("uses governance and energy facilities in annual public administration", () => {
+    const context = makeContext(507, 40);
+    const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds);
+    const base = structuredClone(context.state) as WorldState;
+    base.organizations = [city];
+    base.resources = [{ id: "resource:food:city", resourceId: "food", regionId: city.regionId, holderId: city.id, amount: 80, cap: 100, originEventId: "test" }];
+    const governanceFor = (state: WorldState) => {
+      const update = governOrganization(state, state.organizations[0]!).entityEffects.find((effect) => effect.collection === "organizations" && effect.operation === "update");
+      return update?.collection === "organizations" ? update.value?.governance : undefined;
+    };
+    const baseline = governanceFor(base);
+    const supported = structuredClone(base);
+    supported.facilities = ["governance", "energy"].map((type, index) => ({
+      id: `facility:${type}:government`, type: type as "governance" | "energy", regionId: city.regionId, ownerOrganizationId: city.id,
+      level: 3 as const, condition: 1, status: "active" as const, workforceIds: city.memberIds.slice(0, 4), materialInvested: 10,
+      plannedTick: 1, builtTick: 2, lastMaintainedTick: 2, lastIncidentTick: index,
+    }));
+    const facilityBacked = governanceFor(supported);
+
+    expect(facilityBacked?.publicGoods).toBeGreaterThan(baseline?.publicGoods ?? 0);
+    expect(facilityBacked?.legitimacy).toBeGreaterThan(baseline?.legitimacy ?? 0);
+    expect(facilityBacked?.taxRevenue).toBeGreaterThan(baseline?.taxRevenue ?? 0);
   });
 
   it("records allocation, trade, and consumption through the resource ledger", () => {

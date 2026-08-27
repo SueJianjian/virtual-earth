@@ -2,7 +2,8 @@ import * as THREE from "three";
 import type { RegionId } from "../sim/types.ts";
 import type { SceneEntity, SceneLink, WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
-import { createAgentModel, createFantasyTreeGeometry, createOrganizationModel, createPopulationCamp, enableFantasyShadows, fantasyMaterials } from "./fantasy-assets.ts";
+import { createAgentModel, createFacilityModel, createFantasyTreeGeometry, createLifeformModel, createLifeformPopulation, createOrganizationModel, createPopulationCamp, createWorldviewModel, enableFantasyShadows, fantasyMaterials } from "./fantasy-assets.ts";
+import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZoom, mapSurfaceModeFor, propScaleForZoom, propsPerCellForZoom, terrainPatchLodForZoom, terrainVerticalScaleForZoom } from "./map-lod.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
 export type RenderQuality = 480 | 720 | 1080;
@@ -14,7 +15,7 @@ const renderDimensions: Record<RenderQuality, { width: number; height: number }>
 };
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
-const clampZoom = (value: number): number => clamp(value, 0.6, 8);
+const clampZoom = (value: number): number => clamp(value, 0.6, MAX_MAP_ZOOM);
 const radians = (degrees: number): number => degrees * Math.PI / 180;
 const degrees = (value: number): number => value * 180 / Math.PI;
 const normalizeYaw = (value: number): number => ((value % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
@@ -57,7 +58,7 @@ export const createMapCanvas = (
   renderer.toneMappingExposure = 0.92;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x78a9b8);
+  scene.background = new THREE.Color(0x141a16);
   scene.fog = new THREE.FogExp2(0x8db5bd, 0.0055);
   const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 180);
   const terrainRoot = new THREE.Group();
@@ -100,6 +101,8 @@ export const createMapCanvas = (
   let panWorldZ = 0;
   let cameraYaw = radians(45);
   let cameraPitch = radians(42);
+  let globeYaw = radians(-18);
+  let globePitch = radians(-12);
   let pointerStart: {
     x: number;
     y: number;
@@ -107,10 +110,13 @@ export const createMapCanvas = (
     panZ: number;
     yaw: number;
     pitch: number;
+    globeYaw: number;
+    globePitch: number;
     mode: "pan" | "rotate";
   } | undefined;
   let didPan = false;
   let terrainMesh: THREE.Mesh | undefined;
+  let formationBodyMesh: THREE.Mesh | undefined;
   let waterSurface: THREE.Mesh | undefined;
   let selectionMarker: THREE.Mesh | undefined;
   let sceneEntities: SceneEntity[] = [];
@@ -122,18 +128,49 @@ export const createMapCanvas = (
   const dimensionsFor = (): { width: number; height: number } => {
     const base = renderDimensions[quality];
     const rasterScale = Math.min(2.25, Math.max(1, zoom));
+    const displayAspect = canvas.clientWidth > 0 && canvas.clientHeight > 0
+      ? clamp(canvas.clientWidth / canvas.clientHeight, 0.5, 3)
+      : base.width / base.height;
+    const requestedHeight = Math.round(base.height * rasterScale);
+    const requestedWidth = Math.round(requestedHeight * displayAspect);
+    const capScale = Math.min(1, 1920 / requestedWidth, 1080 / requestedHeight);
     return {
-      width: Math.min(1920, Math.round(base.width * rasterScale)),
-      height: Math.min(1080, Math.round(base.height * rasterScale)),
+      width: Math.max(1, Math.round(requestedWidth * capScale)),
+      height: Math.max(1, Math.round(requestedHeight * capScale)),
     };
   };
 
   const currentWater = (index: number): number => clamp(snapshot?.fields.water.values[index] ?? 0, 0, 1);
 
+  const surfaceMode = () => snapshot ? mapSurfaceModeFor(snapshot.formation, zoom) : "forming-body";
+
+  const globeRadius = (): number => {
+    const grid = snapshot?.fields.elevation;
+    return grid ? Math.max(4, Math.min(grid.width, grid.height) * 0.43) : 4;
+  };
+
+  const globePointForRegion = (x: number, y: number, radiusOffset = 0): THREE.Vector3 => {
+    const grid = snapshot?.fields.elevation;
+    if (!grid) return new THREE.Vector3();
+    const phi = ((x + 0.5) / grid.width) * Math.PI * 2;
+    const theta = ((y + 0.5) / grid.height) * Math.PI;
+    const radius = globeRadius() + radiusOffset;
+    return new THREE.Vector3(
+      -Math.cos(phi) * Math.sin(theta) * radius,
+      Math.cos(theta) * radius,
+      Math.sin(phi) * Math.sin(theta) * radius,
+    );
+  };
+
+  const renderedElevation = (value: number): number => {
+    const seaLevel = 1.47;
+    return seaLevel + (clamp(value, 0, 1) * 3.2 - seaLevel) * terrainVerticalScaleForZoom(zoom);
+  };
+
   const elevationAt = (x: number, y: number): number => {
     const grid = snapshot?.fields.elevation;
     if (!grid || x < 0 || y < 0 || x >= grid.width || y >= grid.height) return 0;
-    return clamp(grid.values[y * grid.width + x] ?? 0, 0, 1) * 3.2;
+    return renderedElevation(grid.values[y * grid.width + x] ?? 0);
   };
 
   const worldPosition = (x: number, y: number, extraHeight = 0): THREE.Vector3 => {
@@ -144,6 +181,7 @@ export const createMapCanvas = (
 
   const cameraFocus = (): THREE.Vector3 => {
     if (!snapshot) return new THREE.Vector3();
+    if (surfaceMode() === "planet-globe") return new THREE.Vector3();
     const grid = snapshot.fields.elevation;
     const baseX = selection ? selection.x : (grid.width - 1) / 2;
     const baseY = selection ? selection.y : (grid.height - 1) / 2;
@@ -158,7 +196,8 @@ export const createMapCanvas = (
     const dimensions = dimensionsFor();
     const aspect = dimensions.width / dimensions.height;
     const grid = snapshot.fields.elevation;
-    const baseSpan = Math.max(10, Math.max(grid.width, grid.height) * 0.94);
+    const bodyView = surfaceMode() === "planet-globe" || snapshot.formation.phase !== "stable-crust";
+    const baseSpan = Math.max(10, (bodyView ? Math.min(grid.width, grid.height) : Math.max(grid.width, grid.height)) * 0.94);
     const visibleHeight = baseSpan / zoom;
     camera.left = -visibleHeight * aspect / 2;
     camera.right = visibleHeight * aspect / 2;
@@ -192,6 +231,8 @@ export const createMapCanvas = (
     canvas.dataset.renderStyle = "fantasy-3d";
     canvas.dataset.cameraYaw = String(Math.round(degrees(cameraYaw)));
     canvas.dataset.cameraPitch = String(Math.round(degrees(cameraPitch)));
+    canvas.dataset.globeYaw = String(Math.round(degrees(globeYaw)));
+    canvas.dataset.globePitch = String(Math.round(degrees(globePitch)));
   };
 
   const scheduleRender = (): void => {
@@ -202,11 +243,18 @@ export const createMapCanvas = (
     });
   };
 
-  const terrainGeometryFor = (current: WorldSnapshot): THREE.BufferGeometry => {
+  const terrainGeometryFor = (
+    current: WorldSnapshot,
+    options: { detail: number; xMin?: number; xMax?: number; yMin?: number; yMax?: number; relief?: number },
+  ): THREE.BufferGeometry => {
     const grid = current.fields.elevation;
-    const detail = 3;
-    const columns = (grid.width - 1) * detail + 1;
-    const rows = (grid.height - 1) * detail + 1;
+    const detail = options.detail;
+    const xMin = clamp(options.xMin ?? 0, 0, grid.width - 1);
+    const xMax = clamp(options.xMax ?? grid.width - 1, xMin, grid.width - 1);
+    const yMin = clamp(options.yMin ?? 0, 0, grid.height - 1);
+    const yMax = clamp(options.yMax ?? grid.height - 1, yMin, grid.height - 1);
+    const columns = Math.round((xMax - xMin) * detail) + 1;
+    const rows = Math.round((yMax - yMin) * detail) + 1;
     const positions = new Float32Array(columns * rows * 3);
     const colors = new Float32Array(columns * rows * 3);
     const indices: number[] = [];
@@ -240,15 +288,20 @@ export const createMapCanvas = (
     };
     for (let vertexY = 0; vertexY < rows; vertexY += 1) {
       for (let vertexX = 0; vertexX < columns; vertexX += 1) {
-        const x = vertexX / detail;
-        const y = vertexY / detail;
+        const x = xMin + vertexX / detail;
+        const y = yMin + vertexY / detail;
         const index = vertexY * columns + vertexX;
         const offset = index * 3;
+        const baseElevation = clamp(sampleValue(grid.values, x, y), 0, 1);
+        const water = clamp(sampleValue(current.fields.water.values, x, y), 0, 1);
+        const landRelief = clamp((baseElevation - 0.38) / 0.2, 0, 1) * (1 - water);
+        const relief = (sceneHash(Math.round(x * detail), Math.round(y * detail), current.seed ^ detail * 811) - 0.5)
+          * (options.relief ?? 0) * landRelief;
         positions[offset] = x - (grid.width - 1) / 2;
-        positions[offset + 1] = clamp(sampleValue(grid.values, x, y), 0, 1) * 3.2;
+        positions[offset + 1] = renderedElevation(baseElevation) + relief;
         positions[offset + 2] = y - (grid.height - 1) / 2;
         const [red, green, blue] = sampleLayerColor(x, y);
-        const variation = 0.92 + sceneHash(vertexX, vertexY, current.tick + 811) * 0.12;
+        const variation = 0.92 + sceneHash(Math.round(x * detail), Math.round(y * detail), current.seed + 811) * 0.12;
         colors[offset] = red / 255 * variation;
         colors[offset + 1] = green / 255 * variation;
         colors[offset + 2] = blue / 255 * variation;
@@ -266,14 +319,199 @@ export const createMapCanvas = (
     return geometry;
   };
 
+  const globeGeometryFor = (current: WorldSnapshot): THREE.SphereGeometry => {
+    const grid = current.fields.elevation;
+    const widthSegments = Math.max(64, Math.min(192, grid.width * 2));
+    const heightSegments = Math.max(32, Math.min(96, grid.height * 2));
+    const radius = globeRadius();
+    const geometry = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
+    const positions = geometry.getAttribute("position");
+    const uvs = geometry.getAttribute("uv");
+    const colors = new Float32Array(positions.count * 3);
+    const direction = new THREE.Vector3();
+    const sampleField = (values: Float32Array, u: number, v: number): number => {
+      const sourceX = u * grid.width - 0.5;
+      const sourceY = (1 - v) * (grid.height - 1);
+      const x0 = Math.floor(sourceX);
+      const x1 = x0 + 1;
+      const y0 = clamp(Math.floor(sourceY), 0, grid.height - 1);
+      const y1 = Math.min(grid.height - 1, y0 + 1);
+      const horizontal = sourceX - x0;
+      const vertical = sourceY - y0;
+      const wrappedX0 = (x0 + grid.width) % grid.width;
+      const wrappedX1 = (x1 + grid.width) % grid.width;
+      const top = (values[y0 * grid.width + wrappedX0] ?? 0) * (1 - horizontal) + (values[y0 * grid.width + wrappedX1] ?? 0) * horizontal;
+      const bottom = (values[y1 * grid.width + wrappedX0] ?? 0) * (1 - horizontal) + (values[y1 * grid.width + wrappedX1] ?? 0) * horizontal;
+      return top * (1 - vertical) + bottom * vertical;
+    };
+    const sampleColor = (u: number, v: number): [number, number, number] => {
+      const sourceX = u * grid.width - 0.5;
+      const sourceY = (1 - v) * (grid.height - 1);
+      const x0 = Math.floor(sourceX);
+      const x1 = x0 + 1;
+      const y0 = clamp(Math.floor(sourceY), 0, grid.height - 1);
+      const y1 = Math.min(grid.height - 1, y0 + 1);
+      const horizontal = sourceX - x0;
+      const vertical = sourceY - y0;
+      const wrappedX0 = (x0 + grid.width) % grid.width;
+      const wrappedX1 = (x1 + grid.width) % grid.width;
+      const topLeft = colorForCell(current, y0 * grid.width + wrappedX0, layer);
+      const topRight = colorForCell(current, y0 * grid.width + wrappedX1, layer);
+      const bottomLeft = colorForCell(current, y1 * grid.width + wrappedX0, layer);
+      const bottomRight = colorForCell(current, y1 * grid.width + wrappedX1, layer);
+      return topLeft.map((channel, channelIndex) => {
+        const top = channel * (1 - horizontal) + topRight[channelIndex]! * horizontal;
+        const bottom = bottomLeft[channelIndex]! * (1 - horizontal) + bottomRight[channelIndex]! * horizontal;
+        return top * (1 - vertical) + bottom * vertical;
+      }) as [number, number, number];
+    };
+    for (let vertex = 0; vertex < positions.count; vertex += 1) {
+      const u = clamp(uvs.getX(vertex), 0, 0.999999);
+      const v = clamp(uvs.getY(vertex), 0, 1);
+      const x = Math.min(grid.width - 1, Math.floor(u * grid.width));
+      const y = Math.min(grid.height - 1, Math.floor((1 - v) * grid.height));
+      const elevation = clamp(sampleField(grid.values, u, v), 0, 1);
+      const water = clamp(sampleField(current.fields.water.values, u, v), 0, 1);
+      const relief = (elevation - 0.48) * radius * 0.035 * (water > 0.45 ? 0.28 : 1);
+      direction.fromBufferAttribute(positions, vertex).normalize().multiplyScalar(radius + relief);
+      positions.setXYZ(vertex, direction.x, direction.y, direction.z);
+      const [red, green, blue] = sampleColor(u, v);
+      const variation = 0.94 + sceneHash(x, y, current.seed + 1663) * 0.1;
+      colors[vertex * 3] = red / 255 * variation;
+      colors[vertex * 3 + 1] = green / 255 * variation;
+      colors[vertex * 3 + 2] = blue / 255 * variation;
+    }
+    positions.needsUpdate = true;
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometry.computeVertexNormals();
+    return geometry;
+  };
+
+  const terrainPatchBounds = (radius: number): { xMin: number; xMax: number; yMin: number; yMax: number } => {
+    const grid = snapshot!.fields.elevation;
+    const centerX = clamp((selection?.x ?? (grid.width - 1) / 2) + panWorldX, 0, grid.width - 1);
+    const centerY = clamp((selection?.y ?? (grid.height - 1) / 2) + panWorldZ, 0, grid.height - 1);
+    return {
+      xMin: Math.max(0, Math.floor(centerX - radius)),
+      xMax: Math.min(grid.width - 1, Math.ceil(centerX + radius)),
+      yMin: Math.max(0, Math.floor(centerY - radius)),
+      yMax: Math.min(grid.height - 1, Math.ceil(centerY + radius)),
+    };
+  };
+
   const rebuildTerrain = (): void => {
     if (!snapshot) return;
+    if (selectionMarker?.parent === terrainRoot) selectionMarker = undefined;
     clearGroup(terrainRoot);
+    terrainRoot.rotation.set(0, 0, 0);
+    terrainRoot.scale.setScalar(1);
+    terrainMesh = undefined;
+    formationBodyMesh = undefined;
+    waterSurface = undefined;
     const grid = snapshot.fields.elevation;
-    terrainMesh = new THREE.Mesh(terrainGeometryFor(snapshot), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, flatShading: false, side: THREE.DoubleSide }));
+    const bodyScale = formationBodyScale(snapshot.formation);
+    canvas.dataset.formationBodyScale = bodyScale.toFixed(3);
+    if (snapshot.formation.phase !== "stable-crust") {
+      const bodyRadius = Math.min(grid.width, grid.height) * 0.44 * bodyScale;
+      const surfaceColor = new THREE.Color(0x775b3e).lerp(new THREE.Color(0xc15a32), snapshot.formation.surfaceHeat * 0.65);
+      formationBodyMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(0.8, bodyRadius), 64, 32),
+        new THREE.MeshStandardMaterial({
+          color: surfaceColor,
+          roughness: 0.8,
+          metalness: snapshot.formation.coreFraction * 0.28,
+          emissive: new THREE.Color(0x8f260d),
+          emissiveIntensity: snapshot.formation.surfaceHeat * 0.72,
+          flatShading: snapshot.formation.phase === "planetesimals" || snapshot.formation.phase === "accretion",
+        }),
+      );
+      formationBodyMesh.position.y = 1.2;
+      formationBodyMesh.castShadow = formationBodyMesh.receiveShadow = true;
+      terrainRoot.add(formationBodyMesh);
+      if (snapshot.formation.atmosphere > 0.01) {
+        const atmosphere = new THREE.Mesh(
+          new THREE.SphereGeometry(Math.max(1, bodyRadius * 1.035), 48, 24),
+          new THREE.MeshPhysicalMaterial({ color: 0x6ea6b3, transparent: true, opacity: snapshot.formation.atmosphere * 0.2, roughness: 0.1, depthWrite: false, side: THREE.BackSide }),
+        );
+        atmosphere.position.copy(formationBodyMesh.position);
+        terrainRoot.add(atmosphere);
+      }
+      terrainMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(grid.width - 1, grid.height - 1),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, colorWrite: false, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      terrainMesh.rotation.x = -Math.PI / 2;
+      terrainRoot.add(terrainMesh);
+      canvas.dataset.terrainDetail = "0";
+      canvas.dataset.terrainPatch = "formation-body";
+      canvas.dataset.surfaceMode = "forming-body";
+      canvas.dataset.worldCoverage = `${Math.round(snapshot.formation.planetaryMass * 100)}%`;
+      return;
+    }
+    if (surfaceMode() === "planet-globe") {
+      const radius = globeRadius();
+      formationBodyMesh = new THREE.Mesh(
+        globeGeometryFor(snapshot),
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.78,
+          metalness: 0.02,
+          flatShading: false,
+        }),
+      );
+      formationBodyMesh.castShadow = formationBodyMesh.receiveShadow = true;
+      terrainMesh = formationBodyMesh;
+      terrainRoot.add(formationBodyMesh);
+      const atmosphere = new THREE.Mesh(
+        new THREE.SphereGeometry(radius * 1.035, 96, 48),
+        new THREE.MeshPhysicalMaterial({
+          color: 0x74b9d0,
+          transparent: true,
+          opacity: 0.14,
+          roughness: 0.12,
+          clearcoat: 0.8,
+          depthWrite: false,
+          side: THREE.BackSide,
+        }),
+      );
+      terrainRoot.add(atmosphere);
+      terrainRoot.rotation.order = "YXZ";
+      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      canvas.dataset.terrainDetail = String(BASE_TERRAIN_DETAIL);
+      canvas.dataset.terrainPatch = "global";
+      canvas.dataset.surfaceMode = "planet-globe";
+      canvas.dataset.worldCoverage = "100%";
+      return;
+    }
+    canvas.dataset.surfaceMode = "local-surface";
+    canvas.dataset.worldCoverage = "local-detail";
+    const terrainMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.88,
+      flatShading: false,
+      side: THREE.DoubleSide,
+    });
+    terrainMesh = new THREE.Mesh(terrainGeometryFor(snapshot, { detail: BASE_TERRAIN_DETAIL }), terrainMaterial);
     terrainMesh.receiveShadow = true;
     terrainMesh.castShadow = true;
     terrainRoot.add(terrainMesh);
+    const patchLod = terrainPatchLodForZoom(zoom);
+    if (patchLod) {
+      const bounds = terrainPatchBounds(patchLod.radius);
+      const patchMaterial = terrainMaterial.clone();
+      patchMaterial.polygonOffset = true;
+      patchMaterial.polygonOffsetFactor = -1;
+      patchMaterial.polygonOffsetUnits = -1;
+      const patch = new THREE.Mesh(terrainGeometryFor(snapshot, { ...bounds, detail: patchLod.detail, relief: patchLod.relief }), patchMaterial);
+      patch.receiveShadow = true;
+      patch.castShadow = true;
+      terrainRoot.add(patch);
+      canvas.dataset.terrainDetail = String(patchLod.detail);
+      canvas.dataset.terrainPatch = `${bounds.xMin}:${bounds.yMin}:${bounds.xMax}:${bounds.yMax}`;
+    } else {
+      canvas.dataset.terrainDetail = String(BASE_TERRAIN_DETAIL);
+      canvas.dataset.terrainPatch = "global";
+    }
     const seaMaterial = new THREE.MeshPhysicalMaterial({
       color: 0x287f9b,
       transparent: true,
@@ -286,7 +524,7 @@ export const createMapCanvas = (
       side: THREE.DoubleSide,
       depthWrite: false,
     });
-    waterSurface = new THREE.Mesh(new THREE.PlaneGeometry(grid.width + 8, grid.height + 8), seaMaterial);
+    waterSurface = new THREE.Mesh(new THREE.PlaneGeometry(grid.width - 1, grid.height - 1), seaMaterial);
     waterSurface.rotation.x = -Math.PI / 2;
     waterSurface.position.y = 1.47;
     waterSurface.receiveShadow = true;
@@ -312,20 +550,61 @@ export const createMapCanvas = (
   const rebuildProps = (): void => {
     if (!snapshot) return;
     clearGroup(propRoot);
+    propRoot.rotation.set(0, 0, 0);
     const grid = snapshot.fields.elevation;
+    if (snapshot.formation.phase !== "stable-crust") {
+      const formation = snapshot.formation;
+      const particleCount = Math.max(48, Math.min(900, Math.round(formation.dustDensity * 720 + formation.bodyCount / 800)));
+      const geometry = new THREE.DodecahedronGeometry(0.16, 0);
+      const material = new THREE.MeshStandardMaterial({
+        color: formation.phase === "accretion" || formation.phase === "differentiation" ? 0xd8753f : 0xc3a06d,
+        roughness: 0.92,
+        emissive: formation.collisionEnergy > 0.15 ? 0x70250e : 0x39250f,
+        emissiveIntensity: 0.28 + formation.collisionEnergy * 0.8,
+      });
+      const particles = new THREE.InstancedMesh(geometry, material, particleCount);
+      const matrix = new THREE.Matrix4();
+      const quaternion = new THREE.Quaternion();
+      const bodyRadius = Math.min(grid.width, grid.height) * 0.44 * formationBodyScale(formation);
+      const diskRadius = Math.max(bodyRadius * 1.35, Math.max(grid.width, grid.height) * (0.14 + formation.dustDensity * 0.34));
+      for (let index = 0; index < particleCount; index += 1) {
+        const angle = sceneHash(index, snapshot.seed, 1709) * Math.PI * 2;
+        const distance = bodyRadius * 1.05 + Math.pow(sceneHash(index, grid.width, 2371), 0.62) * diskRadius;
+        const vertical = (sceneHash(index, grid.height, 91) - 0.5) * (1.4 + formation.dustDensity * 5.2);
+        const position = new THREE.Vector3(Math.cos(angle) * distance, 1.2 + vertical, Math.sin(angle) * distance);
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sceneHash(index, snapshot.seed, 337) * Math.PI * 2);
+        const scale = 0.35 + sceneHash(index, snapshot.seed, 419) * (0.7 + formation.planetaryMass * 2.2);
+        matrix.compose(position, quaternion, new THREE.Vector3(scale, scale, scale));
+        particles.setMatrixAt(index, matrix);
+      }
+      particles.castShadow = particles.receiveShadow = true;
+      particles.instanceMatrix.needsUpdate = true;
+      propRoot.add(particles);
+      return;
+    }
     const trees: Array<{ position: THREE.Vector3; scale: number; rotation: number }> = [];
     const rocks: Array<{ position: THREE.Vector3; scale: number; rotation: number }> = [];
-    for (let y = 0; y < grid.height; y += 1) for (let x = 0; x < grid.width; x += 1) {
+    const samplesPerCell = propsPerCellForZoom(zoom);
+    const localPropScale = propScaleForZoom(zoom);
+    if (samplesPerCell === 0) return;
+    const patchLod = terrainPatchLodForZoom(zoom);
+    const bounds = patchLod
+      ? terrainPatchBounds(patchLod.radius + 2)
+      : { xMin: 0, xMax: grid.width - 1, yMin: 0, yMax: grid.height - 1 };
+    for (let y = bounds.yMin; y <= bounds.yMax; y += 1) for (let x = bounds.xMin; x <= bounds.xMax; x += 1) {
       const index = y * grid.width + x;
       const elevation = elevationAt(x, y);
       if (currentWater(index) > 0.45 || elevation < 1.47) continue;
-      const variant = sceneHash(x, y, grid.width * 31);
       const biomass = clamp(snapshot.fields.biomass.values[index] ?? 0, 0, 1);
-      const position = worldPosition(x, y);
-      position.x += (sceneHash(x, y, 93) - 0.5) * 0.44;
-      position.z += (sceneHash(x, y, 177) - 0.5) * 0.44;
-      if (variant < 0.12 + biomass * 0.34) trees.push({ position, scale: 0.75 + sceneHash(x, y, 221) * 0.65, rotation: variant * Math.PI * 2 });
-      else if (variant > 0.84) rocks.push({ position, scale: 0.22 + sceneHash(x, y, 341) * 0.28, rotation: variant * Math.PI * 2 });
+      for (let sample = 0; sample < samplesPerCell; sample += 1) {
+        const salt = grid.width * 31 + sample * 977;
+        const variant = sceneHash(x, y, salt);
+        const position = worldPosition(x, y);
+        position.x += (sceneHash(x, y, 93 + sample * 43) - 0.5) * 0.82;
+        position.z += (sceneHash(x, y, 177 + sample * 59) - 0.5) * 0.82;
+        if (variant < 0.12 + biomass * 0.34) trees.push({ position, scale: (0.58 + sceneHash(x, y, 221 + sample * 71) * 0.72) * localPropScale, rotation: variant * Math.PI * 2 });
+        else if (variant > 0.84) rocks.push({ position, scale: (0.18 + sceneHash(x, y, 341 + sample * 83) * 0.3) * localPropScale, rotation: variant * Math.PI * 2 });
+      }
     }
     const treeGeometry = createFantasyTreeGeometry();
     const trunk = new THREE.InstancedMesh(treeGeometry.trunk, fantasyMaterials.trunk, trees.length);
@@ -391,7 +670,10 @@ export const createMapCanvas = (
     if (!match || !snapshot) return undefined;
     const seed = stringSeed(entity.id);
     const position = worldPosition(Number(match[1]), Number(match[2]), 0.04);
-    const spread = entity.kind === "agent" ? 3.8 : entity.kind === "population" ? 1.6 : entity.rank < 5 ? 1.15 : 0.52;
+    const sceneLod = mapSceneLodForZoom(zoom);
+    const spread = sceneLod === "individual"
+      ? entity.kind === "agent" ? 1.35 : entity.kind === "population" ? 0.48 : entity.rank <= 2 ? 0.58 : entity.rank <= 5 ? 0.4 : 0.26
+      : entity.kind === "agent" ? 3.8 : entity.kind === "population" ? 1.6 : entity.rank < 5 ? 1.15 : 0.52;
     position.x += ((seed % 1000) / 1000 - 0.5) * spread;
     position.z += (((seed >>> 10) % 1000) / 1000 - 0.5) * spread;
     return position;
@@ -407,13 +689,33 @@ export const createMapCanvas = (
       if (!position) continue;
       entityPositions.set(entity.id, position);
       const seed = stringSeed(entity.id);
-      const model = entity.kind === "agent" ? createAgentModel(seed) : entity.kind === "population" ? createPopulationCamp(seed) : createOrganizationModel(entity.kind, seed);
+      const model = entity.kind === "agent"
+        ? entity.lifeBlueprint ? createLifeformModel(entity.lifeBlueprint, seed) : createAgentModel(seed)
+        : entity.kind === "population"
+          ? entity.lifeBlueprint ? createLifeformPopulation(entity.lifeBlueprint, seed) : createPopulationCamp(seed)
+          : entity.kind === "facility"
+            ? createFacilityModel(entity.facilityType ?? "governance", seed)
+            : entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path"
+              ? createWorldviewModel(entity.kind, seed)
+              : createOrganizationModel(entity.kind, seed);
       model.position.copy(position);
       model.rotation.y = (seed % 628) / 100;
       model.userData.baseY = position.y;
       model.userData.phase = seed % 31;
       model.userData.sceneKind = entity.kind;
       model.userData.sceneRank = entity.rank;
+      model.userData.sceneRegionId = entity.regionId;
+      model.userData.sceneEntityId = entity.id;
+      model.userData.lifeform = Boolean(entity.lifeBlueprint);
+      model.userData.facilityLevel = entity.facilityLevel ?? 1;
+      model.userData.facilityCondition = entity.facilityCondition ?? 1;
+      model.userData.facilityStatus = entity.facilityStatus;
+      model.userData.worldviewInfluence = entity.worldviewInfluence ?? 0;
+      model.userData.worldviewStatus = entity.worldviewStatus;
+      if (entity.kind === "facility" && entity.facilityStatus === "damaged") {
+        model.rotation.z = (1 - (entity.facilityCondition ?? 1)) * 0.12;
+        model.position.y -= 0.08;
+      }
       enableFantasyShadows(model);
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
@@ -429,37 +731,107 @@ export const createMapCanvas = (
       const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(16));
       const conflict = link.kind === "rival" || link.kind === "border-conflict";
       const lineMaterial = new THREE.LineBasicMaterial({ color: conflict ? 0xd5573e : 0xf1d36a, transparent: true, opacity: conflict ? 0.78 : 0.62 });
-      linkRoot.add(new THREE.Line(geometry, lineMaterial));
+      const line = new THREE.Line(geometry, lineMaterial);
+      line.userData.fromId = link.fromId;
+      line.userData.toId = link.toId;
+      linkRoot.add(line);
     }
     updateSceneLod();
   };
 
   const updateSceneLod = (): void => {
-    const sceneLod = zoom < 1.5 ? "global" : zoom < 2.5 ? "region" : zoom < 4 ? "settlement" : "individual";
+    const sceneLod = mapSceneLodForZoom(zoom);
+    const globeView = surfaceMode() === "planet-globe";
+    let visibleAgentCount = 0;
+    let visiblePopulationCount = 0;
+    let visibleOrganizationCount = 0;
+    let visibleEntityCount = 0;
+    const visibleEntityIds = new Set<string>();
     for (const child of entityRoot.children) {
       const kind = child.userData.sceneKind as SceneEntity["kind"] | undefined;
       const rank = Number(child.userData.sceneRank ?? 0);
-      child.visible = sceneLod === "individual"
-        || (sceneLod === "settlement" && kind !== "agent" && rank >= 1)
-        || (sceneLod === "region" && kind !== "agent" && rank >= 3)
-        || (sceneLod === "global" && rank >= 5);
+      const isLocal = !selection || child.userData.sceneRegionId === selection.regionId;
+      if (globeView) child.visible = false;
+      else if (sceneLod === "individual") {
+        if (!isLocal) child.visible = false;
+        else if (kind === "agent") child.visible = visibleAgentCount++ < 12;
+        else if (kind === "population") child.visible = visiblePopulationCount++ < 2;
+        else if (kind === "facility") child.visible = visibleOrganizationCount++ < 10;
+        else child.visible = rank <= 6 && visibleOrganizationCount++ < 8;
+      } else {
+        child.visible = (sceneLod === "settlement" && kind !== "agent" && rank >= 1)
+          || (sceneLod === "region" && kind !== "agent" && rank >= 3)
+          || (sceneLod === "continent" && rank >= 5)
+          || (sceneLod === "global" && rank >= 7);
+      }
+      const modelScale = sceneLod === "global" ? 1
+        : sceneLod === "continent" ? 0.82
+          : sceneLod === "region" ? 0.62
+            : sceneLod === "settlement" ? 0.38
+              : kind === "agent" ? 0.16
+                : kind === "population" ? 0.14
+                  : rank <= 2 ? 0.12
+                    : rank <= 5 ? 0.09
+                      : 0.07;
+      const facilityScale = kind === "facility" ? 0.84 + Number(child.userData.facilityLevel ?? 1) * 0.16 : 1;
+      const worldviewScale = kind === "deity" || kind === "sect" || kind === "cultivation-path"
+        ? (child.userData.worldviewStatus === "dormant" ? 0.68 : 0.82) + Number(child.userData.worldviewInfluence ?? 0) * 0.35
+        : 1;
+      child.scale.setScalar(modelScale * facilityScale * worldviewScale);
+      if (child.visible) {
+        visibleEntityCount += 1;
+        visibleEntityIds.add(String(child.userData.sceneEntityId));
+      }
     }
-    propRoot.visible = zoom >= 0.8;
-    territoryRoot.visible = sceneLod !== "individual";
-    linkRoot.visible = sceneLod === "individual";
+    propRoot.visible = snapshot?.formation.phase !== "stable-crust" || (!globeView && propsPerCellForZoom(zoom) > 0);
+    territoryRoot.visible = !globeView && sceneLod !== "individual";
+    linkRoot.visible = !globeView && sceneLod === "individual";
+    effectRoot.visible = !globeView;
+    for (const link of linkRoot.children) {
+      link.visible = sceneLod === "individual"
+        && visibleEntityIds.has(String(link.userData.fromId))
+        && visibleEntityIds.has(String(link.userData.toId));
+    }
     canvas.dataset.sceneLod = sceneLod;
+    canvas.dataset.visibleSceneEntityCount = String(visibleEntityCount);
+    canvas.dataset.maxZoom = String(MAX_MAP_ZOOM);
+    canvas.dataset.worldScope = snapshot?.formation.phase === "stable-crust" ? "planetary" : "forming-body";
+    if (snapshot) {
+      const grid = snapshot.fields.elevation;
+      canvas.dataset.visibleRegionSpan = globeView
+        ? `${grid.width.toFixed(2)}x${grid.height.toFixed(2)}`
+        : `${Math.max(1 / MAX_MAP_ZOOM, grid.width / zoom).toFixed(2)}x${Math.max(1 / MAX_MAP_ZOOM, grid.height / zoom).toFixed(2)}`;
+    }
   };
 
   const updateSelectionMarker = (): void => {
     if (selectionMarker) {
-      effectRoot.remove(selectionMarker);
+      selectionMarker.parent?.remove(selectionMarker);
       selectionMarker.geometry.dispose();
       (selectionMarker.material as THREE.Material).dispose();
       selectionMarker = undefined;
     }
     if (!selection) return;
+    if (surfaceMode() === "planet-globe") {
+      const radius = globeRadius();
+      const position = globePointForRegion(selection.x, selection.y, radius * 0.018);
+      const normal = position.clone().normalize();
+      selectionMarker = new THREE.Mesh(
+        new THREE.RingGeometry(radius * 0.018, radius * 0.027, 32),
+        new THREE.MeshBasicMaterial({ color: 0xffd94a, transparent: true, opacity: 0.95, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      selectionMarker.position.copy(position);
+      selectionMarker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      terrainRoot.add(selectionMarker);
+      return;
+    }
+    const sceneLod = mapSceneLodForZoom(zoom);
+    const markerRadius = sceneLod === "individual" ? 0.08
+      : sceneLod === "settlement" ? 0.2
+        : sceneLod === "region" ? 0.36
+          : 0.52;
     selectionMarker = new THREE.Mesh(
-      new THREE.RingGeometry(0.52, 0.68, 32),
+      new THREE.RingGeometry(markerRadius, markerRadius * 1.3, 32),
       new THREE.MeshBasicMaterial({ color: 0xffd94a, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false }),
     );
     selectionMarker.rotation.x = -Math.PI / 2;
@@ -473,6 +845,12 @@ export const createMapCanvas = (
     sceneLinks = next.sceneLinks ?? [];
     canvas.dataset.sceneEntityCount = String(sceneEntities.length);
     canvas.dataset.sceneLinkCount = String(sceneLinks.length);
+    canvas.dataset.sceneFacilityCount = String(sceneEntities.filter((entity) => entity.kind === "facility").length);
+    canvas.dataset.sceneWorldviewCount = String(sceneEntities.filter((entity) => entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path").length);
+    canvas.dataset.sceneLifeformCount = String(sceneEntities.filter((entity) => (entity.kind === "agent" || entity.kind === "population") && entity.lifeBlueprint).length);
+    canvas.dataset.formationPhase = next.formation.phase;
+    canvas.dataset.formationProgress = (next.formation.progress * 100).toFixed(2);
+    canvas.dataset.worldGrid = `${next.fields.elevation.width}x${next.fields.elevation.height}`;
     canvas.dataset.crossRegionLinkCount = String(sceneLinks.filter((link) => link.kind === "trade" || link.kind === "border-conflict").length);
     rebuildTerrain();
     rebuildTerritories();
@@ -482,7 +860,15 @@ export const createMapCanvas = (
   };
 
   const updateZoom = (next: number): void => {
+    const previousLod = mapSceneLodForZoom(zoom);
     zoom = clampZoom(next);
+    const nextLod = mapSceneLodForZoom(zoom);
+    if (snapshot && previousLod !== nextLod) {
+      rebuildTerrain();
+      rebuildProps();
+      rebuildEntities();
+      updateSelectionMarker();
+    }
     updateSceneLod();
     onZoomChange?.(zoom);
     if (deferredCameraRender !== undefined) clearTimeout(deferredCameraRender);
@@ -502,6 +888,10 @@ export const createMapCanvas = (
     if (animationEnabled && time - lastAnimationFrame >= 33) {
       const phase = time / 1000;
       lastAnimationFrame = time;
+      if (snapshot?.formation.phase !== "stable-crust") {
+        propRoot.rotation.y = phase * 0.035;
+        if (formationBodyMesh) formationBodyMesh.rotation.y = phase * 0.08;
+      }
       if (waterSurface) {
         waterSurface.position.y = 1.47 + Math.sin(phase * 0.85) * 0.025;
         (waterSurface.material as THREE.MeshPhysicalMaterial).clearcoatRoughness = 0.13 + Math.sin(phase * 0.6) * 0.04;
@@ -528,10 +918,16 @@ export const createMapCanvas = (
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, camera);
     const hit = raycaster.intersectObject(terrainMesh, false)[0];
+    const grid = snapshot.fields.elevation;
+    if (surfaceMode() === "planet-globe") {
+      if (!hit?.uv) return undefined;
+      const x = Math.min(grid.width - 1, Math.floor(clamp(hit.uv.x, 0, 0.999999) * grid.width));
+      const y = Math.min(grid.height - 1, Math.floor((1 - clamp(hit.uv.y, 0, 1)) * grid.height));
+      return { x, y, index: y * grid.width + x, regionId: `region:${x}:${y}` as RegionId };
+    }
     const fallback = new THREE.Vector3();
     const point = hit?.point ?? raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -1.5), fallback);
     if (!point) return undefined;
-    const grid = snapshot.fields.elevation;
     const x = clamp(Math.round(point.x + (grid.width - 1) / 2), 0, grid.width - 1);
     const y = clamp(Math.round(point.z + (grid.height - 1) / 2), 0, grid.height - 1);
     return { x, y, index: y * grid.width + x, regionId: `region:${x}:${y}` as RegionId };
@@ -544,6 +940,7 @@ export const createMapCanvas = (
     selection = next;
     panWorldX = 0;
     panWorldZ = 0;
+    if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     updateSelectionMarker();
     onSelect(next);
     scheduleRender();
@@ -556,6 +953,8 @@ export const createMapCanvas = (
       panZ: panWorldZ,
       yaw: cameraYaw,
       pitch: cameraPitch,
+      globeYaw,
+      globePitch,
       mode: event.button === 2 || event.shiftKey ? "rotate" : "pan",
     };
     didPan = false;
@@ -574,6 +973,14 @@ export const createMapCanvas = (
       scheduleRender();
       return;
     }
+    if (surfaceMode() === "planet-globe") {
+      globeYaw = normalizeYaw(pointerStart.globeYaw + deltaX * 0.008);
+      globePitch = clamp(pointerStart.globePitch + deltaY * 0.005, radians(-55), radians(55));
+      terrainRoot.rotation.order = "YXZ";
+      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      scheduleRender();
+      return;
+    }
     const span = Math.max(snapshot.fields.elevation.width, snapshot.fields.elevation.height) / zoom;
     const unitsPerPixel = span / Math.max(1, canvas.clientHeight);
     panWorldX = pointerStart.panX + (-deltaX * Math.cos(cameraYaw) - deltaY * Math.sin(cameraYaw) * 0.72) * unitsPerPixel * 0.72;
@@ -581,6 +988,7 @@ export const createMapCanvas = (
     scheduleRender();
   });
   const endPointer = (event?: PointerEvent): void => {
+    if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     pointerStart = undefined;
     if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     canvas.style.cursor = "grab";
@@ -588,7 +996,10 @@ export const createMapCanvas = (
   canvas.addEventListener("pointerup", endPointer);
   canvas.addEventListener("pointercancel", () => endPointer());
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
-  canvas.addEventListener("wheel", (event) => { event.preventDefault(); updateZoom(zoom + (event.deltaY < 0 ? 0.1 : -0.1)); }, { passive: false });
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    updateZoom(event.deltaY < 0 ? zoom * 1.12 : zoom / 1.12);
+  }, { passive: false });
   new ResizeObserver(scheduleRender).observe(canvas);
 
   return {
@@ -602,9 +1013,9 @@ export const createMapCanvas = (
         return;
       }
       snapshot = next;
-      if (!renderIntermediate) return;
       if (animationEnabled) { applySnapshot(next); return; }
-      const delay = Math.max(0, 250 - (performance.now() - lastDataRender));
+      const throttle = renderIntermediate ? 250 : 1_000;
+      const delay = Math.max(0, throttle - (performance.now() - lastDataRender));
       if (deferredDataRender !== undefined) return;
       deferredDataRender = setTimeout(() => {
         deferredDataRender = undefined;
@@ -613,7 +1024,14 @@ export const createMapCanvas = (
         render();
       }, delay);
     },
-    setLayer: (next: MapLayer) => { layer = next; if (snapshot) rebuildTerrain(); scheduleRender(); },
+    setLayer: (next: MapLayer) => {
+      layer = next;
+      if (snapshot) {
+        rebuildTerrain();
+        updateSelectionMarker();
+      }
+      scheduleRender();
+    },
     setQuality: (next: RenderQuality) => { quality = next; scheduleRender(); },
     setSelection: (next: CellSelection | undefined) => {
       const changed = selection?.regionId !== next?.regionId;
@@ -621,12 +1039,13 @@ export const createMapCanvas = (
       if (!changed) return;
       panWorldX = 0;
       panWorldZ = 0;
+      if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
       updateSelectionMarker();
       scheduleRender();
     },
     setAnimating: (next: boolean) => { animationEnabled = next; if (next) scheduleRender(); },
-    zoomIn: () => updateZoom(zoom + (zoom < 2 ? 0.25 : zoom < 4 ? 0.5 : 1)),
-    zoomOut: () => updateZoom(zoom - (zoom <= 2 ? 0.25 : zoom <= 4 ? 0.5 : 1)),
+    zoomIn: () => updateZoom(zoom < 2 ? zoom + 0.25 : zoom < 10 ? zoom + 1 : zoom < 24 ? zoom + 2 : zoom * 1.5),
+    zoomOut: () => updateZoom(zoom <= 2 ? zoom - 0.25 : zoom <= 10 ? zoom - 1 : zoom <= 24 ? zoom - 2 : zoom / 1.5),
     resetZoom: () => { panWorldX = 0; panWorldZ = 0; updateZoom(1); },
     rotateLeft: () => updateOrbit(cameraYaw - radians(15), cameraPitch),
     rotateRight: () => updateOrbit(cameraYaw + radians(15), cameraPitch),
@@ -635,6 +1054,9 @@ export const createMapCanvas = (
     resetCamera: () => {
       panWorldX = 0;
       panWorldZ = 0;
+      globeYaw = radians(-18);
+      globePitch = radians(-12);
+      if (surfaceMode() === "planet-globe") terrainRoot.rotation.set(globePitch, globeYaw, 0);
       updateOrbit(0, radians(42));
     },
     getLayer: () => layer,

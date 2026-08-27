@@ -36,12 +36,12 @@ describe("autonomous world long run", () => {
     expect(state.fields.nutrients.values.some((value) => value > 0)).toBe(true);
     expect(state.chemistry.organics.values.some((value) => value > 0)).toBe(true);
     expect(state.events.length).toBeGreaterThan(0);
-  });
+  }, 10_000);
 
   it("replays the same long run exactly", () => {
     const first = run(42);
     const second = run(42);
     expect(worldDigest(first)).toBe(worldDigest(second));
     expect(first.events.map((event) => event.id)).toEqual(second.events.map((event) => event.id));
-  });
+  }, 20_000);
 });

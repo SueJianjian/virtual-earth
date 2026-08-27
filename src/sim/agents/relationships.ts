@@ -7,6 +7,7 @@ import type {
   RuleOutcome,
   WorldDelta,
 } from "../types.ts";
+import { defaultGovernanceFor } from "../society/organization.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [],
@@ -63,6 +64,8 @@ export const createFamily = (
   territoryRegionIds: [regionId],
   resources: {},
   status: "active",
+  governance: defaultGovernanceFor("family"),
+  diplomacy: {},
 });
 
 export const createFamilyIfEligible = (
