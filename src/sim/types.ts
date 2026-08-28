@@ -79,6 +79,20 @@ export type ChemistryChange = {
   causeRuleId: string;
 };
 
+export type FieldPatch = {
+  field: FieldName;
+  operation: "set" | "add";
+  values: Float32Array;
+  causeRuleId: string;
+};
+
+export type ChemistryPatch = {
+  field: ChemistryFieldName;
+  operation: "set" | "add";
+  values: Float64Array;
+  causeRuleId: string;
+};
+
 export type SubstanceKind = "mineral" | "crystal" | "organic-compound" | "engineered-composite";
 export type SubstanceFormation = "geological" | "hydrothermal" | "biochemical" | "engineered";
 export type SubstanceStatus = "latent" | "known";
@@ -227,6 +241,8 @@ export type WorldEventDraft = {
 export type WorldDelta = {
   fieldChanges: FieldChange[];
   chemistryChanges: ChemistryChange[];
+  fieldPatches?: FieldPatch[];
+  chemistryPatches?: ChemistryPatch[];
   entityEffects: EntityEffect[];
   relationshipEffects: RelationshipEffect[];
   resourceTransactions: ResourceTransaction[];

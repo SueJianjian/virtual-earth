@@ -80,6 +80,33 @@ describe("rule engine and event ledger", () => {
     expect(mutableInput.tick).toBe(1);
   });
 
+  it("applies dense patches and sparse changes in simulation-stage order", () => {
+    const baseline = stepWorld(
+      createWorld(19, { width: 8, height: 8, formation: "formed" }),
+      { elapsedYears: 1, externalEvents: [] },
+      { computeDigest: false },
+    ).state.fields.water.values[0] ?? 0;
+    clearSimulationStages();
+    const sparseStage = (id: string, order: number, value: number) => ({
+      id,
+      order,
+      run: (): WorldDelta => ({
+        fieldChanges: [{ field: "water", index: 0, operation: "add", value, causeRuleId: id }],
+        chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [],
+      }),
+    });
+    registerSimulationStage(sparseStage("before-environment", 5, 0.25));
+    registerSimulationStage(sparseStage("after-environment", 15, 0.1));
+
+    const result = stepWorld(
+      createWorld(19, { width: 8, height: 8, formation: "formed" }),
+      { elapsedYears: 1, externalEvents: [] },
+      { computeDigest: false },
+    );
+
+    expect(result.state.fields.water.values[0]).toBeCloseTo(Math.min(1, baseline + 0.1), 6);
+  });
+
   it("refreshes collection-keyed indexes after an in-place entity update", () => {
     const world = createWorld(17, { width: 8, height: 8, formation: "formed" });
     const regionId = "region:1:1" as RegionId;

@@ -1,4 +1,4 @@
-import { calculateChemistry, applyChemistryChanges } from "./chemistry.ts";
+import { calculateChemistry, calculateChemistryPatches, applyChemistryChanges, applyChemistryPatches } from "./chemistry.ts";
 import { calculateClimate } from "./climate.ts";
 import { simulateWater } from "./hydrology.ts";
 import { initializeTerrainWater } from "./terrain.ts";
@@ -161,23 +161,20 @@ export const stepEnvironment = (
     simulateWater(workingState, activeEvents, elapsedYears),
     hazardResult.hazards,
   );
-  for (let index = 0; index < water.length; index += 1) {
-    delta.fieldChanges.push(
-      { field: "temperature", index, operation: "set", value: climate.temperature[index] ?? 0, causeRuleId: "climate-field" },
-      { field: "humidity", index, operation: "set", value: climate.humidity[index] ?? 0, causeRuleId: "climate-field" },
-      { field: "water", index, operation: "set", value: water[index] ?? 0, causeRuleId: "hydrology-cycle" },
-    );
-    if (needsNutrients) {
-      delta.fieldChanges.push({
-        field: "nutrients",
-        index,
-        operation: "set",
-        value: workingState.fields.nutrients.values[index] ?? 0,
-        causeRuleId: "terrain-nutrients",
-      });
-    }
+  delta.fieldPatches = [
+    { field: "temperature", operation: "set", values: climate.temperature, causeRuleId: "climate-field" },
+    { field: "humidity", operation: "set", values: climate.humidity, causeRuleId: "climate-field" },
+    { field: "water", operation: "set", values: water, causeRuleId: "hydrology-cycle" },
+  ];
+  if (needsNutrients) {
+    delta.fieldPatches.push({
+      field: "nutrients",
+      operation: "set",
+      values: workingState.fields.nutrients.values,
+      causeRuleId: "terrain-nutrients",
+    });
   }
-  delta.chemistryChanges = calculateChemistry(workingState, elapsedYears);
+  delta.chemistryPatches = calculateChemistryPatches(workingState, elapsedYears);
   appendItems(delta.fieldChanges, hazardResult.delta.fieldChanges);
   appendItems(delta.chemistryChanges, hazardResult.delta.chemistryChanges);
   appendItems(delta.eventDrafts, hazardResult.delta.eventDrafts);
@@ -196,7 +193,10 @@ export const stepEnvironment = (
       { field: "oxygen", index, operation: "add", value: conversion * 0.06, causeRuleId: "culture:energy-conversion" },
     );
   }
-  const nextChemistry = applyChemistryChanges(workingState, delta.chemistryChanges);
+  const nextChemistry = applyChemistryChanges(
+    { ...workingState, chemistry: applyChemistryPatches(workingState, delta.chemistryPatches) },
+    delta.chemistryChanges,
+  );
   addEnvironmentalMilestones(state, delta, water, nextChemistry, elapsedYears);
   appendItems(delta.fieldChanges, calculateGeology(workingState, elapsedYears));
   const width = state.fields.elevation.width;
@@ -235,17 +235,28 @@ export const applyEnvironmentDelta = (
   delta: EnvironmentDelta,
 ): WorldState => {
   const next = structuredClone(state);
+  for (const patch of delta.fieldPatches ?? []) {
+    const values = next.fields[patch.field].values;
+    if (patch.operation === "set") {
+      values.set(patch.values);
+      continue;
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.max(0, Math.min(1, (values[index] ?? 0) + (patch.values[index] ?? 0)));
+    }
+  }
   for (const change of delta.fieldChanges) {
     const values = next.fields[change.field].values;
     values[change.index] = change.operation === "add"
       ? (values[change.index] ?? 0) + change.value
       : change.value;
   }
+  next.chemistry = applyChemistryPatches(next, delta.chemistryPatches ?? []);
   next.chemistry = applyChemistryChanges(next, delta.chemistryChanges);
   return next;
 };
 
-export { calculateChemistry, calculateClimate, initializeTerrainWater, simulateWater };
+export { calculateChemistry, calculateChemistryPatches, calculateClimate, initializeTerrainWater, simulateWater };
 export { calculateGeology } from "./geology.ts";
 export { applyNaturalHazardWaterEffects, naturalHazardDelta, naturalHazardsFor, MAX_NATURAL_HAZARDS_PER_STEP, type NaturalHazard, type NaturalHazardKind } from "./hazards.ts";
 export { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceEffectProfilesForState } from "./substances.ts";

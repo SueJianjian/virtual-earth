@@ -46,6 +46,26 @@ describe("environment simulation", () => {
     expect(after.organizations).toHaveLength(0);
   });
 
+  it("uses bounded typed-array patches for dense environmental fields", () => {
+    const state = createWorld(12, { width: 64, height: 32, formation: "formed" });
+    const delta = stepEnvironment(state, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+
+    expect(delta.fieldPatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "temperature", operation: "set", causeRuleId: "climate-field" }),
+      expect.objectContaining({ field: "humidity", operation: "set", causeRuleId: "climate-field" }),
+      expect.objectContaining({ field: "water", operation: "set", causeRuleId: "hydrology-cycle" }),
+    ]));
+    expect(delta.fieldPatches?.every((patch) => patch.values.length === 64 * 32)).toBe(true);
+    expect(delta.chemistryPatches).toHaveLength(5);
+    expect(delta.chemistryPatches?.every((patch) => patch.values.length === 64 * 32)).toBe(true);
+    expect(delta.fieldChanges.length).toBeLessThan(64);
+    expect(delta.chemistryChanges.length).toBeLessThan(64);
+
+    const next = applyEnvironmentDelta(state, delta);
+    expect(next.fields.temperature.values.every(Number.isFinite)).toBe(true);
+    expect(Object.values(next.chemistry).every((grid) => grid.values.every(Number.isFinite))).toBe(true);
+  });
+
   it("changes water only through an explicit event", () => {
     const state = makeEnvironment();
     const before = totalWater(state.fields.water);

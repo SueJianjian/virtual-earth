@@ -137,6 +137,32 @@ const applyChemistryChanges = (state: WorldState, changes: WorldDelta["chemistry
   }
 };
 
+const applyFieldPatches = (state: WorldState, patches: NonNullable<WorldDelta["fieldPatches"]>): void => {
+  for (const patch of patches) {
+    const values = state.fields[patch.field].values;
+    if (patch.operation === "set") {
+      values.set(patch.values);
+      continue;
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.max(0, Math.min(1, (values[index] ?? 0) + (patch.values[index] ?? 0)));
+    }
+  }
+};
+
+const applyChemistryPatches = (state: WorldState, patches: NonNullable<WorldDelta["chemistryPatches"]>): void => {
+  for (const patch of patches) {
+    const values = state.chemistry[patch.field].values;
+    if (patch.operation === "set") {
+      values.set(patch.values);
+      continue;
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      values[index] = Math.max(0, Math.min(1, (values[index] ?? 0) + (patch.values[index] ?? 0)));
+    }
+  }
+};
+
 const collectionFor = (state: WorldState, collection: EntityEffect["collection"]): Array<{ id: string }> | null => {
   if (collection === "species") return state.species;
   if (collection === "populations") return state.populations;
@@ -430,9 +456,19 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
 
 const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void => {
   const gridSize = state.fields.elevation.values.length;
+  for (const patch of delta.fieldPatches ?? []) {
+    if (!(patch.field in state.fields) || patch.values.length !== gridSize || !patch.values.every((value) => Number.isFinite(value))) {
+      throw new Error(`Invalid field patch: ${patch.field}`);
+    }
+  }
   for (const change of delta.fieldChanges) {
     if (!(change.field in state.fields) || !Number.isInteger(change.index) || change.index < 0 || change.index >= gridSize || !Number.isFinite(change.value)) {
       throw new Error(`Invalid field change: ${change.field}:${change.index}`);
+    }
+  }
+  for (const patch of delta.chemistryPatches ?? []) {
+    if (!(patch.field in state.chemistry) || patch.values.length !== gridSize || !patch.values.every((value) => Number.isFinite(value))) {
+      throw new Error(`Invalid chemistry patch: ${patch.field}`);
     }
   }
   for (const change of delta.chemistryChanges) {
@@ -466,9 +502,15 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
   }
 };
 
-const applyDelta = (state: WorldState, delta: WorldDelta): void => {
-  applyFieldChanges(state, delta.fieldChanges);
-  applyChemistryChanges(state, delta.chemistryChanges);
+const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: readonly WorldDelta[] = [delta]): void => {
+  for (const gridDelta of orderedGridDeltas) {
+    applyFieldPatches(state, gridDelta.fieldPatches ?? []);
+    applyFieldChanges(state, gridDelta.fieldChanges);
+  }
+  for (const gridDelta of orderedGridDeltas) {
+    applyChemistryPatches(state, gridDelta.chemistryPatches ?? []);
+    applyChemistryChanges(state, gridDelta.chemistryChanges);
+  }
   applyEntityEffects(state, delta.entityEffects);
   applyRelationshipEffects(state, delta.relationshipEffects);
   const worldviewTransactions = delta.worldviewEffects
@@ -617,12 +659,16 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     return true;
   });
   const priorDeltas = new Map<string, WorldDelta>();
+  const orderedDeltas: WorldDelta[] = [];
   const merged = emptyDelta();
   for (const stage of listSimulationStages()) {
     const delta = stage.run(previous, { ...input, externalEvents: acceptedExternalEvents }, priorDeltas);
     priorDeltas.set(stage.id, delta);
+    orderedDeltas.push(delta);
     appendItems(merged.fieldChanges, delta.fieldChanges);
     appendItems(merged.chemistryChanges, delta.chemistryChanges);
+    if (delta.fieldPatches) merged.fieldPatches = [...(merged.fieldPatches ?? []), ...delta.fieldPatches];
+    if (delta.chemistryPatches) merged.chemistryPatches = [...(merged.chemistryPatches ?? []), ...delta.chemistryPatches];
     appendItems(merged.entityEffects, delta.entityEffects);
     appendItems(merged.relationshipEffects, delta.relationshipEffects);
     appendItems(merged.resourceTransactions, delta.resourceTransactions);
@@ -637,7 +683,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   if (!options.mutateState) next.events = [...previous.events];
   if (options.mutateState) validateDeltaBeforeMutation(next, merged);
   synchronizeEventArchive(next.eventArchive, next.events);
-  applyDelta(next, merged);
+  applyDelta(next, merged, orderedDeltas);
   appendItems(merged.eventDrafts, pruneTransientState(next));
   const [, nextRandom] = nextRandomValue(previous.random);
   next.random = nextRandom;

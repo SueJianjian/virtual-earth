@@ -34,24 +34,6 @@ const neighborsForIndex = (state: WorldState, index: number): number[] => {
   ].filter((candidate): candidate is number => candidate !== undefined);
 };
 
-const localRelief = (state: WorldState, index: number): number => {
-  const elevation = state.fields.elevation.values[index] ?? 0;
-  const neighbors = neighborsForIndex(state, index);
-  const average = neighbors.reduce((sum, candidate) => sum + (state.fields.elevation.values[candidate] ?? elevation), 0) / Math.max(1, neighbors.length);
-  return clamp(Math.abs(elevation - average) * 9);
-};
-
-const tectonicStress = (state: WorldState, index: number): number => {
-  const { width, height } = state.fields.elevation;
-  const x = index % width;
-  const y = Math.floor(index / width);
-  const phase = (state.seed % 4096) / 4096 * Math.PI * 2;
-  const plate = Math.sin(x / Math.max(1, width) * Math.PI * 4 + phase)
-    * Math.cos(y / Math.max(1, height - 1) * Math.PI * 2 - phase * 0.7);
-  const pulse = 0.55 + Math.sin(state.years / 180 + phase) * 0.45;
-  return clamp(Math.abs(plate) * pulse);
-};
-
 const probabilityAcross = (annualProbability: number, elapsedYears: number): number => {
   const years = Math.max(0, Math.min(20_000, elapsedYears));
   return clamp(1 - Math.pow(1 - clamp(annualProbability), years));
@@ -86,43 +68,96 @@ const evaluateHazard = (
   };
 };
 
+const compareHazards = (left: NaturalHazard, right: NaturalHazard): number =>
+  right.intensity - left.intensity
+  || right.probability - left.probability
+  || left.kind.localeCompare(right.kind)
+  || left.regionId.localeCompare(right.regionId);
+
+const retainHazard = (retained: NaturalHazard[], candidate: NaturalHazard): void => {
+  const sameRegion = retained.findIndex((existing) => existing.regionId === candidate.regionId);
+  if (sameRegion >= 0) {
+    if (compareHazards(candidate, retained[sameRegion]!) < 0) retained[sameRegion] = candidate;
+    return;
+  }
+  if (retained.length < MAX_NATURAL_HAZARDS_PER_STEP) {
+    retained.push(candidate);
+    return;
+  }
+  let worst = 0;
+  for (let candidateIndex = 1; candidateIndex < retained.length; candidateIndex += 1) {
+    if (compareHazards(retained[candidateIndex]!, retained[worst]!) > 0) worst = candidateIndex;
+  }
+  if (compareHazards(candidate, retained[worst]!) < 0) retained[worst] = candidate;
+};
+
 export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalHazard[] => {
   if (state.formation.phase !== "stable-crust" || elapsedYears <= 0) return [];
-  const candidates: NaturalHazard[] = [];
   // Grid resolution changes visual and local simulation detail, not the
   // physical area of the planet. Normalize per-cell sampling to keep the
   // global hazard rate comparable across map resolutions.
-  const samplingScale = REFERENCE_HAZARD_CELL_COUNT / Math.max(1, state.fields.elevation.values.length);
-  for (let index = 0; index < state.fields.elevation.values.length; index += 1) {
-    const elevation = clamp(state.fields.elevation.values[index] ?? 0);
-    const temperature = clamp(state.fields.temperature.values[index] ?? 0);
-    const humidity = clamp(state.fields.humidity.values[index] ?? 0);
-    const water = clamp(state.fields.water.values[index] ?? 0);
-    const nutrients = clamp(state.fields.nutrients.values[index] ?? 0);
-    const relief = localRelief(state, index);
-    const stress = tectonicStress(state, index);
-    const volcanicScore = clamp(stress * 0.54 + elevation * 0.3 + relief * 0.16);
+  const { elevation, temperature, humidity, water, nutrients } = state.fields;
+  const cellCount = elevation.values.length;
+  const samplingScale = REFERENCE_HAZARD_CELL_COUNT / Math.max(1, cellCount);
+  const width = elevation.width;
+  const height = elevation.height;
+  const phase = (state.seed % 4096) / 4096 * Math.PI * 2;
+  const pulse = 0.55 + Math.sin(state.years / 180 + phase) * 0.45;
+  const xScale = Math.PI * 4 / Math.max(1, width);
+  const yScale = Math.PI * 2 / Math.max(1, height - 1);
+  const phaseOffset = phase * 0.7;
+  const sampleScale = round(samplingScale);
+  const retained: NaturalHazard[] = [];
+  for (let index = 0; index < cellCount; index += 1) {
+    const y = Math.floor(index / width);
+    const rowStart = y * width;
+    const x = index - rowStart;
+    const north = y > 0 ? index - width : index;
+    const south = y + 1 < height ? index + width : index;
+    const west = rowStart + (x + width - 1) % width;
+    const east = rowStart + (x + 1) % width;
+    const elevationValue = clamp(elevation.values[index] ?? 0);
+    const localMean = (
+      (elevation.values[north] ?? elevationValue)
+      + (elevation.values[south] ?? elevationValue)
+      + (elevation.values[west] ?? elevationValue)
+      + (elevation.values[east] ?? elevationValue)
+    ) / 4;
+    const relief = clamp(Math.abs(elevationValue - localMean) * 9);
+    const plate = Math.sin(x * xScale + phase) * Math.cos(y * yScale - phaseOffset);
+    const stress = clamp(Math.abs(plate) * pulse);
+    const temperatureValue = clamp(temperature.values[index] ?? 0);
+    const humidityValue = clamp(humidity.values[index] ?? 0);
+    const waterValue = clamp(water.values[index] ?? 0);
+    const nutrientsValue = clamp(nutrients.values[index] ?? 0);
+    const volcanicScore = clamp(stress * 0.54 + elevationValue * 0.3 + relief * 0.16);
     const earthquakeScore = clamp(stress * 0.68 + relief * 0.32);
-    const heat = clamp((temperature - 0.6) / 0.4);
-    const aridity = (clamp((0.4 - humidity) / 0.4) + clamp((0.34 - water) / 0.34)) / 2;
+    const heat = clamp((temperatureValue - 0.6) / 0.4);
+    const aridity = (clamp((0.4 - humidityValue) / 0.4) + clamp((0.34 - waterValue) / 0.34)) / 2;
     const droughtScore = clamp(heat * 0.42 + aridity * 0.58);
-    const wetness = (water + humidity) / 2;
-    const floodScore = clamp(wetness * 0.68 + (1 - elevation) * 0.32);
-    const common = { elevation: round(elevation), temperature: round(temperature), humidity: round(humidity), water: round(water), nutrients: round(nutrients), samplingScale: round(samplingScale) };
-    const volcano = evaluateHazard(state, index, "volcano", volcanicScore, 0.73, (0.00035 + Math.max(0, volcanicScore - 0.73) * 0.0022) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
-    const earthquake = evaluateHazard(state, index, "earthquake", earthquakeScore, 0.78, (0.00028 + Math.max(0, earthquakeScore - 0.78) * 0.0018) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
-    const drought = evaluateHazard(state, index, "drought", droughtScore, 0.74, (0.00065 + Math.max(0, droughtScore - 0.74) * 0.0024) * samplingScale, elapsedYears, { ...common, heat: round(heat), aridity: round(aridity) });
-    const flood = evaluateHazard(state, index, "flood", floodScore, 0.78, (0.00055 + Math.max(0, floodScore - 0.78) * 0.002) * samplingScale, elapsedYears, { ...common, wetness: round(wetness), basin: round(1 - elevation) });
-    for (const hazard of [volcano, earthquake, drought, flood]) if (hazard) candidates.push(hazard);
+    const wetness = (waterValue + humidityValue) / 2;
+    const floodScore = clamp(wetness * 0.68 + (1 - elevationValue) * 0.32);
+    const common = volcanicScore >= 0.73 || earthquakeScore >= 0.78 || droughtScore >= 0.74 || floodScore >= 0.78
+      ? { elevation: round(elevationValue), temperature: round(temperatureValue), humidity: round(humidityValue), water: round(waterValue), nutrients: round(nutrientsValue), samplingScale: sampleScale }
+      : undefined;
+    if (common && volcanicScore >= 0.73) {
+      const candidate = evaluateHazard(state, index, "volcano", volcanicScore, 0.73, (0.00035 + Math.max(0, volcanicScore - 0.73) * 0.0022) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
+      if (candidate) retainHazard(retained, candidate);
+    }
+    if (common && earthquakeScore >= 0.78) {
+      const candidate = evaluateHazard(state, index, "earthquake", earthquakeScore, 0.78, (0.00028 + Math.max(0, earthquakeScore - 0.78) * 0.0018) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
+      if (candidate) retainHazard(retained, candidate);
+    }
+    if (common && droughtScore >= 0.74) {
+      const candidate = evaluateHazard(state, index, "drought", droughtScore, 0.74, (0.00065 + Math.max(0, droughtScore - 0.74) * 0.0024) * samplingScale, elapsedYears, { ...common, heat: round(heat), aridity: round(aridity) });
+      if (candidate) retainHazard(retained, candidate);
+    }
+    if (common && floodScore >= 0.78) {
+      const candidate = evaluateHazard(state, index, "flood", floodScore, 0.78, (0.00055 + Math.max(0, floodScore - 0.78) * 0.002) * samplingScale, elapsedYears, { ...common, wetness: round(wetness), basin: round(1 - elevationValue) });
+      if (candidate) retainHazard(retained, candidate);
+    }
   }
-  const occupiedRegions = new Set<RegionId>();
-  const selected: NaturalHazard[] = [];
-  for (const candidate of candidates.sort((left, right) => right.intensity - left.intensity || right.probability - left.probability || left.kind.localeCompare(right.kind) || left.regionId.localeCompare(right.regionId))) {
-    if (selected.length >= MAX_NATURAL_HAZARDS_PER_STEP || occupiedRegions.has(candidate.regionId)) continue;
-    occupiedRegions.add(candidate.regionId);
-    selected.push(candidate);
-  }
-  return selected;
+  return retained.sort(compareHazards);
 };
 
 const fieldChange = (hazard: NaturalHazard, field: FieldChange["field"], value: number): FieldChange => ({
