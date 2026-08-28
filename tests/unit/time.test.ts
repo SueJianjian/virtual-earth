@@ -5,6 +5,7 @@ import {
   advanceSimulationDays,
   advanceSimulationTimeline,
   advanceSimulationYears,
+  exactSimulationDaysForWorld,
   MAX_SIMULATION_YEARS,
   REAL_MILLISECONDS_PER_SIMULATED_DAY,
   SIMULATED_YEARS_PER_DAY,
@@ -71,6 +72,24 @@ describe("simulation time scale", () => {
       years: MAX_SIMULATION_YEARS,
     });
     expect(wholeYearsCrossed(0, SIMULATED_YEARS_PER_DAY, timeline.days)).toBe(0);
+  });
+
+  it("keeps exact day arithmetic available to legacy callers after saturation", () => {
+    const world = {
+      tick: Number.MAX_SAFE_INTEGER,
+      years: MAX_SIMULATION_YEARS,
+      simulationDays: MAX_SIMULATION_DAYS,
+      timeline: {
+        step: String(BigInt(Number.MAX_SAFE_INTEGER) + 4096n),
+        days: String(BigInt(MAX_SIMULATION_DAYS) + 4096n),
+      },
+    };
+
+    expect(exactSimulationDaysForWorld(world)).toBe(BigInt(MAX_SIMULATION_DAYS) + 4096n);
+    expect(advanceSimulationTimeline(world.timeline, 1 / DAYS_PER_YEAR)).toEqual({
+      step: String(BigInt(Number.MAX_SAFE_INTEGER) + 4097n),
+      days: String(BigInt(MAX_SIMULATION_DAYS) + 4097n),
+    });
   });
 
   it("derives legacy timestamps from the exact next-step clock", () => {

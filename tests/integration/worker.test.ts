@@ -7,7 +7,7 @@ import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
-import { SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
+import { DAYS_PER_YEAR, MAX_SIMULATION_DAYS, MAX_SIMULATION_YEARS, SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
 import { snapshotTransferables } from "../../src/worker/transfer.ts";
 import { derivePathogen } from "../../src/sim/health/disease.ts";
 
@@ -102,6 +102,54 @@ describe("simulation worker runtime", () => {
 
     expect(runtime.getState().tick).toBe(expectedTimelineDays);
     expect(runtime.getState().timeline?.step).toBe(String(expectedTimelineDays));
+  });
+
+  it("keeps the worker running after numeric clock projections saturate", () => {
+    const state = createWorld(155, {
+      width: 8,
+      height: 8,
+      formation: "formed",
+      enabledPackIds: ["emergence.original-worldview"],
+    });
+    const boundaryStep = BigInt(Number.MAX_SAFE_INTEGER);
+    const boundaryDays = BigInt(MAX_SIMULATION_DAYS);
+    state.tick = Number.MAX_SAFE_INTEGER;
+    state.simulationDays = MAX_SIMULATION_DAYS;
+    state.years = MAX_SIMULATION_YEARS;
+    state.timeline = { step: boundaryStep.toString(), days: boundaryDays.toString() };
+
+    const runtime = createSimulationRuntime(state);
+    const firstRun = runtime.dispatch({ type: "step", count: 365 });
+    expect(firstRun.some((message) => message.type === "error")).toBe(false);
+    expect(runtime.getState().timeline).toEqual({
+      step: (boundaryStep + 365n).toString(),
+      days: (boundaryDays + 365n).toString(),
+    });
+    expect(runtime.getState().tick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(runtime.getState().years).toBe(MAX_SIMULATION_YEARS);
+    const firstYearBoundary = boundaryDays + BigInt(DAYS_PER_YEAR - Number(boundaryDays % BigInt(DAYS_PER_YEAR)));
+    expect(runtime.getState().eventArchive.historySamples.at(-1)?.timelineDays).toBe(firstYearBoundary.toString());
+
+    const saved = runtime.dispatch({ type: "save" })[0];
+    expect(saved?.type).toBe("saved");
+    if (saved?.type !== "saved") return;
+
+    const restored = createSimulationRuntime(createWorld(156, { width: 8, height: 8 }));
+    const restoredMessages = restored.dispatch({ type: "load", payload: saved.payload });
+    expect(restoredMessages).toHaveLength(1);
+    expect(restoredMessages[0]?.type).toBe("snapshot");
+    expect(worldDigest(restored.getState())).toBe(saved.digest);
+
+    const secondRun = restored.dispatch({ type: "step", count: 365 });
+    expect(secondRun.some((message) => message.type === "error")).toBe(false);
+    expect(restored.getState().timeline).toEqual({
+      step: (boundaryStep + 730n).toString(),
+      days: (boundaryDays + 730n).toString(),
+    });
+    expect(restored.dispatch({ type: "checkpoint" })[0]).toMatchObject({
+      type: "autosaved",
+      timelineDays: (boundaryDays + 730n).toString(),
+    });
   });
 
   it("keeps authoritative grids attached after transferring a snapshot", () => {

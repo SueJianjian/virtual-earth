@@ -16,6 +16,13 @@ const exactInteger = (value: string, label: string): bigint => {
   return BigInt(value);
 };
 
+const exactNumber = (value: number, label: string): bigint => {
+  if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new RangeError(`${label} must be a non-negative integer`);
+  }
+  return BigInt(value);
+};
+
 const exactStep = (value: string | number, label = "Simulation step"): bigint => {
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${label} must be a non-negative safe integer`);
@@ -27,6 +34,16 @@ const exactStep = (value: string | number, label = "Simulation step"): bigint =>
 const projectedInteger = (value: bigint): number => {
   const numberValue = Number(value);
   return Number.isSafeInteger(numberValue) ? numberValue : Number.MAX_SAFE_INTEGER;
+};
+
+/** Convert a finite elapsed-year input to the exact whole-day delta. */
+export const simulationDaysFromYearsExact = (elapsedYears: number, label = "Simulation time"): bigint => {
+  if (!Number.isFinite(elapsedYears) || elapsedYears < 0) {
+    throw new RangeError(`${label} must be a finite, non-negative number`);
+  }
+  const totalDays = Math.round(elapsedYears * DAYS_PER_YEAR);
+  if (!Number.isFinite(totalDays)) throw new RangeError(`${label} is too large to represent as a calendar interval`);
+  return BigInt(totalDays);
 };
 
 export const compareSimulationSteps = (left: string, right: string): number => {
@@ -80,6 +97,14 @@ export const simulationDaysForWorld = (world: {
   simulationDays?: number;
   timeline?: SimulationTimeline;
 }): string => timelineForWorld(world).days;
+
+/** Read the authoritative world day count without a numeric precision limit. */
+export const exactSimulationDaysForWorld = (world: {
+  tick: number;
+  years: number;
+  simulationDays?: number;
+  timeline?: SimulationTimeline;
+}): bigint => exactInteger(simulationDaysForWorld(world), "World timeline days");
 
 export const nextSimulationStep = (world: {
   tick: number;
@@ -135,10 +160,12 @@ export const wholePeriodsCrossed = (
 ): number => {
   if (!Number.isFinite(periodYears) || periodYears <= 0) throw new RangeError("Cycle period must be positive");
   const before = typeof currentDays === "number"
-    ? BigInt(simulationDaysForClock(currentDays))
+    ? exactNumber(currentDays, "World timeline days")
     : exactInteger(currentDays, "World timeline days");
-  const elapsedDays = BigInt(simulationDaysFromYears(elapsedYears, "Simulation step"));
-  const periodDays = BigInt(Math.max(1, Math.round(periodYears * DAYS_PER_YEAR)));
+  const elapsedDays = simulationDaysFromYearsExact(elapsedYears, "Simulation step");
+  const periodDaysNumber = Math.round(periodYears * DAYS_PER_YEAR);
+  if (!Number.isFinite(periodDaysNumber)) throw new RangeError("Cycle period is too large");
+  const periodDays = BigInt(Math.max(1, periodDaysNumber));
   return Number((before + elapsedDays) / periodDays - before / periodDays);
 };
 
@@ -147,16 +174,8 @@ export const advanceSimulationTimeline = (
   elapsedYears: number,
 ): SimulationTimeline => {
   if (!isSimulationTimeline(current)) throw new RangeError("World timeline is invalid");
-  if (!Number.isFinite(elapsedYears) || elapsedYears < 0) throw new RangeError("Simulation step must be a finite, non-negative number");
-  const currentStep = Number(current.step);
-  const currentDays = Number(current.days);
-  const elapsedDays = simulationDaysFromYears(elapsedYears);
-  if (Number.isSafeInteger(currentStep) && Number.isSafeInteger(currentDays)
-    && Number.isSafeInteger(currentStep + 1) && Number.isSafeInteger(currentDays + elapsedDays)) {
-    return { step: String(currentStep + 1), days: String(currentDays + elapsedDays) };
-  }
   const step = exactInteger(current.step, "World timeline step") + 1n;
-  const days = exactInteger(current.days, "World timeline days") + BigInt(elapsedDays);
+  const days = exactInteger(current.days, "World timeline days") + simulationDaysFromYearsExact(elapsedYears, "Simulation step");
   return { step: step.toString(), days: days.toString() };
 };
 
@@ -189,7 +208,7 @@ export const projectedYearsAfterStep = (
 
 export const simulationAgeFromDays = (totalDays: string | number): { years: string; days: number } => {
   const days = typeof totalDays === "number"
-    ? BigInt(simulationDaysFromYears(totalDays / DAYS_PER_YEAR, "World time"))
+    ? exactNumber(totalDays, "Simulation days")
     : exactInteger(totalDays, "Simulation days");
   return {
     years: (days / BigInt(DAYS_PER_YEAR)).toString(),
@@ -254,23 +273,10 @@ export const simulationAgeFromYears = (elapsedYears: number): SimulationAge => {
 };
 
 export const wholeYearsCrossed = (elapsedYears: number, stepYears: number, currentDays?: number | string): number => {
-  const beforeNumber = currentDays === undefined
-    ? simulationDaysFromYears(elapsedYears, "World time")
-    : typeof currentDays === "string" ? Number(currentDays) : simulationDaysForClock(currentDays);
-  const stepDays = simulationDaysFromYears(stepYears);
-  if (Number.isSafeInteger(beforeNumber) && Number.isSafeInteger(stepDays) && Number.isSafeInteger(beforeNumber + stepDays)) {
-    return Math.floor((beforeNumber + stepDays) / DAYS_PER_YEAR) - Math.floor(beforeNumber / DAYS_PER_YEAR);
-  }
   const beforeDays = currentDays === undefined
-    ? BigInt(simulationDaysFromYears(elapsedYears, "World time"))
-    : typeof currentDays === "string" ? exactInteger(currentDays, "World time days") : BigInt(simulationDaysForClock(currentDays));
-  const afterDays = beforeDays + BigInt(stepDays);
+    ? simulationDaysFromYearsExact(elapsedYears, "World time")
+    : typeof currentDays === "string" ? exactInteger(currentDays, "World time days") : exactNumber(currentDays, "World time days");
+  const stepDays = simulationDaysFromYearsExact(stepYears, "Simulation step");
+  const afterDays = beforeDays + stepDays;
   return Number(afterDays / BigInt(DAYS_PER_YEAR) - beforeDays / BigInt(DAYS_PER_YEAR));
-};
-
-const simulationDaysForClock = (currentDays: number): number => {
-  if (!Number.isSafeInteger(currentDays) || currentDays < 0 || currentDays > MAX_SIMULATION_DAYS) {
-    throw new RangeError("World time exceeds the supported calendar precision");
-  }
-  return currentDays;
 };
