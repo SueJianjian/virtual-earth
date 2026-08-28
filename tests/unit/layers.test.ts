@@ -78,4 +78,22 @@ describe("food security map layer", () => {
     expect(colorForCell(snapshot, 0, "culture")).not.toEqual(colorForCell(snapshot, 1, "culture"));
     expect(colorForCell(snapshot, 0, "culture")).toEqual(colorForCell(snapshot, 0, "culture"));
   });
+
+  it("renders local disease prevalence as a distinct public-health overlay", () => {
+    const world = createWorld(205, { width: 8, height: 8, formation: "formed" });
+    const snapshot: WorldSnapshot = {
+      seed: world.seed,
+      tick: 0,
+      years: 0,
+      formation: world.formation,
+      digest: "",
+      fields: world.fields,
+      chemistry: world.chemistry,
+      metrics: {},
+      diseasePrevalence: { width: 8, height: 8, values: new Float32Array(64) },
+    };
+    snapshot.diseasePrevalence!.values[1] = 0.8;
+
+    expect(colorForCell(snapshot, 0, "health")).not.toEqual(colorForCell(snapshot, 1, "health"));
+  });
 });

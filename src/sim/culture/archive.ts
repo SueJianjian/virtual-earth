@@ -1,4 +1,5 @@
 import type { CultureState, KnowledgeDomain, KnowledgeState, WorldState } from "../types.ts";
+import { addPersistentTotal } from "../numeric.ts";
 
 export const MAX_KNOWLEDGE_RECORDS = 2_048;
 export const MAX_KNOWLEDGE_PER_CULTURE = 48;
@@ -79,7 +80,7 @@ export const compactCultureRecords = (state: WorldState): number => {
   const retainedIds = new Set(ordered.slice(0, MAX_CULTURE_RECORDS).map((culture) => culture.id));
   const removed = state.cultures.length - retainedIds.size;
   state.cultures = state.cultures.filter((culture) => retainedIds.has(culture.id));
-  state.eventArchive.archivedCultureCount += removed;
+  state.eventArchive.archivedCultureCount = addPersistentTotal(state.eventArchive.archivedCultureCount, removed);
   return removed;
 };
 
@@ -142,6 +143,6 @@ export const compactKnowledgeRecords = (state: WorldState): number => {
     for (const agent of summary.agentRecords) agent.knowledgeIds = agent.knowledgeIds.filter((id) => retained.has(id));
   }
   const removed = previousIds.size - state.knowledge.length;
-  state.eventArchive.archivedKnowledgeCount += removed;
+  state.eventArchive.archivedKnowledgeCount = addPersistentTotal(state.eventArchive.archivedKnowledgeCount, removed);
   return removed;
 };

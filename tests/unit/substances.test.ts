@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion } from "../../src/sim/environment/substances.ts";
+import { deriveNaturalSubstance, extractSubstanceReserve, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceReserveRatio } from "../../src/sim/environment/substances.ts";
 import type { AgentState, EntityId, KnowledgeDomain, RegionId, SubstanceState, WorldState } from "../../src/sim/types.ts";
 import { createWorld } from "../../src/sim/world.ts";
 
@@ -71,6 +71,9 @@ describe("emergent substances", () => {
     expect(first.name.length).toBeGreaterThanOrEqual(3);
     expect(first.status).toBe("latent");
     expect(["geological", "hydrothermal", "biochemical"]).toContain(first.formation);
+    expect(first.reserveCapacity).toBeGreaterThan(0);
+    expect(first.remainingReserve).toBe(first.reserveCapacity);
+    expect(first.extractedTotal).toBe(0);
     expect(Object.values(first.composition).reduce((sum, value) => sum + value, 0)).toBeCloseTo(1, 5);
     expect(Object.values(first.properties).every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
   });
@@ -108,6 +111,7 @@ describe("emergent substances", () => {
     }
 
     expect(engineered).toMatchObject({ kind: "engineered-composite", formation: "engineered", status: "known", parentIds: [source.id] });
+    expect(engineered).toMatchObject({ reserveCapacity: 0, remainingReserve: 0, extractedTotal: 0 });
     expect(engineered?.discoveredByIds.length).toBeGreaterThan(0);
   });
 
@@ -131,5 +135,28 @@ describe("emergent substances", () => {
     const profile = substanceEffectProfileForRegion(state, substance.regionId);
     expect(profile.materialYield).toBeGreaterThan(0);
     expect(Object.values(profile).every((value) => value >= 0 && value <= 1)).toBe(true);
+  });
+
+  it("extracts finite natural reserves without overdraw and marks depletion only once", () => {
+    const state = favorableWorld();
+    const substance = { ...firstNaturalSubstance(state), status: "known" as const };
+
+    const depleted = extractSubstanceReserve(substance, substance.reserveCapacity * 2, 12, "12");
+    expect(depleted.amount).toBe(substance.reserveCapacity);
+    expect(depleted.substance).toMatchObject({
+      remainingReserve: 0,
+      extractedTotal: substance.reserveCapacity,
+      depletedTick: 12,
+      depletedTimelineStep: "12",
+    });
+    expect(depleted.becameDepleted).toBe(true);
+    expect(substanceReserveRatio(depleted.substance)).toBe(0);
+
+    const replay = extractSubstanceReserve(depleted.substance, 10, 13, "13");
+    expect(replay.amount).toBe(0);
+    expect(replay.becameDepleted).toBe(false);
+    expect(replay.substance.extractedTotal).toBe(substance.reserveCapacity);
+    expect(substanceEffectProfileForRegion({ substances: [depleted.substance] }, substance.regionId).naturalMaterialYield).toBe(0);
+    expect(substanceEffectProfileForRegion({ substances: [depleted.substance] }, substance.regionId).naturalEnergyYield).toBe(0);
   });
 });

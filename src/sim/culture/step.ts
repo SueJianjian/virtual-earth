@@ -3,6 +3,7 @@ import type { CultureDelta, EntityEffect, WorldDelta, WorldState } from "../type
 import { createKnowledge, knowledgeKindsFor } from "./knowledge.ts";
 import { attemptKnowledgeDiffusion, attemptKnowledgeInnovation, knowledgeDiffusionRoutes } from "./innovation.ts";
 import { createCultureIdentity, cultureIdentityChanged, evolveCultureIdentity } from "./identity.ts";
+import { simulationStepForWorld } from "../time.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [],
@@ -65,7 +66,7 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
         knowledgeIds: [],
         beliefIds: [],
         transmissionRate: Math.max(0.05, Math.min(1, members.reduce((sum, agent) => sum + (agent.traits.sociality ?? 0), 0) / members.length * 0.6)),
-        identity: createCultureIdentity(`culture:${state.seed}:${regionId}`, regionId as WorldState["cultures"][number]["regionId"], state.tick, state.years, members, environmentForRegion(state, regionId as WorldState["cultures"][number]["regionId"])),
+        identity: createCultureIdentity(`culture:${state.seed}:${regionId}`, regionId as WorldState["cultures"][number]["regionId"], state.tick, state.years, members, environmentForRegion(state, regionId as WorldState["cultures"][number]["regionId"]), undefined, simulationStepForWorld(state)),
       };
       cultures.set(culture.id, culture);
       culturesByRegion.set(culture.regionId, culture);
@@ -89,9 +90,17 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
         source: "natural",
       });
     }
-    const candidateKinds = [...new Set(members.flatMap(knowledgeKindsFor))].sort();
+    const sourcesByKnowledgeKind = new Map<string, WorldState["agents"]>();
+    for (const member of members) {
+      for (const kind of knowledgeKindsFor(member)) {
+        const sources = sourcesByKnowledgeKind.get(kind) ?? [];
+        sources.push(member);
+        sourcesByKnowledgeKind.set(kind, sources);
+      }
+    }
+    const candidateKinds = [...sourcesByKnowledgeKind.keys()].sort();
     for (const kind of candidateKinds) {
-      const sources = members.filter((agent) => knowledgeKindsFor(agent).includes(kind));
+      const sources = sourcesByKnowledgeKind.get(kind)!;
       const knowledge = createKnowledge(regionId, kind, sources);
       const known = knowledgeById.get(knowledge.id);
       if (!known) newKnowledge.set(knowledge.id, knowledge);
@@ -120,7 +129,7 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
       .map((knowledgeId) => knowledgeById.get(knowledgeId)?.domain)
       .filter((domain): domain is NonNullable<typeof domain> => Boolean(domain));
     const identity = culture.identity ?? createCultureIdentity(`legacy:${culture.id}`, culture.regionId, 0, 0, members, environmentForRegion(state, culture.regionId));
-    const evolvedIdentity = evolveCultureIdentity(identity, `${state.seed}:${culture.id}`, state.tick, members, environmentForRegion(state, culture.regionId), domains);
+    const evolvedIdentity = evolveCultureIdentity(identity, `${state.seed}:${culture.id}`, state.tick, members, environmentForRegion(state, culture.regionId), domains, simulationStepForWorld(state));
     if (cultureIdentityChanged(identity, evolvedIdentity)) {
       culture.identity = evolvedIdentity;
       delta.eventDrafts.push({

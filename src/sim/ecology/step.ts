@@ -1,10 +1,14 @@
 import { forkRandom, hashString, randomFloat } from "../random.ts";
-import { attemptAbiogenesis, attemptAdaptiveSpeciation, attemptTrophicSpecies } from "./species.ts";
+import { ACTIVE_ADAPTIVE_SPECIES_LIMITS, attemptAbiogenesis, attemptAdaptiveSpeciation, attemptTrophicSpecies } from "./species.ts";
 import { foodSecurityFromBalance } from "../agents/food.ts";
 import { technologyProfilesForState } from "../culture/technology.ts";
 import { facilityEffectProfilesForState } from "../society/facilities.ts";
 import { nextPopulationCount, populationCellIndex, suitability } from "./populations.ts";
 import { MAX_POPULATION_RECORDS } from "./archive.ts";
+import { summarizePopulationGenetics } from "../agents/genetics.ts";
+import { modelEcologicalInteractions, updateEcologicalRelationships } from "./interactions.ts";
+import { simulationStepForWorld } from "../time.ts";
+import { annualClimateForLocal } from "../environment/cycle.ts";
 import type {
   EcologyDelta,
   RuleContext,
@@ -91,17 +95,30 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     const cached = suitabilityCache.get(key);
     if (cached !== undefined) return cached;
     const index = regionIndexFor(regionId);
-    const value = suitability(
-      species,
+    const climate = annualClimateForLocal(
       state.fields.temperature.values[index] ?? fallbackTemperature,
       state.fields.humidity.values[index] ?? fallbackHumidity,
+      fallbackTemperature,
+      fallbackHumidity,
+      state.climateCycle,
     );
+    const value = suitability(species, climate.temperature, climate.humidity);
     suitabilityCache.set(key, value);
     return value;
   };
   const facilityEffects = facilityEffectProfilesForState(state);
   const technologyProfiles = technologyProfilesForState(state);
   const speciesById = new Map(state.species.map((species) => [species.id, species]));
+  const agentsByPopulationForGenetics = new Map<string, WorldState["agents"]>();
+  for (const agent of state.agents) {
+    const agents = agentsByPopulationForGenetics.get(agent.populationId) ?? [];
+    agents.push(agent);
+    agentsByPopulationForGenetics.set(agent.populationId, agents);
+  }
+  const geneticSamplesByPopulation = new Map([...agentsByPopulationForGenetics.entries()].map(([populationId, agents]) => [
+    populationId,
+    summarizePopulationGenetics(agents),
+  ]));
   const occupiedPopulationRegions = new Set(state.populations.map((population) => `${population.speciesId}|${population.regionId}`));
   const plannedPopulationRegions = new Set<string>();
   const foodByRegion = new Map<string, number>();
@@ -110,10 +127,14 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     foodByRegion.set(resource.regionId, (foodByRegion.get(resource.regionId) ?? 0) + resource.amount);
   }
   const regionalDescendants = new Set<string>();
+  const producerPopulations: WorldState["populations"] = [];
   for (const population of state.populations) {
-    if (population.count < 1) continue;
-    const parentId = speciesById.get(population.speciesId)?.parentId;
-    if (parentId) regionalDescendants.add(`${parentId}|${population.regionId}`);
+    const species = speciesById.get(population.speciesId);
+    if (species?.role === "producer") producerPopulations.push(population);
+    if (population.count >= 1) {
+      const parentId = species?.parentId;
+      if (parentId) regionalDescendants.add(`${parentId}|${population.regionId}`);
+    }
   }
   for (let index = 0; index < state.fields.biomass.values.length; index += 1) {
     const biomass = state.fields.biomass.values[index] ?? 0;
@@ -130,33 +151,46 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     populationCount: state.populations.reduce((sum, population) => sum + population.count, 0),
   };
   const ruleContext: RuleContext = { ...context, metrics };
-  const livingSpeciesForRole = (role: "producer" | "consumer" | "decomposer") => {
-    const speciesIds = new Set(state.species.filter((species) => species.role === role).map((species) => species.id));
-    const minimumViableCount = role === "producer" ? 1 : 4;
-    const livingIds = new Set(state.populations.filter((population) => speciesIds.has(population.speciesId) && population.count >= minimumViableCount).map((population) => population.speciesId));
-    return state.species.filter((species) => livingIds.has(species.id));
+  const activeSpeciesIds = {
+    producer: new Set<string>(),
+    consumer: new Set<string>(),
+    decomposer: new Set<string>(),
   };
-  if (livingSpeciesForRole("producer").length === 0) {
-    mergeDelta(delta, attemptAbiogenesis(ruleContext).delta);
+  for (const population of state.populations) {
+    const species = speciesById.get(population.speciesId);
+    if (!species) continue;
+    const minimumViableCount = species.role === "producer" ? 1 : 4;
+    if (population.count >= minimumViableCount) activeSpeciesIds[species.role].add(species.id);
+  }
+  const plannedSpeciesCount = new Map([
+    ["producer", activeSpeciesIds.producer.size],
+    ["consumer", activeSpeciesIds.consumer.size],
+    ["decomposer", activeSpeciesIds.decomposer.size],
+  ] as const);
+  if (activeSpeciesIds.producer.size === 0) {
+    const outcome = attemptAbiogenesis(ruleContext);
+    mergeDelta(delta, outcome.delta);
+    if (outcome.status === "applied") plannedSpeciesCount.set("producer", plannedSpeciesCount.get("producer")! + 1);
   }
 
-  const producerPopulations = state.populations.filter((population) =>
-    speciesById.get(population.speciesId)?.role === "producer",
-  );
   const producerFood = producerPopulations.reduce((sum, population) => sum + population.count, 0) /
     Math.max(1, producerPopulations.length);
-  if (livingSpeciesForRole("consumer").length < 2) {
-    mergeDelta(delta, attemptTrophicSpecies(ruleContext, "consumer", producerFood).delta);
+  if (activeSpeciesIds.consumer.size < 2) {
+    const outcome = attemptTrophicSpecies(ruleContext, "consumer", producerFood);
+    mergeDelta(delta, outcome.delta);
+    if (outcome.status === "applied") plannedSpeciesCount.set("consumer", plannedSpeciesCount.get("consumer")! + 1);
   }
-  if (livingSpeciesForRole("decomposer").length < 1) {
-    mergeDelta(delta, attemptTrophicSpecies(ruleContext, "decomposer", producerFood * 0.7).delta);
+  if (activeSpeciesIds.decomposer.size < 1) {
+    const outcome = attemptTrophicSpecies(ruleContext, "decomposer", producerFood * 0.7);
+    mergeDelta(delta, outcome.delta);
+    if (outcome.status === "applied") plannedSpeciesCount.set("decomposer", plannedSpeciesCount.get("decomposer")! + 1);
   }
 
-  const plannedSpeciesCount = new Map([
-    ["producer", state.species.filter((species) => species.role === "producer").length],
-    ["consumer", state.species.filter((species) => species.role === "consumer").length],
-    ["decomposer", state.species.filter((species) => species.role === "decomposer").length],
-  ] as const);
+  const interactionModel = modelEcologicalInteractions(state);
+  const interactionUpdate = updateEcologicalRelationships(state, interactionModel);
+  delta.ecologicalRelationshipEffects = interactionUpdate.effects;
+  appendItems(delta.eventDrafts, interactionUpdate.events);
+
   let speciationOccurred = false;
 
   for (const population of state.populations) {
@@ -171,14 +205,22 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       energy: 0,
     };
     const facilities = facilityEffects.get(population.regionId);
-    const index = populationCellIndex(population, state.fields.elevation.width, state.fields.elevation.height);
-    const temperature = state.fields.temperature.values[index] ?? metrics.meanTemperature;
-    const humidity = state.fields.humidity.values[index] ?? metrics.meanHumidity;
+    const index = regionIndexFor(population.regionId);
+    const climate = annualClimateForLocal(
+      state.fields.temperature.values[index] ?? metrics.meanTemperature,
+      state.fields.humidity.values[index] ?? metrics.meanHumidity,
+      fallbackTemperature,
+      fallbackHumidity,
+      state.climateCycle,
+    );
+    const temperature = climate.temperature;
+    const humidity = climate.humidity;
     const nutrients = state.fields.nutrients.values[index] ?? metrics.nutrientLevel;
-    const suitabilityScore = suitability(species, temperature, humidity);
-    const food = species.role === "producer"
+    const suitabilityScore = suitabilityFor(species, population.regionId);
+    const baseFood = species.role === "producer"
       ? nutrients
       : Math.min(1, producerFood * (species.role === "consumer" ? 0.2 : 0.12));
+    const food = Math.max(0, Math.min(1, baseFood + (interactionModel.foodAdjustments.get(population.id) ?? 0)));
     const count = nextPopulationCount(population, species, suitabilityScore, food);
     let nextRegionId = population.regionId;
     if (suitabilityScore < 0.35) {
@@ -212,7 +254,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       const migrationProbability = destination
         ? Math.max(0, Math.min(0.8, (species.traits.mobility ?? 0) * (0.35 + technology.navigation * 0.12 + (facilities?.navigation ?? 0) * 0.18) + destination.foodAdvantage * 0.25 + foodStress * 0.1))
         : 0;
-      const [roll] = randomFloat(forkRandom(state.random, `migration:${population.id}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `migration:${population.id}:${simulationStepForWorld(state)}`));
       if (destination && roll < migrationProbability) {
         nextRegionId = destination.regionId as typeof population.regionId;
         delta.eventDrafts.push({
@@ -258,7 +300,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       const destination = candidates[0];
       if (destination && destination.score >= 0.42) {
         const probability = Math.min(0.45, (species.traits.mobility ?? 0) * 0.16 + Math.max(0, destination.habitat - suitabilityScore) * 0.25 + Math.min(0.12, count / 20_000));
-        const [roll] = randomFloat(forkRandom(state.random, `dispersal:${population.id}:${destination.regionId}:${state.tick}`));
+        const [roll] = randomFloat(forkRandom(state.random, `dispersal:${population.id}:${destination.regionId}:${simulationStepForWorld(state)}`));
         if (roll < probability) {
           const branchCount = Math.min(500, Math.max(4, count * 0.08));
           retainedCount = Math.max(0, count - branchCount);
@@ -283,10 +325,20 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         }
       }
     }
-    if (!speciationOccurred && retainedCount >= 250) {
+    if (!speciationOccurred
+      && retainedCount >= 250
+      && (plannedSpeciesCount.get(species.role) ?? 0) < ACTIVE_ADAPTIVE_SPECIES_LIMITS[species.role]
+      && !regionalDescendants.has(`${species.id}|${nextRegionId}`)) {
       const adaptationIndex = regionIndexFor(nextRegionId);
-      const localTemperature = state.fields.temperature.values[adaptationIndex] ?? metrics.meanTemperature;
-      const localHumidity = state.fields.humidity.values[adaptationIndex] ?? metrics.meanHumidity;
+      const localClimate = annualClimateForLocal(
+        state.fields.temperature.values[adaptationIndex] ?? metrics.meanTemperature,
+        state.fields.humidity.values[adaptationIndex] ?? metrics.meanHumidity,
+        fallbackTemperature,
+        fallbackHumidity,
+        state.climateCycle,
+      );
+      const localTemperature = localClimate.temperature;
+      const localHumidity = localClimate.humidity;
       const localSuitability = suitabilityFor(species, nextRegionId);
       const outcome = attemptAdaptiveSpeciation(
         ruleContext,
@@ -297,6 +349,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         localSuitability,
         plannedSpeciesCount.get(species.role) ?? 0,
         regionalDescendants.has(`${species.id}|${nextRegionId}`),
+        geneticSamplesByPopulation.get(population.id),
       );
       if (outcome.status === "applied") {
         const branchPopulation = outcome.delta.entityEffects.find((effect) => effect.collection === "populations" && effect.operation === "create");
@@ -331,7 +384,7 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       const foodAmount = Math.max(0, Math.min(4, count * suitabilityScore * 0.002 * (1 + technology.subsistence * 0.45 + (facilities?.subsistence ?? 0) * 0.65)));
       if (foodAmount > 0.001) {
         delta.resourceTransactions.push({
-          id: `resource:food:production:${state.tick}:${population.id}`,
+          id: `resource:food:production:${simulationStepForWorld(state)}:${population.id}`,
           resourceId: "food",
           regionId: population.regionId,
           amount: foodAmount,
@@ -382,5 +435,22 @@ export const applyEcologyDelta = (state: WorldState, delta: EcologyDelta): World
       collection.push(effect.value as never);
     }
   }
+  const ecologicalRelationships = next.ecologicalRelationships ?? [];
+  const relationshipIndex = new Map(ecologicalRelationships.map((relationship, index) => [relationship.id, index]));
+  for (const effect of delta.ecologicalRelationshipEffects ?? []) {
+    const index = relationshipIndex.get(effect.relationship.id);
+    if (effect.operation === "remove") {
+      if (index !== undefined) {
+        ecologicalRelationships[index] = undefined as never;
+        relationshipIndex.delete(effect.relationship.id);
+      }
+    } else if (effect.operation === "update" && index !== undefined) {
+      ecologicalRelationships[index] = effect.relationship;
+    } else if (effect.operation === "create" && index === undefined) {
+      relationshipIndex.set(effect.relationship.id, ecologicalRelationships.length);
+      ecologicalRelationships.push(effect.relationship);
+    }
+  }
+  next.ecologicalRelationships = ecologicalRelationships.filter((relationship): relationship is NonNullable<typeof relationship> => Boolean(relationship));
   return next;
 };

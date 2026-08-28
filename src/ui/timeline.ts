@@ -1,5 +1,6 @@
 import type { EventMilestone, WorldEvent } from "../sim/types.ts";
-import { formatSimulationAge } from "./formatters.ts";
+import { compareSimulationSteps } from "../sim/time.ts";
+import { formatSimulationAge, formatSimulationAgeFromDays } from "./formatters.ts";
 
 export type TimelineEvent = WorldEvent | EventMilestone;
 
@@ -57,6 +58,7 @@ const labelFor = (event: TimelineEvent): string => {
   "worldview-entity-dormant": "传承体系沉寂",
   "worldview-entity-revived": "传承体系复兴",
   "agent-birth": "个体出生",
+  "genetic-mutation": "遗传变异出现",
   "agent-death": "个体死亡",
   "protoplanetary-dust": "原行星尘埃盘形成",
   "planetesimal-formation": "微行星群形成",
@@ -69,6 +71,12 @@ const labelFor = (event: TimelineEvent): string => {
   "substance-formation": "原创物质形成",
   "substance-discovery": "发现原创物质",
   "substance-engineering": "创造复合材料",
+  "substance-extraction": "开采原创物质",
+  "substance-depletion": "原创物质枯竭",
+  "pathogen-emergence": "原创病原体出现",
+  "disease-outbreak": "区域疫情暴发",
+  "disease-contained": "区域疫情受控",
+  "disease-regional-spread": "疫情跨区域传播",
   "add-water": "用户增加水量",
   heat: "用户升温",
   "add-organics": "用户增加有机物",
@@ -82,6 +90,16 @@ const qualifierFor = (event: TimelineEvent): string => {
   if (event.kind === "population-migration" && scalarFor(event, "foodDriven") === true) return " · 食物驱动";
   if (event.kind === "organization-split" && Number(scalarFor(event, "foodSecurity") ?? 1) < 0.1) return " · 缺粮压力";
   if (event.kind === "agent-death" && Number(scalarFor(event, "hungerDeaths") ?? 0) > 0) return " · 饥饿主导";
+  if (event.kind === "agent-death" && Number(scalarFor(event, "diseaseDeaths") ?? 0) > 0) return " · 疾病主导";
+  if (event.kind === "agent-death" && Number(scalarFor(event, "environmentalDeaths") ?? 0) > 0) return " · 环境压力主导";
+  if (event.kind === "substance-extraction" || event.kind === "substance-depletion") {
+    const purpose = scalarFor(event, "purpose") === "energy" ? "能源" : "建造材料";
+    const amount = Number(scalarFor(event, "amount") ?? 0);
+    const reserveRatio = Number(scalarFor(event, "reserveRatio") ?? 0);
+    return event.kind === "substance-depletion"
+      ? ` · ${purpose}开采后耗尽`
+      : ` · ${purpose} ${amount.toFixed(2)} 单位，剩余 ${(reserveRatio * 100).toFixed(1)}%`;
+  }
   const resourceId = scalarFor(event, "resourceId");
   if (event.kind === "interregional-trade" && typeof resourceId === "string") {
     const resource = ({ food: "食物", materials: "建造材料", energy: "能源" } as Record<string, string>)[resourceId] ?? resourceId;
@@ -111,12 +129,12 @@ export const renderTimeline = (element: HTMLElement, events: WorldEvent[], miles
   const byId = new Map<string, TimelineEvent>();
   for (const milestone of milestones) byId.set(milestone.id, milestone);
   for (const event of events) byId.set(event.id, event);
-  const recent = [...byId.values()].sort((left, right) => (right.years ?? right.tick) - (left.years ?? left.tick) || right.tick - left.tick || right.id.localeCompare(left.id)).slice(0, 8);
+  const recent = [...byId.values()].sort((left, right) => compareSimulationSteps(right.timelineStep ?? String(right.tick), left.timelineStep ?? String(left.tick)) || (right.years ?? right.tick) - (left.years ?? left.tick) || right.id.localeCompare(left.id)).slice(0, 8);
   element.innerHTML = recent.length === 0
     ? `<div class="empty-state"><strong>尚无事件</strong><span>世界正在积累形成条件</span></div>`
     : recent.map((event) => `
       <article class="timeline-item" data-archived="${isArchivedEvent(event) ? "true" : "false"}">
-        <time>世界时间 ${formatSimulationAge(event.years ?? event.tick)}</time>
+        <time>世界时间 ${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)}</time>
         <strong>${escapeHtml(labelFor(event))}${qualifierFor(event)}</strong>
         <span>${isArchivedEvent(event) ? "历史档案" : event.source === "user" ? "用户事件" : "自然演化"} · ${escapeHtml(event.ruleId)} · 概率 ${(event.probability * 100).toFixed(1)}%</span>
       </article>

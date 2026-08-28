@@ -9,6 +9,7 @@ export const snapshotTransferables = (snapshot: WorldSnapshot): ArrayBuffer[] =>
   for (const grid of Object.values(snapshot.fields)) addGridBuffer(buffers, grid.values);
   for (const grid of Object.values(snapshot.chemistry)) addGridBuffer(buffers, grid.values);
   if (snapshot.foodSecurity) addGridBuffer(buffers, snapshot.foodSecurity.values);
+  if (snapshot.diseasePrevalence) addGridBuffer(buffers, snapshot.diseasePrevalence.values);
   return [...buffers];
 };
 

@@ -11,8 +11,18 @@ import type {
 } from "./types.ts";
 import { createWorldviewState } from "./worldview/registry.ts";
 import { completedPlanetFormationState, createPlanetFormationState, formedElevation, primordialDustElevation } from "./environment/formation.ts";
+import { createOrbitalState, isOrbitalState } from "./environment/orbit.ts";
 import { defaultGovernanceFor } from "./society/organization.ts";
 import { createEventArchive } from "./events/ledger.ts";
+import { MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "./health/disease.ts";
+import { validAgentGenetics } from "./agents/genetics.ts";
+import { MAX_FACILITY_RECORDS } from "./society/facilities.ts";
+import { MAX_RESOURCE_RECORDS } from "./resources.ts";
+import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "./ecology/archive.ts";
+import { isArchivedOrganizationSummary, MAX_ARCHIVED_ORGANIZATION_SUMMARIES } from "./society/archive.ts";
+import { isSimulationTimeline } from "./time.ts";
+import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
+import { createClimateCycleState, isClimateCycleState } from "./environment/cycle.ts";
 
 const DEFAULT_WIDTH = 96;
 const DEFAULT_HEIGHT = 48;
@@ -21,6 +31,9 @@ const MAX_GRID_SIZE = 256;
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
+
+const validTimelineStep = (value: unknown): boolean => value === undefined
+  || (typeof value === "string" && /^\d+$/.test(value));
 
 const normalizeDimension = (value: number | undefined, fallback: number): number => {
   if (value === undefined || !Number.isFinite(value)) {
@@ -74,11 +87,14 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
     seed: normalizedSeed,
     tick: 0,
     years: 0,
+    orbital: createOrbitalState(normalizedSeed),
+    climateCycle: createClimateCycleState(),
     random: createRandom(normalizedSeed),
     formation: formed ? completedPlanetFormationState(normalizedSeed) : createPlanetFormationState(normalizedSeed),
     fields: createFields(normalizedSeed, width, height, formed),
     chemistry: createChemistry(width, height, formed),
     substances: [],
+    pathogens: [],
     species: [],
     populations: [],
     agents: [],
@@ -138,7 +154,7 @@ const digestText = (value: unknown): string => {
     const record = candidate as Record<string, unknown>;
     append("{");
     let appended = 0;
-    for (const key of Object.keys(record).filter((key) => key !== "observation").sort()) {
+    for (const key of Object.keys(record).filter((key) => key !== "observation" && !(key === "ecologicalRelationships" && Array.isArray(record[key]) && record[key].length === 0)).sort()) {
       const entry = record[key];
       if (typeof entry === "undefined" || typeof entry === "function" || typeof entry === "symbol") continue;
       if (appended > 0) append(",");
@@ -162,10 +178,12 @@ export const assertBlankWorld = (state: WorldState): void => {
   const failures: string[] = [];
   if (state.species.length > 0) failures.push("species");
   if (state.substances.length > 0) failures.push("substances");
+  if (state.pathogens.length > 0) failures.push("pathogens");
   if (state.populations.length > 0) failures.push("populations");
   if (state.agents.length > 0) failures.push("agents");
   if (state.knowledge.length > 0) failures.push("knowledge");
   if (state.relationships.length > 0) failures.push("relationships");
+  if ((state.ecologicalRelationships ?? []).length > 0) failures.push("ecologicalRelationships");
   if (state.cultures.length > 0) failures.push("cultures");
   if (state.organizations.length > 0) failures.push("organizations");
   if (state.facilities.length > 0) failures.push("facilities");
@@ -177,6 +195,11 @@ export const assertBlankWorld = (state: WorldState): void => {
 };
 
 export const isFiniteWorld = (state: WorldState): boolean => {
+  const finiteClock = state.simulationDays === undefined
+    || (Number.isSafeInteger(state.simulationDays) && state.simulationDays >= 0 && state.simulationDays <= Number.MAX_SAFE_INTEGER);
+  const exactTimeline = state.timeline === undefined || isSimulationTimeline(state.timeline);
+  const finiteOrbital = state.orbital === undefined || isOrbitalState(state.orbital);
+  const finiteClimateCycle = state.climateCycle === undefined || isClimateCycleState(state.climateCycle);
   const grids = [
     ...Object.values(state.fields),
     ...Object.values(state.chemistry),
@@ -190,9 +213,132 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     substance.originYears,
     substance.discoveryTick ?? 0,
     substance.discoveryYears ?? 0,
+    substance.reserveCapacity,
+    substance.remainingReserve,
+    substance.extractedTotal,
+    substance.depletedTick ?? 0,
     ...Object.values(substance.composition),
     ...Object.values(substance.properties),
+  ].every(Number.isFinite)
+    && (substance.originTimelineStep === undefined || /^\d+$/.test(substance.originTimelineStep))
+    && (substance.discoveryTimelineStep === undefined || /^\d+$/.test(substance.discoveryTimelineStep))
+    && substance.reserveCapacity >= 0
+    && substance.reserveCapacity <= MAX_SUBSTANCE_RESERVE
+    && substance.remainingReserve >= 0
+    && substance.remainingReserve <= substance.reserveCapacity
+    && substance.extractedTotal >= 0
+    && substance.extractedTotal <= substance.reserveCapacity
+    && (substance.depletedTimelineStep === undefined || /^\d+$/.test(substance.depletedTimelineStep)));
+  const finitePathogens = state.pathogens.every((pathogen) => [
+    pathogen.originTick,
+    pathogen.originYears,
+    pathogen.transmission,
+    pathogen.severity,
+    pathogen.persistence,
+    pathogen.prevalence,
+    pathogen.cumulativeCases,
+    pathogen.cumulativeRecoveries,
+    pathogen.cumulativeDeaths,
+    pathogen.lastActiveTick,
+  ].every(Number.isFinite)
+    && (pathogen.originTimelineStep === undefined || /^\d+$/.test(pathogen.originTimelineStep))
+    && (pathogen.lastActiveTimelineStep === undefined || /^\d+$/.test(pathogen.lastActiveTimelineStep))
+    && Array.isArray(pathogen.regionalOutbreaks)
+    && pathogen.regionalOutbreaks.length > 0
+    && pathogen.regionalOutbreaks.length <= MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN
+    && pathogen.regionalOutbreaks.every((outbreak) => [outbreak.prevalence, outbreak.firstDetectedTick, outbreak.lastActiveTick].every(Number.isFinite)
+      && (outbreak.firstDetectedTimelineStep === undefined || /^\d+$/.test(outbreak.firstDetectedTimelineStep))
+      && (outbreak.lastActiveTimelineStep === undefined || /^\d+$/.test(outbreak.lastActiveTimelineStep)))) && state.agents.every((agent) => [
+    ...Object.values(agent.traits),
+    agent.health?.vitality ?? 1,
+    ...(agent.health?.infections.flatMap((infection) => [infection.infectedTick, infection.severity]) ?? []),
+  ].every(Number.isFinite)
+    && (agent.health?.infections ?? []).every((infection) => infection.infectedTimelineStep === undefined || /^\d+$/.test(infection.infectedTimelineStep))
+    && (!agent.genetics || validAgentGenetics(agent.genetics)));
+  const finiteSpecies = state.species.every((species) => validTimelineStep(species.originTimelineStep));
+  const finiteKnowledge = state.knowledge.every((knowledge) => validTimelineStep(knowledge.originTimelineStep));
+  const finiteCultures = state.cultures.every((culture) => !culture.identity || validTimelineStep(culture.identity.originTimelineStep));
+  const finiteEcologicalRelationships = (state.ecologicalRelationships ?? []).every((relationship) => [
+    relationship.strength,
+    relationship.firstTick,
+    relationship.lastTick,
+    relationship.interactionCount,
+    relationship.cumulativeImpact,
+    relationship.lastImpact,
+    ...Object.values(relationship.details),
+  ].every((value) => typeof value !== "number" || Number.isFinite(value)));
+  const finiteRelationships = state.relationships.every((relationship) => [
+    relationship.createdTick,
+    relationship.strength,
+  ].every(Number.isFinite)
+    && (relationship.createdTimelineStep === undefined || /^\d+$/.test(relationship.createdTimelineStep)));
+  const resourceKeys = new Set<string>();
+  const finiteResources = state.resources.length <= MAX_RESOURCE_RECORDS && state.resources.every((resource) => {
+    const key = `${resource.resourceId}|${resource.regionId}|${resource.holderId ?? "world"}`;
+    const unique = !resourceKeys.has(key);
+    resourceKeys.add(key);
+    return unique
+      && Number.isFinite(resource.amount)
+      && Number.isFinite(resource.cap)
+      && resource.amount >= 0
+      && resource.cap >= resource.amount
+      && resource.cap <= Number.MAX_SAFE_INTEGER;
+  });
+  const finiteFacilities = state.facilities.length <= MAX_FACILITY_RECORDS && state.facilities.every((facility) => [
+    facility.condition,
+    facility.materialInvested,
+    facility.plannedTick,
+    facility.builtTick,
+    facility.lastMaintainedTick,
+    facility.lastIncidentTick,
+    facility.lastInspectedEventTick ?? 0,
+    facility.abandonedTick ?? 0,
   ].every(Number.isFinite));
+  const finiteHistorySamples = state.eventArchive.historySamples.length <= 256 && state.eventArchive.historySamples.every((sample) => [
+    sample.tick,
+    sample.years,
+    sample.meanTemperature,
+    sample.oceanCoverage,
+    sample.biomass,
+    sample.oxygen,
+    sample.organics,
+    sample.populationCount,
+    sample.speciesCount,
+    sample.organizationCount,
+    sample.facilityCount,
+    sample.knowledgeCount,
+    sample.foodSecurity,
+    sample.diseasePrevalence,
+    sample.annualMeanTemperature,
+    sample.annualMeanHumidity,
+    sample.annualMeanWater,
+    sample.annualMeanSolarFlux,
+    sample.annualMinimumTemperature,
+    sample.annualMaximumTemperature,
+    sample.annualSeasonalRange,
+  ].every((value) => value === undefined || Number.isFinite(value)) && /^[0-9]+$/.test(sample.timelineStep) && /^[0-9]+$/.test(sample.timelineDays));
+  const finiteArchivedSpecies = state.eventArchive.archivedSpeciesSummaries.length <= MAX_ARCHIVED_SPECIES_SUMMARIES
+    && state.eventArchive.archivedSpeciesSummaries.every((summary) => [
+      summary.lastKnownPopulation,
+      summary.archivedTick,
+      summary.archivedYears,
+      ...Object.values(summary.traits),
+      summary.blueprint.lifespanYears,
+      summary.blueprint.adultScale,
+      summary.blueprint.metabolicEfficiency,
+      summary.blueprint.fecundity,
+      summary.blueprint.thermalTolerance,
+      summary.blueprint.hydrationRetention,
+      summary.blueprint.mutationRate,
+      summary.blueprint.inheritanceFidelity,
+    ].every(Number.isFinite)
+      && summary.lastKnownPopulation >= 0
+      && summary.lastKnownRegionIds.length <= MAX_ARCHIVED_SPECIES_REGIONS
+      && validTimelineStep(summary.originTimelineStep)
+      && validTimelineStep(summary.archivedTimelineStep)
+      && validTimelineStep(summary.archivedTimelineDays));
+  const finiteArchivedOrganizations = state.eventArchive.archivedOrganizationSummaries.length <= MAX_ARCHIVED_ORGANIZATION_SUMMARIES
+    && state.eventArchive.archivedOrganizationSummaries.every(isArchivedOrganizationSummary);
   const finiteWorldviews = state.worldview.practices.every((practice) => [
     practice.originTick,
     practice.lastTrainedTick,
@@ -221,6 +367,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       summary.socialPopulation ?? 0,
       summary.householdCount,
       summary.relationshipCount,
+      summary.ecologicalRelationshipCount ?? 0,
       summary.foodBalance,
       summary.foodPerAgent,
       summary.foodSecurity,
@@ -249,9 +396,21 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       society.lastChangeTick,
       ...Object.values(society.organizationCounts ?? {}),
     ] : [];
-    return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite);
+    const finiteAgentRecords = summary.agentRecords.every((record) => [
+      ...Object.values(record.traits ?? {}),
+      ...Object.values(record.skills),
+    ].every(Number.isFinite) && (!record.genetics || validAgentGenetics(record.genetics)));
+    const finiteEcologyRecords = (summary.ecologicalRelationships ?? []).every((relationship) => [
+      relationship.strength,
+      relationship.firstTick,
+      relationship.lastTick,
+      relationship.interactionCount,
+      relationship.cumulativeImpact,
+      relationship.lastImpact,
+    ].every(Number.isFinite));
+    return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && finiteAgentRecords && finiteEcologyRecords;
   });
-  return finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finiteWorldviews && finiteLod;
+  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteWorldviews && finiteLod;
 };
 
 export const regionIdForCell = (x: number, y: number): RegionId =>

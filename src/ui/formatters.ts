@@ -1,5 +1,5 @@
 import { SEA_LEVEL } from "../sim/environment/terrain.ts";
-import { simulationAgeFromYears } from "../sim/time.ts";
+import { simulationAgeFromDays, simulationAgeFromYears } from "../sim/time.ts";
 
 export type FormattedMetric = {
   value: string;
@@ -16,9 +16,21 @@ export const formatSimulationAge = (elapsedYears: number | undefined): string =>
   return `${formatNumber(age.years)} 年 ${formatNumber(age.days)} 天`;
 };
 
+export const formatSimulationAgeFromDays = (totalDays: string | undefined): string => {
+  if (totalDays === undefined) return formatSimulationAge(0);
+  const age = simulationAgeFromDays(totalDays);
+  return `${new Intl.NumberFormat("zh-CN").format(BigInt(age.years))} 年 ${formatNumber(age.days)} 天`;
+};
+
 export const formatSimulationAgeMetric = (elapsedYears: number | undefined): FormattedMetric => {
   const age = simulationAgeFromYears(finite(elapsedYears));
   return { value: formatNumber(age.years), unit: `年 ${formatNumber(age.days)} 天` };
+};
+
+export const formatSimulationAgeMetricFromDays = (totalDays: string | undefined): FormattedMetric => {
+  if (totalDays === undefined) return formatSimulationAgeMetric(0);
+  const age = simulationAgeFromDays(totalDays);
+  return { value: new Intl.NumberFormat("zh-CN").format(BigInt(age.years)), unit: `年 ${formatNumber(age.days)} 天` };
 };
 
 export const formatCount = (value: number | undefined, unit: string): FormattedMetric => {

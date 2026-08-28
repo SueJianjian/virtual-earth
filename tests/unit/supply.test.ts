@@ -22,12 +22,20 @@ const supplyWorld = (): WorldState => {
 describe("interregional supply chains", () => {
   it("ships food, materials, and energy toward city target stocks", () => {
     const state = supplyWorld();
+    const replayState = structuredClone(state);
+    const sourceDiplomacy = state.organizations[0]!.diplomacy;
+    const destinationDiplomacy = state.organizations[1]!.diplomacy;
     const delta = stepSupplyChains(state);
     const shipments = delta.resourceTransactions.filter((transaction) => transaction.operation === "transfer");
+    const tradeEvents = delta.eventDrafts.filter((event) => event.kind === "interregional-trade");
 
     expect(new Set(shipments.map((transaction) => transaction.resourceId))).toEqual(new Set(["food", "materials", "energy"]));
     expect(shipments.every((transaction) => transaction.destinationRegionId === state.organizations[1]!.regionId)).toBe(true);
-    expect(delta.eventDrafts.filter((event) => event.kind === "interregional-trade")).toHaveLength(3);
+    expect(tradeEvents).toHaveLength(3);
+    expect(tradeEvents.map((event) => event.evidence.routeStance)).toEqual(["neutral", "trade", "trade"]);
+    expect(state.organizations[0]!.diplomacy).toBe(sourceDiplomacy);
+    expect(state.organizations[1]!.diplomacy).toBe(destinationDiplomacy);
+    expect(stepSupplyChains(replayState)).toEqual(delta);
     expect(delta.entityEffects).toEqual(expect.arrayContaining([
       expect.objectContaining({ collection: "organizations", operation: "update", value: expect.objectContaining({ diplomacy: expect.objectContaining({ [state.organizations[1]!.id]: "trade" }) }) }),
     ]));

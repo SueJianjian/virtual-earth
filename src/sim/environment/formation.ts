@@ -1,6 +1,6 @@
 import { hashString, normalizeSeed } from "../random.ts";
 import type { EnvironmentDelta, EnvironmentInput, PlanetFormationPhase, PlanetFormationState, WorldState } from "../types.ts";
-import { DAYS_PER_YEAR } from "../time.ts";
+import { DAYS_PER_YEAR, projectedYearsAfterStep } from "../time.ts";
 
 export const FORMATION_DURATION_DAYS = DAYS_PER_YEAR;
 
@@ -197,7 +197,7 @@ export const stepPlanetFormation = (state: WorldState, input: EnvironmentInput):
     delta.eventDrafts.push({
       kind: milestone.kind,
       ruleId: milestone.ruleId,
-      years: state.years + Math.max(0, crossed.progress - state.formation.progress) * FORMATION_DURATION_DAYS / DAYS_PER_YEAR,
+      years: projectedYearsAfterStep(state, Math.max(0, crossed.progress - state.formation.progress) * FORMATION_DURATION_DAYS / DAYS_PER_YEAR),
       sourceIds: [],
       probability: 1,
       roll: 0,

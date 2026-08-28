@@ -13,7 +13,8 @@
     "test:e2e": "playwright test",
     "benchmark": "node --experimental-strip-types scripts/benchmark.ts",
     "benchmark:dense": "node --experimental-strip-types scripts/benchmark.ts 100 123 dense",
-    "benchmark:dense:default": "node --experimental-strip-types scripts/benchmark.ts 100 123 dense 96 48"
+    "benchmark:dense:default": "node --experimental-strip-types scripts/benchmark.ts 100 123 dense 96 48",
+    "benchmark:soak": "node --experimental-strip-types scripts/benchmark.ts 1000 123 dense 96 48"
   },
   "devDependencies": {
     "@playwright/test": "latest",

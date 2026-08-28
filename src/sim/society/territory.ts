@@ -5,6 +5,7 @@ import { diplomacyForOrganization, governanceForOrganization } from "./organizat
 import { createFoodBalanceIndex, foodSecurityForOrganization } from "../agents/food.ts";
 import { technologyProfileForRegion } from "../culture/technology.ts";
 import { culturalCompatibility, cultureIdentityFor } from "../culture/identity.ts";
+import { compareSimulationSteps, simulationStepDistance, simulationStepForWorld, simulationStepModulo } from "../time.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -196,7 +197,7 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
   for (const organization of organizations) {
     const limit = territoryLimit[organization.type] ?? 1;
     const territory = territoryFor(organization);
-    if (territory.length >= limit || (state.tick + hashString(organization.id)) % 8 !== 0) continue;
+    if (territory.length >= limit || (simulationStepModulo(simulationStepForWorld(state), 8) + hashString(organization.id)) % 8 !== 0) continue;
     const territorySet = new Set(territory);
     const candidates = [...new Set(territory.flatMap((regionId) => neighboringRegionIds(regionId, width, height)))]
       .filter((regionId) => !territorySet.has(regionId))
@@ -210,9 +211,9 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
     if (peer) {
       const culturalLink = culturalLinkFor(state, organization, peer);
       const probability = Math.min(0.55, (0.12 + Math.abs(organization.memberIds.length - peer.memberIds.length) / 500) * (0.72 + (1 - culturalLink.compatibility) * 0.28));
-      const [roll] = randomFloat(forkRandom(state.random, `border:${organization.id}:${peer.id}:${target.regionId}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `border:${organization.id}:${peer.id}:${target.regionId}:${simulationStepForWorld(state)}`));
       if (roll >= probability) continue;
-      const conflict = applyOrganizationConflict(organization, peer, state.tick);
+      const conflict = applyOrganizationConflict(organization, peer, state.tick, simulationStepForWorld(state));
       for (const relationshipEffect of conflict.relationshipEffects) delta.relationshipEffects.push(relationshipEffect);
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: withRelation(organization, peer, "rival") });
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: peer.id, value: withRelation(peer, organization, "rival") });
@@ -229,7 +230,7 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
       continue;
     }
     const probability = Math.min(0.72, 0.1 + target.score * 0.18 + Math.min(0.24, organization.memberIds.length / 800));
-    const [roll] = randomFloat(forkRandom(state.random, `territory:${organization.id}:${target.regionId}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `territory:${organization.id}:${target.regionId}:${simulationStepForWorld(state)}`));
     if (roll >= probability) continue;
     const territoryRegionIds = [...territory, target.regionId].sort();
     delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: { ...organization, territoryRegionIds } });
@@ -265,7 +266,7 @@ const addDiplomaticPacts = (state: WorldState, delta: WorldDelta, organizations:
     if (readiness < 0.52) continue;
     const culturalLink = culturalLinkFor(state, left, right);
     const probability = Math.min(0.1, (0.018 + readiness * 0.055 + (relation === "trade" ? 0.018 : 0)) * (0.66 + culturalLink.compatibility * 0.34));
-    const [roll] = randomFloat(forkRandom(state.random, `alliance:${left.id}:${right.id}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `alliance:${left.id}:${right.id}:${simulationStepForWorld(state)}`));
     if (roll >= probability) continue;
     delta.entityEffects.push({ collection: "organizations", operation: "update", id: left.id, value: withRelation(left, right, "allied") });
     delta.entityEffects.push({ collection: "organizations", operation: "update", id: right.id, value: withRelation(right, left, "allied") });
@@ -358,20 +359,25 @@ const resolveInterregionalWars = (state: WorldState, delta: WorldDelta, organiza
       if (stance === "allied" || stance === "trade") continue;
       const leftGovernance = governanceForOrganization(left);
       const rightGovernance = governanceForOrganization(right);
-      const lastConflict = Math.max(leftGovernance.lastConflictTick, rightGovernance.lastConflictTick);
-      if (lastConflict >= 0 && state.tick - lastConflict < 12) continue;
+      const currentStep = simulationStepForWorld(state);
+      const recentConflict = [leftGovernance, rightGovernance].some((governance) => {
+        const conflictStep = governance.lastConflictTimelineStep ?? String(governance.lastConflictTick);
+        return governance.lastConflictTick >= 0 && compareSimulationSteps(currentStep, conflictStep) >= 0
+          && simulationStepDistance(currentStep, conflictStep) < 12;
+      });
+      if (recentConflict) continue;
       const leftFood = foodSecurityForOrganization(state, left, foodIndex);
       const rightFood = foodSecurityForOrganization(state, right, foodIndex);
       const scarcity = 1 - Math.min(leftFood, rightFood);
       const culturalLink = culturalLinkFor(state, left, right);
       const probability = Math.min(0.18, ((stance === "rival" ? 0.08 : 0.018) + scarcity * 0.035 + (left.type === right.type ? 0.012 : 0)) * (0.7 + (1 - culturalLink.compatibility) * 0.3));
-      const [roll] = randomFloat(forkRandom(state.random, `war:${left.id}:${right.id}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `war:${left.id}:${right.id}:${currentStep}`));
       if (roll >= probability) continue;
       const leftTechnology = technologyProfileForRegion(state, left.regionId);
       const rightTechnology = technologyProfileForRegion(state, right.regionId);
       const leftPower = militaryPower(state, left);
       const rightPower = militaryPower(state, right);
-      const [battleRoll] = randomFloat(forkRandom(state.random, `battle:${left.id}:${right.id}:${state.tick}`));
+      const [battleRoll] = randomFloat(forkRandom(state.random, `battle:${left.id}:${right.id}:${currentStep}`));
       const leftWinChance = clamp(0.5 + (leftPower - rightPower) / Math.max(1, leftPower + rightPower) * 0.7, 0.2, 0.8);
       const winner = battleRoll < leftWinChance ? left : right;
       const loser = winner.id === left.id ? right : left;
@@ -380,12 +386,12 @@ const resolveInterregionalWars = (state: WorldState, delta: WorldDelta, organiza
       const intensity = clamp(0.35 + Math.abs(winnerPower - loserPower) / Math.max(1, winnerPower + loserPower) * 0.65, 0.35, 1);
       const casualtyCount = Math.max(1, Math.min(4, Math.ceil(Math.min(left.memberIds.length, right.memberIds.length) * (0.02 + intensity * 0.035))));
       const reserved = new Set<EntityId>();
-      const winnerCasualties = new Set(selectAgents(state, winner, Math.max(1, Math.floor(casualtyCount * 0.55)), `winner:${pairKey}:${state.tick}`, reserved, index.agentIds));
+      const winnerCasualties = new Set(selectAgents(state, winner, Math.max(1, Math.floor(casualtyCount * 0.55)), `winner:${pairKey}:${currentStep}`, reserved, index.agentIds));
       for (const id of winnerCasualties) reserved.add(id);
-      const loserCasualties = new Set(selectAgents(state, loser, casualtyCount, `loser:${pairKey}:${state.tick}`, reserved, index.agentIds));
+      const loserCasualties = new Set(selectAgents(state, loser, casualtyCount, `loser:${pairKey}:${currentStep}`, reserved, index.agentIds));
       const casualtyIds = new Set<EntityId>([...winnerCasualties, ...loserCasualties]);
       const displacementCount = Math.min(3, Math.max(0, Math.ceil(loser.memberIds.length * (0.015 + intensity * 0.035))));
-      const displacedIds = new Set(selectAgents(state, loser, displacementCount + casualtyIds.size, `displaced:${pairKey}:${state.tick}`, casualtyIds, index.agentIds)
+      const displacedIds = new Set(selectAgents(state, loser, displacementCount + casualtyIds.size, `displaced:${pairKey}:${currentStep}`, casualtyIds, index.agentIds)
         .filter((id) => !casualtyIds.has(id))
         .slice(0, displacementCount));
       const winnerTerritory = territoryFor(winner);
@@ -410,6 +416,7 @@ const resolveInterregionalWars = (state: WorldState, delta: WorldDelta, organiza
         treasury: clamp(governanceForOrganization(winner).treasury - 0.018),
         warWeariness: clamp(governanceForOrganization(winner).warWeariness + 0.045 + intensity * 0.025),
         lastConflictTick: state.tick,
+        lastConflictTimelineStep: currentStep,
       };
       const loserNextGovernance = {
         ...governanceForOrganization(loser),
@@ -420,6 +427,7 @@ const resolveInterregionalWars = (state: WorldState, delta: WorldDelta, organiza
         publicGoods: clamp(governanceForOrganization(loser).publicGoods - 0.04 - intensity * 0.04),
         warWeariness: clamp(governanceForOrganization(loser).warWeariness + 0.1 + intensity * 0.08),
         lastConflictTick: state.tick,
+        lastConflictTimelineStep: currentStep,
       };
       const winnerUpdate = organizationAfterWar(
         winner,
@@ -445,7 +453,7 @@ const resolveInterregionalWars = (state: WorldState, delta: WorldDelta, organiza
       }
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: winner.id, value: winnerUpdate });
       delta.entityEffects.push({ collection: "organizations", operation: "update", id: loser.id, value: loserUpdate });
-      const conflict = applyOrganizationConflict(left, right, state.tick);
+      const conflict = applyOrganizationConflict(left, right, state.tick, simulationStepForWorld(state));
       for (const effect of conflict.relationshipEffects) {
         if (!casualtyIds.has(effect.relationship.fromId) && !casualtyIds.has(effect.relationship.toId)) delta.relationshipEffects.push(effect);
       }

@@ -2,10 +2,14 @@ import { expect, test } from "@playwright/test";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
+import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
 import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
+import { archiveOrganizationRecords } from "../../src/sim/society/archive.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import { serializeWorld } from "../../src/persistence/serialize.ts";
+import { derivePathogen } from "../../src/sim/health/disease.ts";
+import type { ArchivedSpeciesSummary } from "../../src/sim/types.ts";
 
 test("renders a non-empty world map and interactive observation panels", async ({ page }) => {
   await page.goto("/");
@@ -22,6 +26,10 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#status-panel")).toContainText("食物单位");
   await expect(page.locator("#status-panel")).toContainText("运行监测");
   await expect(page.locator("#status-panel")).toContainText("历史归档");
+  await expect(page.locator("#status-panel")).toContainText("长期历史");
+  await expect(page.locator("#status-panel")).toContainText("等待首个年度采样");
+  await expect(page.locator("#status-panel")).toContainText("轨道与季节");
+  await expect(page.locator("#status-panel")).toContainText("当前季节");
   const canvas = page.locator("#world-map");
   await expect(canvas).toBeVisible();
   await expect(canvas).toHaveAttribute("data-render-style", "fantasy-3d");
@@ -136,6 +144,7 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   await expect(page.locator("#simulation-status")).toHaveAttribute("data-state", "paused");
   await page.locator("#world-map").click({ position: { x: 120, y: 100 } });
   await expect(page.locator("#inspector")).toContainText("region:");
+  await expect(page.locator("#inspector")).toContainText("当前季节");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
@@ -145,6 +154,143 @@ test("keeps the map and panels usable on a narrow viewport", async ({ page }) =>
   expect(observationOverflow).toBe(false);
   const worldviewOverflow = await page.locator(".worldview-list li").evaluateAll((elements) => elements.some((element) => element.scrollWidth > element.clientWidth + 1));
   expect(worldviewOverflow).toBe(false);
+});
+
+test("renders bounded long-term world history from a saved world", async ({ page }) => {
+  const state = createWorld(42_424, { width: 32, height: 16, formation: "formed" });
+  state.eventArchive.historySamples = [{
+    tick: 365,
+    years: 1,
+    timelineStep: "365",
+    timelineDays: "365",
+    meanTemperature: 0.42,
+    oceanCoverage: 0.3,
+    biomass: 0.02,
+    oxygen: 0.01,
+    organics: 0.03,
+    populationCount: 8,
+    speciesCount: 1,
+    organizationCount: 0,
+    facilityCount: 0,
+    knowledgeCount: 0,
+    foodSecurity: 0.5,
+    diseasePrevalence: 0,
+  }, {
+    tick: 10_950,
+    years: 30,
+    timelineStep: "10950",
+    timelineDays: "10950",
+    meanTemperature: 0.58,
+    oceanCoverage: 0.55,
+    biomass: 0.4,
+    oxygen: 0.12,
+    organics: 0.19,
+    populationCount: 2_400,
+    speciesCount: 7,
+    organizationCount: 5,
+    facilityCount: 9,
+    knowledgeCount: 14,
+    foodSecurity: 0.78,
+    diseasePrevalence: 0.06,
+  }];
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "long-history-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+
+  const history = page.getByRole("region", { name: "长期历史" });
+  await expect(history).toContainText("2 个有界年度采样");
+  await expect(history).toContainText("观测跨度");
+  await expect(history).toContainText("最新 30 年 0 天");
+  await expect(history.locator(".history-trend")).toHaveCount(5);
+  await page.screenshot({ path: "test-results/long-term-history.png", fullPage: true });
+});
+
+test("loads and inspects an archived extinct species history", async ({ page }) => {
+  const state = createWorld(42_425, { width: 32, height: 16, formation: "formed" });
+  const regionId = "region:12:8" as never;
+  const parent = createSpecies("archive-parent", "producer", undefined, {
+    regionId,
+    tick: 8,
+    years: 8 / 365,
+    timelineStep: "8",
+  });
+  const extinct = createSpecies("archive-child", "consumer", parent.id, {
+    regionId,
+    tick: 16,
+    years: 16 / 365,
+    timelineStep: "16",
+  });
+  const archived: ArchivedSpeciesSummary = {
+    id: extinct.id,
+    name: extinct.name!,
+    role: extinct.role,
+    traits: { ...extinct.traits },
+    parentId: parent.id,
+    originRegionId: regionId,
+    originTick: 16,
+    originTimelineStep: "16",
+    originYears: 16 / 365,
+    blueprint: speciesBlueprintFor(extinct),
+    lastKnownPopulation: 23,
+    lastKnownRegionIds: [regionId],
+    archivedTick: 48,
+    archivedTimelineStep: "48",
+    archivedTimelineDays: "48",
+    archivedYears: 48 / 365,
+  };
+  state.species = [parent];
+  state.populations = [];
+  state.eventArchive.archivedSpeciesCount = 1;
+  state.eventArchive.archivedSpeciesRoleCounts = { consumer: 1 };
+  state.eventArchive.archivedSpeciesSummaries = [archived];
+  state.observation = { focusRegionId: regionId };
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "archived-species-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+
+  await expect(page.locator("#inspector")).toContainText(regionId);
+  await page.locator("[data-detail-level=species]").click();
+  await page.locator("[data-detail-target]").selectOption(extinct.id);
+  const detail = page.getByRole("region", { name: "层级详情" });
+  await expect(detail).toContainText("已灭绝 · 历史摘要");
+  await expect(detail).toContainText("最后记录数量");
+  await expect(detail).toContainText("23 个体");
+  await expect(detail).toContainText("演化谱系");
+  await expect(detail).toContainText("原创生命蓝图");
+  await expect(detail).toContainText("创新签名");
+});
+
+test("loads and inspects an archived organization history", async ({ page }) => {
+  const state = createWorld(42_426, { width: 32, height: 16, formation: "formed" });
+  const regionId = "region:12:8" as never;
+  const organization = createOrganization("city", regionId, ["agent:one", "agent:two"]);
+  organization.status = "collapsed";
+  organization.resources = { food: 8, energy: 2 };
+  archiveOrganizationRecords(state, [organization], "lifecycle");
+  state.observation = { focusRegionId: regionId };
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "archived-organization-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+
+  await expect(page.locator("#inspector")).toContainText(regionId);
+  await page.locator("[data-detail-level=city]").click();
+  await page.locator("[data-detail-target]").selectOption(organization.id);
+  const detail = page.locator("#inspector .detail-report");
+  await expect(detail).toContainText(organization.id);
+  await expect(detail.locator(".organization-archive")).toBeVisible();
+  await expect(detail).toContainText("8");
 });
 
 test("renders a formed crust as a global map with expandable local detail", async ({ page }) => {
@@ -205,6 +351,80 @@ test("renders a formed crust as a global map with expandable local detail", asyn
   await expect(canvas).toHaveAttribute("data-visible-region-span", "1.50x0.75");
   await expect(page.locator("#zoom-level")).toHaveText("6400%");
   await expect(page.locator("#map-scale-level")).toHaveText("个人观察");
+});
+
+test("renders global civilization routes and separates them from personal links", async ({ page }) => {
+  const state = createWorld(90_212, { width: 64, height: 40, formation: "formed" });
+  const firstRegion = "region:14:20" as never;
+  const secondRegion = "region:46:20" as never;
+  const thirdRegion = "region:31:8" as never;
+  const first = createOrganization("city", firstRegion, []);
+  const second = createOrganization("state", secondRegion, []);
+  const third = createOrganization("federation", thirdRegion, []);
+  first.diplomacy = { [second.id]: "trade", [third.id]: "rival" };
+  second.diplomacy = { [first.id]: "trade", [third.id]: "allied" };
+  third.diplomacy = { [first.id]: "rival", [second.id]: "allied" };
+  state.organizations = [first, second, third];
+  state.events = [{
+    id: "event:e2e-migration-route",
+    tick: 8,
+    years: 8 / 365,
+    kind: "population-migration",
+    ruleId: "ecology:local-migration",
+    source: "natural",
+    sourceIds: ["population:e2e-route"],
+    probability: 0.5,
+    roll: 0.2,
+    evidence: { fromRegion: firstRegion, toRegion: thirdRegion, mobility: 0.8 },
+    payload: { populationId: "population:e2e-route", fromRegion: firstRegion, toRegion: thirdRegion },
+  }];
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "strategic-routes.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+  const canvas = page.locator("#world-map");
+  await expect(canvas).toHaveAttribute("data-surface-mode", "planet-globe");
+  await expect(canvas).toHaveAttribute("data-strategic-link-count", "4");
+  await expect(canvas).toHaveAttribute("data-visible-strategic-link-count", "4");
+  await expect(canvas).toHaveAttribute("data-personal-link-count", "0");
+  await expect(canvas).toHaveAttribute("data-route-yaw", "-18");
+  const routeLegend = page.getByRole("region", { name: "文明活动路线" });
+  await expect(routeLegend).toBeVisible();
+  for (const label of ["贸易", "联盟", "迁徙", "战争"]) await expect(routeLegend).toContainText(label);
+  await canvas.screenshot({ path: "test-results/strategic-routes-global.png" });
+  const globeBox = await canvas.boundingBox();
+  if (!globeBox) throw new Error("Strategic globe is not measurable");
+  await page.mouse.move(globeBox.x + globeBox.width / 2, globeBox.y + globeBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(globeBox.x + globeBox.width / 2 + 50, globeBox.y + globeBox.height / 2 + 12);
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute("data-route-yaw", "-18");
+  expect(await canvas.getAttribute("data-route-yaw")).toBe(await canvas.getAttribute("data-globe-yaw"));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(routeLegend).toBeVisible();
+  const mobileLayout = await page.locator(".map-workspace").evaluate((workspace) => {
+    const legend = workspace.querySelector<HTMLElement>(".route-legend")?.getBoundingClientRect();
+    const tools = workspace.querySelector<HTMLElement>(".map-tools")?.getBoundingClientRect();
+    return {
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      overlap: Boolean(legend && tools && legend.left < tools.right && legend.right > tools.left && legend.top < tools.bottom && legend.bottom > tools.top),
+    };
+  });
+  expect(mobileLayout).toEqual({ overflow: 0, overlap: false });
+  await canvas.screenshot({ path: "test-results/strategic-routes-mobile.png" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await page.getByRole("button", { name: "放大地图" }).click();
+  await page.getByRole("button", { name: "放大地图" }).click();
+  await expect(canvas).toHaveAttribute("data-scene-lod", "continent");
+  await expect(canvas).toHaveAttribute("data-visible-strategic-link-count", "4");
+  for (let click = 0; click < 20; click += 1) await page.getByRole("button", { name: "放大地图" }).click();
+  await expect(canvas).toHaveAttribute("data-scene-lod", "individual");
+  await expect(canvas).toHaveAttribute("data-visible-strategic-link-count", "0");
+  await expect(routeLegend).toBeHidden();
 });
 
 test("rotates and tilts the constrained 2.5d camera", async ({ page }) => {
@@ -295,6 +515,9 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
     parentIds: ["substance:e2e-crystal"],
     composition: { carbon: 0.3, nitrogen: 0.1, phosphorus: 0.2, organics: 0.2, oxygen: 0.2 },
     properties: { hardness: 0.9, density: 0.72, reactivity: 0.12, conductivity: 0.88, energyPotential: 0.82, biologicalAffinity: 0.3, stability: 0.94 },
+    reserveCapacity: 0,
+    remainingReserve: 0,
+    extractedTotal: 0,
     discoveredByIds: agents.slice(0, 3).map((agent) => agent.id),
     discoveryTick: 14,
     discoveryYears: 14 / 365,
@@ -310,9 +533,49 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
     parentIds: [],
     composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.3, organics: 0.1, oxygen: 0.2 },
     properties: { hardness: 0.8, density: 0.64, reactivity: 0.2, conductivity: 0.68, energyPotential: 0.62, biologicalAffinity: 0.24, stability: 0.86 },
+    reserveCapacity: 240,
+    remainingReserve: 180,
+    extractedTotal: 60,
     discoveredByIds: agents.slice(0, 2).map((agent) => agent.id),
     discoveryTick: 7,
     discoveryYears: 7 / 365,
+  }];
+  const pathogen = {
+    ...derivePathogen(state, regionId, species.id),
+    name: "雾环疫",
+    status: "outbreak" as const,
+    prevalence: 8 / agents.length,
+    cumulativeCases: 16,
+    cumulativeRecoveries: 7,
+    cumulativeDeaths: 1,
+  };
+  state.pathogens = [pathogen];
+  for (const agent of agents.slice(0, 8)) {
+    agent.health = { vitality: 0.72, infections: [{ pathogenId: pathogen.id, infectedTick: 9, severity: 0.4 }], immunityIds: [] };
+  }
+  state.events = [{
+    id: "event:e2e-object-history",
+    tick: 16,
+    timelineStep: "16",
+    timelineDays: "9007199254740993",
+    years: 16 / 365,
+    kind: "culture-evolution",
+    ruleId: "test:object-history",
+    source: "natural",
+    sourceIds: [agents[0]!.id],
+    probability: 1,
+    roll: 0,
+    evidence: { regionId, result: "adapted" },
+    payload: {
+      regionId,
+      cultureId: "culture:e2e",
+      speciesId: species.id,
+      populationId: population.id,
+      pathogenId: pathogen.id,
+      entityId: "worldview:e2e-sect",
+      name: "风弦文化完成一次适应",
+      result: "adapted",
+    },
   }];
   state.observation = { focusRegionId: regionId };
 
@@ -333,37 +596,65 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await expect(page.locator("#legend-high")).toHaveText("富集");
   await expect(page.locator("#status-panel")).toContainText("原创物质");
   await expect(page.locator("#status-panel")).toContainText("原创文化");
+  await expect(page.locator("#status-panel")).toContainText("原创病原体");
+  await page.locator('[data-layer="health"]').click();
+  await expect(page.locator('[data-layer="health"]')).toHaveClass(/active/);
+  await expect(page.locator("#legend-low")).toHaveText("无传播");
+  await expect(page.locator("#legend-high")).toHaveText("高流行");
+  await page.screenshot({ path: "test-results/public-health-layer.png", fullPage: true });
   await page.locator('[data-layer="culture"]').click();
   await expect(page.locator('[data-layer="culture"]')).toHaveClass(/active/);
   await expect(page.locator("#legend-low")).toHaveText("未形成");
   await expect(page.locator("#legend-high")).toHaveText("文化特征强");
   await page.locator("[data-detail-level=culture]").click();
   await page.locator("[data-detail-target]").selectOption("culture:e2e");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("文化报告");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("文化价值");
+  const detail = page.getByRole("region", { name: "层级详情" });
+  await expect(detail).toContainText("文化报告");
+  await expect(detail).toContainText("文化价值");
+  await expect(detail.locator('[data-history-level="culture"]')).toContainText("对象演化时间轴");
   await page.locator("[data-detail-level=substance]").click();
   await page.locator("[data-detail-target]").selectOption("substance:e2e-composite");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("物质报告");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("辉棱复晶");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("澜脉晶");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("导电性");
+  await expect(detail).toContainText("物质报告");
+  await expect(detail).toContainText("辉棱复晶");
+  await expect(detail).toContainText("澜脉晶");
+  await expect(detail).toContainText("导电性");
+  await expect(detail.locator('[data-history-level="substance"]')).toHaveCount(1);
+  await page.locator("[data-detail-level=pathogen]").click();
+  await page.locator("[data-detail-target]").selectOption(pathogen.id);
+  await expect(detail).toContainText("病原体报告");
+  await expect(detail).toContainText("雾环疫");
+  await expect(detail).toContainText("累计病例");
+  await expect(detail.locator('[data-history-level="pathogen"]')).toHaveCount(1);
+  await page.locator("[data-detail-level=agent]").click();
+  await page.locator("[data-detail-target]").selectOption({ index: 1 });
+  await expect(detail).toContainText("个人健康");
+  await expect(detail).toContainText("活动感染");
+  await expect(detail).toContainText("遗传与适应");
+  await expect(detail).toContainText("当地适应度");
+  await expect(detail).toContainText("抗病性");
+  await expect(detail.locator('[data-history-level="agent"]')).toHaveCount(1);
+  await page.getByRole("region", { name: "个体遗传" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/personal-genetics.png", fullPage: true });
   await page.locator("[data-detail-level=species]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("物种报告");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("认知潜力");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("遗传载体");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("代谢方式");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("身体结构");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("感官系统");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("创新签名");
+  await expect(detail).toContainText("物种报告");
+  await expect(detail).toContainText("认知潜力");
+  await expect(detail).toContainText("遗传载体");
+  await expect(detail).toContainText("代谢方式");
+  await expect(detail).toContainText("身体结构");
+  await expect(detail).toContainText("感官系统");
+  await expect(detail).toContainText("创新签名");
+  await expect(detail.locator('[data-history-level="species"]')).toHaveCount(1);
   await page.locator("[data-detail-level=population]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("种群报告");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("能量状态");
+  await expect(detail).toContainText("种群报告");
+  await expect(detail).toContainText("能量状态");
+  await expect(detail.locator('[data-history-level="population"]')).toHaveCount(1);
   await page.locator("[data-detail-level=worldview]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("流派报告");
-  await expect(page.getByRole("region", { name: "层级详情" })).toContainText("风弦观测院");
+  await expect(detail).toContainText("流派报告");
+  await expect(detail).toContainText("风弦观测院");
+  await expect(detail.locator('[data-history-level="worldview"]')).toHaveCount(1);
   await page.locator("#render-quality").selectOption("1080");
   await expect(canvas).toHaveAttribute("data-terrain-detail", "2");
   for (let click = 0; click < 22; click += 1) await page.getByRole("button", { name: "\u653e\u5927\u5730\u56fe" }).click();
@@ -440,4 +731,39 @@ test("renders local technology facilities and their observable effects", async (
   await expect(page.locator("#inspector")).toContainText("岗位效率");
   await expect(page.locator("#inspector")).toContainText("运行贡献");
   await page.screenshot({ path: "test-results/technology-facilities.png", fullPage: true });
+});
+
+test("navigates from a city report to its state and family reports", async ({ page }) => {
+  const state = createWorld(90_213, { width: 64, height: 40, formation: "formed" });
+  const regionId = "region:32:20" as never;
+  const species = createSpecies("navigation-life", "consumer");
+  const population = { id: "population:navigation-life" as never, speciesId: species.id, regionId, count: 4, energy: 1 };
+  const agents = Array.from({ length: 4 }, (_, index) => createAgent(population, species, index, "navigation-life"));
+  const family = createOrganization("family", regionId, agents.slice(0, 2).map((agent) => agent.id));
+  const city = createOrganization("city", regionId, agents.map((agent) => agent.id), [family.id]);
+  const nation = createOrganization("state", regionId, agents.map((agent) => agent.id), [city.id]);
+  state.species = [species];
+  state.populations = [population];
+  state.agents = agents;
+  state.organizations = [family, city, nation];
+  state.observation = { focusRegionId: regionId };
+
+  await page.goto("/");
+  await page.locator("#load-input").setInputFiles({
+    name: "organization-navigation.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(state)),
+  });
+  await page.locator("[data-detail-level=city]").click();
+  await page.locator("[data-detail-target]").selectOption(city.id);
+  const inspector = page.getByRole("region", { name: "层级详情" });
+  await expect(inspector).toContainText("城市报告");
+  await inspector.locator(`[data-detail-link][data-detail-level=state][data-detail-id="${nation.id}"]`).click();
+  await expect(inspector).toContainText("国家报告");
+  await inspector.locator(`[data-detail-link][data-detail-level=city][data-detail-id="${city.id}"]`).click();
+  await expect(inspector).toContainText("城市报告");
+  await inspector.locator(`[data-detail-link][data-detail-level=family][data-detail-id="${family.id}"]`).click();
+  await expect(inspector).toContainText("家庭报告");
+  await inspector.locator(`[data-detail-link][data-detail-level=agent]`).first().click();
+  await expect(inspector).toContainText("个人报告");
 });

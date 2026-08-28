@@ -9,17 +9,16 @@ const total = (values: Float32Array): number => {
 };
 
 const rebalance = (values: Float32Array, targetTotal: number): Float32Array => {
-  const result = new Float32Array(values);
-  const currentTotal = total(result);
+  const currentTotal = total(values);
   if (currentTotal <= 0 || targetTotal <= 0) {
-    result.fill(targetTotal <= 0 ? 0 : targetTotal / Math.max(1, result.length));
-    return result;
+    values.fill(targetTotal <= 0 ? 0 : targetTotal / Math.max(1, values.length));
+    return values;
   }
   const scale = targetTotal / currentTotal;
-  for (let index = 0; index < result.length; index += 1) {
-    result[index] = clamp01((result[index] ?? 0) * scale);
+  for (let index = 0; index < values.length; index += 1) {
+    values[index] = clamp01((values[index] ?? 0) * scale);
   }
-  return result;
+  return values;
 };
 
 export const totalWater = (grid: Grid): number => total(grid.values);
@@ -47,14 +46,23 @@ export const simulateWater = (
     const waterValue = water.values[index] ?? 0;
     const humidityValue = humidity.values[index] ?? 0;
     const elevationValue = elevation.values[index] ?? 0;
-    const neighborIndices = [
-      y > 0 ? index - water.width : index,
-      y + 1 < water.height ? index + water.width : index,
-      y * water.width + (x + water.width - 1) % water.width,
-      y * water.width + (x + 1) % water.width,
-    ];
-    const neighborWater = neighborIndices.reduce((sum, neighbor) => sum + (water.values[neighbor] ?? waterValue), 0) / neighborIndices.length;
-    const neighborElevation = neighborIndices.reduce((sum, neighbor) => sum + (elevation.values[neighbor] ?? elevationValue), 0) / neighborIndices.length;
+    const rowStart = y * water.width;
+    const north = y > 0 ? index - water.width : index;
+    const south = y + 1 < water.height ? index + water.width : index;
+    const west = rowStart + (x + water.width - 1) % water.width;
+    const east = rowStart + (x + 1) % water.width;
+    const neighborWater = (
+      (water.values[north] ?? waterValue)
+      + (water.values[south] ?? waterValue)
+      + (water.values[west] ?? waterValue)
+      + (water.values[east] ?? waterValue)
+    ) / 4;
+    const neighborElevation = (
+      (elevation.values[north] ?? elevationValue)
+      + (elevation.values[south] ?? elevationValue)
+      + (elevation.values[west] ?? elevationValue)
+      + (elevation.values[east] ?? elevationValue)
+    ) / 4;
     const evaporation = waterValue * (0.012 + (1 - humidityValue) * 0.012);
     const rain = humidityValue * (0.018 + (1 - elevationValue) * 0.012);
     const diffusion = (neighborWater - waterValue) * 0.045;

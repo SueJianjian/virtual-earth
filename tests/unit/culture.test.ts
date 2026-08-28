@@ -39,6 +39,47 @@ describe("knowledge and culture", () => {
     expect(next.cultures[0]?.beliefIds).toEqual([]);
   });
 
+  it("indexes projected member skills once without retaining stale knowledge kinds", () => {
+    const world = createWorld(310, { width: 8, height: 8 });
+    const species = createSpecies("projected-mind", "consumer");
+    const population: PopulationState = {
+      id: "population:projected-mind" as PopulationState["id"],
+      speciesId: species.id,
+      regionId: "region:1:1" as PopulationState["regionId"],
+      count: 10,
+      energy: 1,
+    };
+    const first = createAgent(population, species, 0, "projected-culture");
+    const second = createAgent(population, species, 1, "projected-culture");
+    first.skills = { observation: 0.8, communication: 0.1, toolUse: 0.1 };
+    second.skills = { observation: 0.1, communication: 0.8, toolUse: 0.1 };
+    world.agents = [first, second];
+
+    const firstDelta = stepCulture(world, emptyDelta());
+    const firstKnowledge = firstDelta.entityEffects
+      .filter((effect) => effect.collection === "knowledge" && effect.operation === "create")
+      .map((effect) => effect.value)
+      .filter((knowledge): knowledge is NonNullable<typeof knowledge> => Boolean(knowledge));
+    expect(firstKnowledge).toEqual([
+      createKnowledge(population.regionId, "practice:communication", [second]),
+      createKnowledge(population.regionId, "practice:observation", [first]),
+    ]);
+
+    const updatedFirst = { ...first, skills: { observation: 0.1, communication: 0.1, toolUse: 0.9 } };
+    const projected = stepCulture(world, {
+      ...emptyDelta(),
+      entityEffects: [{ collection: "agents", operation: "update", id: first.id, value: updatedFirst }],
+    });
+    const projectedKnowledge = projected.entityEffects
+      .filter((effect) => effect.collection === "knowledge" && effect.operation === "create")
+      .map((effect) => effect.value)
+      .filter((knowledge): knowledge is NonNullable<typeof knowledge> => Boolean(knowledge));
+    expect(projectedKnowledge).toEqual([
+      createKnowledge(population.regionId, "practice:communication", [second]),
+      createKnowledge(population.regionId, "practice:toolUse", [updatedFirst]),
+    ]);
+  });
+
   it("creates traceable local innovations from conditions rather than a fixed year", () => {
     const world = createWorld(311, { width: 8, height: 8, formation: "formed" });
     const species = createSpecies("innovator", "consumer");

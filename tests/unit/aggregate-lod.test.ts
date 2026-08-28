@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deserializeWorld, serializeWorld } from "../../src/persistence/serialize.ts";
-import { refreshAggregateSummaryWithEvents, stepLod, summarizeRegionState } from "../../src/sim/lod/index.ts";
+import { createRegionSummaryIndex, refreshAggregateSummaryWithEvents, stepLod, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import type { RegionId, WorldDelta, WorldState } from "../../src/sim/types.ts";
@@ -91,6 +91,47 @@ describe("aggregate region evolution", () => {
     const right = refreshAt(state, initial, 42);
 
     expect(right).toEqual(left);
+  });
+
+  it("keeps indexed aggregate events identical after detailed organizations are removed", () => {
+    const state = aggregateWorld();
+    const initial = summarizeRegionState(state, region, "aggregate");
+    initial.organizations = [{
+      id: "organization:archived-city" as never,
+      type: "city",
+      memberCount: 0,
+      memberIds: [],
+      childIds: [],
+      resourceIds: [],
+      historyIds: [],
+      archivedHistoryCount: 0,
+      territoryRegionIds: [region],
+    }];
+    state.lod.summaries = [initial];
+    state.events = [{
+      id: "event:archived-city-trade",
+      tick: state.tick,
+      kind: "organization-trade",
+      ruleId: "society:trade",
+      source: "natural",
+      sourceIds: [initial.organizations[0]!.id],
+      probability: 1,
+      roll: 0,
+      evidence: { amount: 7 },
+      payload: { amount: 7 },
+    }];
+
+    const direct = refreshAggregateSummaryWithEvents(state, initial, state.populations);
+    const indexed = refreshAggregateSummaryWithEvents(
+      state,
+      initial,
+      state.populations,
+      createRegionSummaryIndex(state, new Set([region])),
+      new Map([[region, state.populations]]),
+    );
+
+    expect(indexed).toEqual(direct);
+    expect(indexed.summary.historyIds).toContain("event:archived-city-trade");
   });
 
   it("keeps aggregate records bounded and restorable after sustained refreshes", () => {

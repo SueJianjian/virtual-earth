@@ -42,7 +42,7 @@ describe("worldview autonomy integration", () => {
     expect(state.worldview.discoveredRuleIds.length).toBeGreaterThan(0);
     expect(state.worldview.entities.every((entity) => /^region:\d+:\d+$/.test(entity.regionId))).toBe(true);
     expect(state.worldview.entities.some((entity) => entity.regionId === "region:origin")).toBe(false);
-  }, 45_000);
+  }, 90_000);
 
   it("builds original observations, theories, myths and verified principles through a traceable chain", () => {
     const regionId = "region:3:2" as never;

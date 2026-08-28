@@ -65,8 +65,16 @@ export const applyChemistryPatches = (
   patches: readonly ChemistryPatch[],
 ): WorldState["chemistry"] => {
   const next = structuredClone(state.chemistry);
+  applyChemistryPatchesInPlace(next, patches);
+  return next;
+};
+
+const applyChemistryPatchesInPlace = (
+  chemistry: WorldState["chemistry"],
+  patches: readonly ChemistryPatch[],
+): void => {
   for (const patch of patches) {
-    const values = next[patch.field].values;
+    const values = chemistry[patch.field].values;
     if (patch.operation === "set") {
       values.set(patch.values);
       continue;
@@ -75,7 +83,6 @@ export const applyChemistryPatches = (
       values[index] = clamp01((values[index] ?? 0) + (patch.values[index] ?? 0));
     }
   }
-  return next;
 };
 
 export const applyChemistryChanges = (
@@ -83,11 +90,29 @@ export const applyChemistryChanges = (
   changes: ChemistryChange[],
 ): WorldState["chemistry"] => {
   const next = structuredClone(state.chemistry);
+  applyChemistryChangesInPlace(next, changes);
+  return next;
+};
+
+const applyChemistryChangesInPlace = (
+  chemistry: WorldState["chemistry"],
+  changes: readonly ChemistryChange[],
+): void => {
   for (const change of changes) {
-    const values = next[change.field].values;
+    const values = chemistry[change.field].values;
     const current = values[change.index] ?? 0;
     const value = change.operation === "add" ? current + change.value : change.value;
     values[change.index] = clamp01(value);
   }
+};
+
+export const projectChemistry = (
+  state: WorldState,
+  patches: readonly ChemistryPatch[],
+  changes: readonly ChemistryChange[],
+): WorldState["chemistry"] => {
+  const next = structuredClone(state.chemistry);
+  applyChemistryPatchesInPlace(next, patches);
+  applyChemistryChangesInPlace(next, changes);
   return next;
 };

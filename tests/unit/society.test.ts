@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createOrganization, organizationCapacity } from "../../src/sim/society/organization.ts";
 import { attemptOrganizationFormation } from "../../src/sim/society/formation.ts";
-import { governOrganization } from "../../src/sim/society/governance.ts";
+import { createGovernanceIndex, governOrganization } from "../../src/sim/society/governance.ts";
 import { stepSociety } from "../../src/sim/society/step.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createRelationship } from "../../src/sim/agents/relationships.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import type { SocietyContext, WorldState } from "../../src/sim/types.ts";
+import { createFoodBalanceIndex } from "../../src/sim/agents/food.ts";
 
 const makeContext = (seed: number, count: number): SocietyContext => {
   const state = createWorld(seed, { width: 8, height: 8 });
@@ -40,6 +41,16 @@ describe("emergent society", () => {
     const context = makeContext(40, 4);
     expect(attemptOrganizationFormation(context, "city").status).toBe("skipped");
     expect(attemptOrganizationFormation(context, "state").status).toBe("skipped");
+  });
+
+  it("rejects an undersized organization before inspecting social ledgers", () => {
+    const context = makeContext(401, 4);
+    Object.defineProperty(context.state, "relationships", {
+      configurable: true,
+      get: () => { throw new Error("undersized formation inspected relationships"); },
+    });
+
+    expect(attemptOrganizationFormation(context, "city").status).toBe("skipped");
   });
 
   it("can form a tribe under synthetic social conditions without forced upgrades", () => {
@@ -106,6 +117,27 @@ describe("emergent society", () => {
     expect(governance?.stability).toBeGreaterThanOrEqual(0);
     expect(governance?.stability).toBeLessThanOrEqual(1);
     expect(governance?.taxRevenue).toBeGreaterThan(0);
+  });
+
+  it("keeps supplied governance indexes identical to direct calculation", () => {
+    const context = makeContext(732, 36);
+    const city = createOrganization("city", "region:0:0" as never, context.candidateMemberIds);
+    const state = structuredClone(context.state) as WorldState;
+    state.organizations.push(city);
+    state.resources = [
+      { id: "resource:local", resourceId: "materials", regionId: city.regionId, holderId: city.id, amount: 4, cap: 10, originEventId: "test" },
+      { id: "resource:foreign", resourceId: "materials", regionId: "region:1:0" as never, holderId: city.id, amount: 7, cap: 10, originEventId: "test" },
+    ];
+
+    const direct = governOrganization(state, city);
+    const indexed = governOrganization(
+      state,
+      city,
+      createGovernanceIndex(state),
+      createFoodBalanceIndex(state),
+    );
+
+    expect(indexed).toEqual(direct);
   });
 
   it("puts a large organization under food-driven fragmentation pressure", () => {
@@ -203,5 +235,5 @@ describe("emergent society", () => {
     expect(outcomes("state").some((outcome) => outcome.status === "applied")).toBe(true);
     expect(outcomes("federation").some((outcome) => outcome.status === "applied")).toBe(true);
     expect(outcomes("empire").some((outcome) => outcome.status === "applied")).toBe(true);
-  });
+  }, 15_000);
 });

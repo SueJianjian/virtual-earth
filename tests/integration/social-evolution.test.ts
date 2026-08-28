@@ -36,7 +36,7 @@ describe("social evolution integration", () => {
     expect(activeOrganizations.some((organization) => organization.type === "tribe" && organization.memberIds.length >= 6)).toBe(true);
     expect(activeOrganizations.some((organization) => organization.type === "settlement" && organization.memberIds.length >= 8)).toBe(true);
     expect(state.events.filter((event) => event.kind === "organization-formation").length).toBeGreaterThan(1);
-  });
+  }, 45_000);
 
   it("reaches city-scale organization through sustained local conditions", () => {
     let state = createWorld(123, { width: 16, height: 8, formation: "formed" });

@@ -112,6 +112,7 @@ export const attemptOrganizationFormation = (
   context: SocietyContext,
   type: OrganizationType,
 ): RuleOutcome<OrganizationState> => {
+  if (context.candidateMemberIds.length < minimumMembersFor(type)) return { status: "skipped", delta: emptyDelta() };
   const eligibility = eligibilityFor(context, type);
   if (!eligibility.eligible) return { status: "skipped", delta: emptyDelta() };
   const sortedMembers = [...context.candidateMemberIds].sort();

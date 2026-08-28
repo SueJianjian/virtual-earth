@@ -3,6 +3,48 @@ export type OrganizationId = string & { readonly __organizationId: unique symbol
 export type RegionId = string & { readonly __regionId: unique symbol };
 
 export type RandomState = { value: number };
+/** Exact, JSON-safe world clock. Number fields remain as compatibility projections. */
+export type SimulationTimeline = {
+  step: string;
+  days: string;
+};
+export type PlanetSeason = "spring" | "summer" | "autumn" | "winter";
+export type OrbitalState = {
+  orbitalPeriodDays: number;
+  axialTiltDegrees: number;
+  eccentricity: number;
+  periapsisPhase: number;
+  baseSolarFlux: number;
+  rotationPeriodHours: number;
+  orbitalPhase: number;
+  seasonalPhase: number;
+  solarFlux: number;
+  season: PlanetSeason;
+};
+export type ClimateYearSummary = {
+  timelineStep: string;
+  timelineDays: string;
+  sampleDays: number;
+  meanTemperature: number;
+  meanHumidity: number;
+  meanWater: number;
+  meanSolarFlux: number;
+  minimumTemperature: number;
+  maximumTemperature: number;
+  seasonalRange: number;
+};
+/** Bounded climate ledger for the current simulated year. */
+export type ClimateCycleState = {
+  timelineDays: string;
+  currentYearDays: number;
+  temperatureTotal: number;
+  humidityTotal: number;
+  waterTotal: number;
+  solarFluxTotal: number;
+  minimumTemperature: number;
+  maximumTemperature: number;
+  lastCompleted?: ClimateYearSummary;
+};
 export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[]; formation?: "dust" | "formed" };
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
@@ -113,13 +155,77 @@ export type SubstanceState = {
   status: SubstanceStatus;
   regionId: RegionId;
   originTick: number;
+  originTimelineStep?: string;
   originYears: number;
   parentIds: string[];
   composition: Record<ChemistryFieldName, number>;
   properties: SubstanceProperties;
+  /** Finite extractable stock for naturally occurring matter. */
+  reserveCapacity: number;
+  remainingReserve: number;
+  extractedTotal: number;
   discoveredByIds: EntityId[];
   discoveryTick?: number;
+  discoveryTimelineStep?: string;
   discoveryYears?: number;
+  depletedTick?: number;
+  depletedTimelineStep?: string;
+};
+
+export type PathogenKind = "virus-like" | "bacterial-colony" | "fungal-spore" | "parasitic-cell";
+export type PathogenStatus = "outbreak" | "endemic" | "dormant";
+export type PathogenRegionalOutbreakState = {
+  regionId: RegionId;
+  status: PathogenStatus;
+  prevalence: number;
+  firstDetectedTick: number;
+  firstDetectedTimelineStep?: string;
+  lastActiveTick: number;
+  lastActiveTimelineStep?: string;
+};
+export type PathogenState = {
+  id: string;
+  name: string;
+  kind: PathogenKind;
+  status: PathogenStatus;
+  regionId: RegionId;
+  hostSpeciesId: EntityId;
+  originTick: number;
+  originTimelineStep?: string;
+  originYears: number;
+  transmission: number;
+  severity: number;
+  persistence: number;
+  prevalence: number;
+  regionalOutbreaks: PathogenRegionalOutbreakState[];
+  cumulativeCases: number;
+  cumulativeRecoveries: number;
+  cumulativeDeaths: number;
+  lastActiveTick: number;
+  lastActiveTimelineStep?: string;
+  noveltySignature: string;
+  parentId?: string;
+};
+
+export type AgentInfectionState = {
+  pathogenId: string;
+  infectedTick: number;
+  infectedTimelineStep?: string;
+  severity: number;
+};
+
+export type AgentHealthState = {
+  vitality: number;
+  infections: AgentInfectionState[];
+  immunityIds: string[];
+};
+
+export type AgentGeneticState = {
+  generation: number;
+  lineageSignature: string;
+  mutationCount: number;
+  inheritanceFidelity: number;
+  parentDivergence: number;
 };
 
 export type RelationshipState = {
@@ -137,12 +243,37 @@ export type RelationshipState = {
     | "student";
   strength: number;
   createdTick: number;
+  createdTimelineStep?: string;
   sourceEventId: string;
 };
 
 export type RelationshipEffect = {
   operation: "create" | "update" | "remove";
   relationship: RelationshipState;
+};
+
+export type EcologicalRelationshipKind = "predation" | "competition" | "mutualism" | "parasitism";
+export type EcologicalRelationshipState = {
+  id: string;
+  kind: EcologicalRelationshipKind;
+  fromSpeciesId: EntityId;
+  toSpeciesId: EntityId;
+  regionId: RegionId;
+  strength: number;
+  firstTick: number;
+  firstTimelineStep?: string;
+  lastTick: number;
+  lastTimelineStep?: string;
+  interactionCount: number;
+  cumulativeImpact: number;
+  lastImpact: number;
+  status: "active" | "dormant";
+  details: Record<string, number | string | boolean>;
+};
+
+export type EcologicalRelationshipEffect = {
+  operation: "create" | "update" | "remove";
+  relationship: EcologicalRelationshipState;
 };
 
 export type EntityEffect =
@@ -195,6 +326,12 @@ export type EntityEffect =
       value?: SubstanceState;
     }
   | {
+      collection: "pathogens";
+      operation: "create" | "update" | "remove";
+      id: string;
+      value?: PathogenState;
+    }
+  | {
       collection: "worldviewEntities";
       operation: "create" | "update" | "remove";
       id: EntityId;
@@ -245,11 +382,13 @@ export type WorldDelta = {
   chemistryPatches?: ChemistryPatch[];
   entityEffects: EntityEffect[];
   relationshipEffects: RelationshipEffect[];
+  ecologicalRelationshipEffects?: EcologicalRelationshipEffect[];
   resourceTransactions: ResourceTransaction[];
   worldviewEffects: WorldviewEffect[];
   eventDrafts: WorldEventDraft[];
   lodEffects?: LodEffect[];
   formationEffect?: PlanetFormationState;
+  climateCycleEffect?: ClimateCycleState;
 };
 
 export type StateMetric =
@@ -317,6 +456,9 @@ export type EnvironmentInput = {
   solarFlux: number;
   externalEvents: WorldEvent[];
   elapsedYears?: number;
+  /** The environment is projected for the clock value committed by this step. */
+  timelineDays?: string;
+  timelineStep?: string;
 };
 export type EnvironmentDelta = WorldDelta;
 export type EcologyDelta = WorldDelta;
@@ -330,6 +472,10 @@ export type WorldviewDelta = Pick<
 export type StepInput = {
   elapsedYears: number;
   externalEvents: WorldEvent[];
+  /** Exact clock day targeted by the step, used by time-dependent stages. */
+  timelineDays?: string;
+  /** Exact step targeted by the world commit. */
+  timelineStep?: string;
 };
 export type StepResult = {
   state: WorldState;
@@ -389,9 +535,12 @@ export type RegionAgentRecord = {
   id: EntityId;
   age: number;
   parentIds: EntityId[];
+  traits?: Record<string, number>;
   skills: Record<string, number>;
   knowledgeIds: string[];
   beliefIds: string[];
+  genetics?: AgentGeneticState;
+  health?: AgentHealthState;
 };
 export type OrganizationSummary = {
   id: OrganizationId;
@@ -403,6 +552,27 @@ export type OrganizationSummary = {
   historyIds: string[];
   archivedHistoryCount?: number;
   territoryRegionIds: RegionId[];
+  governance?: GovernanceState;
+  diplomacy?: Record<string, DiplomaticStance>;
+};
+export type OrganizationArchiveReason = "lifecycle" | "capacity";
+export type ArchivedOrganizationSummary = {
+  id: OrganizationId;
+  type: OrganizationType;
+  regionId: RegionId;
+  memberCount: number;
+  memberIds: EntityId[];
+  childIds: OrganizationId[];
+  resourceIds: string[];
+  resources: Record<string, number>;
+  territoryRegionIds: RegionId[];
+  status: "active" | "migrating" | "fragmenting" | "collapsed";
+  historyCount: number;
+  archiveReason: OrganizationArchiveReason;
+  archivedTick: number;
+  archivedTimelineStep?: string;
+  archivedTimelineDays?: string;
+  archivedYears: number;
   governance?: GovernanceState;
   diplomacy?: Record<string, DiplomaticStance>;
 };
@@ -429,6 +599,7 @@ export type AggregateKnowledgeSummary = {
   forgettingRate: number;
   originRegionId: RegionId;
   originTick: number;
+  originTimelineStep?: string;
   originYears: number;
   parentIds: string[];
 };
@@ -455,9 +626,17 @@ export type RegionSocietySummary = {
   infrastructureLevel: number;
   lastChangeTick: number;
 };
+export type RegionHealthSummary = {
+  activePathogenIds: string[];
+  infectedCount: number;
+  immuneCount: number;
+  prevalence: number;
+  meanVitality: number;
+};
 export type RegionSummary = {
   regionId: RegionId;
   version: number;
+  versionStep?: string;
   mode: RegionMode;
   population: number;
   socialPopulation?: number;
@@ -471,10 +650,13 @@ export type RegionSummary = {
   relationshipCount: number;
   relationshipDigest: string;
   relationshipRecords: RelationshipState[];
+  ecologicalRelationshipCount?: number;
+  ecologicalRelationships?: EcologicalRelationshipState[];
   lineage: RegionLineageSummary;
   familyLineages: FamilyLineageSummary[];
   cultureSummary?: RegionCultureSummary;
   societySummary?: RegionSocietySummary;
+  healthSummary?: RegionHealthSummary;
   foodBalance: number;
   foodPerAgent: number;
   foodSecurity: number;
@@ -488,10 +670,12 @@ export type RegionSummary = {
 export type RegionProjection = {
   regionId: RegionId;
   sourceRevision: number;
+  sourceRevisionStep?: string;
   readOnly: true;
   generatedFromDigest: string;
   agents: AgentState[];
   relationships: RelationshipState[];
+  ecologicalRelationships?: EcologicalRelationshipState[];
   organizations: OrganizationState[];
 };
 export type LodState = {
@@ -547,8 +731,27 @@ export type SpeciesState = {
   parentId?: EntityId;
   originRegionId?: RegionId;
   originTick?: number;
+  originTimelineStep?: string;
   originYears?: number;
   blueprint?: SpeciesBlueprint;
+};
+export type ArchivedSpeciesSummary = {
+  id: EntityId;
+  name?: string;
+  role: SpeciesRole;
+  traits: Record<string, number>;
+  parentId?: EntityId;
+  originRegionId?: RegionId;
+  originTick?: number;
+  originTimelineStep?: string;
+  originYears?: number;
+  blueprint: SpeciesBlueprint;
+  lastKnownPopulation: number;
+  lastKnownRegionIds: RegionId[];
+  archivedTick: number;
+  archivedTimelineStep?: string;
+  archivedTimelineDays?: string;
+  archivedYears: number;
 };
 export type PopulationState = {
   id: EntityId;
@@ -572,6 +775,8 @@ export type AgentState = {
   knowledgeIds: string[];
   beliefIds: string[];
   relationshipIds: string[];
+  genetics?: AgentGeneticState;
+  health?: AgentHealthState;
 };
 export type KnowledgeState = {
   id: string;
@@ -584,6 +789,7 @@ export type KnowledgeState = {
   domain?: KnowledgeDomain;
   originRegionId?: RegionId;
   originTick?: number;
+  originTimelineStep?: string;
   originYears?: number;
   parentIds?: string[];
 };
@@ -606,6 +812,7 @@ export type CultureIdentity = {
   symbol: string;
   originRegionId: RegionId;
   originTick: number;
+  originTimelineStep?: string;
   originYears: number;
   generation: number;
   noveltySignature: string;
@@ -645,11 +852,17 @@ export type FacilityState = {
   workforceEfficiency?: number;
   materialInvested: number;
   plannedTick: number;
+  plannedTimelineStep?: string;
   builtTick: number;
+  builtTimelineStep?: string;
   lastMaintainedTick: number;
+  lastMaintainedTimelineStep?: string;
   lastIncidentTick: number;
+  lastIncidentTimelineStep?: string;
   lastInspectedEventTick?: number;
+  lastInspectedEventTimelineStep?: string;
   abandonedTick?: number;
+  abandonedTimelineStep?: string;
 };
 export type GovernanceState = {
   stability: number;
@@ -662,6 +875,7 @@ export type GovernanceState = {
   taxRevenue: number;
   cohesion: number;
   lastConflictTick: number;
+  lastConflictTimelineStep?: string;
 };
 export type WorldviewEntityKind = "deity" | "sect" | "cultivation-path";
 export type WorldviewEntityStatus = "active" | "dormant";
@@ -674,6 +888,7 @@ export type WorldviewEntityState = {
   influence: number;
   resourceBalances: Record<string, number>;
   originTick?: number;
+  originTimelineStep?: string;
   sourcePhenomenonId?: string;
   founderId?: EntityId;
   memberIds?: EntityId[];
@@ -684,8 +899,11 @@ export type WorldviewEntityState = {
   sponsorCount?: number;
   viability?: number;
   lastStatusChangeTick?: number;
+  lastStatusChangeTimelineStep?: string;
   lastActiveTick?: number;
+  lastActiveTimelineStep?: string;
   dormantSinceTick?: number;
+  dormantSinceTimelineStep?: string;
   revivalCount?: number;
 };
 export type WorldviewPhenomenonKind =
@@ -702,6 +920,7 @@ export type WorldviewPhenomenonState = {
   name: string;
   regionId: RegionId;
   originTick: number;
+  originTimelineStep?: string;
   parentIds: string[];
   causeRuleId: string;
   evidence: Record<string, number | string | boolean>;
@@ -716,7 +935,9 @@ export type WorldviewPracticeState = {
   practitionerId: EntityId;
   teacherId?: EntityId;
   originTick: number;
+  originTimelineStep?: string;
   lastTrainedTick: number;
+  lastTrainedTimelineStep?: string;
   attunement: number;
   energy: number;
   attempts: number;
@@ -812,6 +1033,8 @@ export type SimulationStage = {
 export type WorldEvent = {
   id: string;
   tick: number;
+  timelineStep?: string;
+  timelineDays?: string;
   years?: number;
   kind: string;
   ruleId: string;
@@ -827,6 +1050,8 @@ export type WorldEvent = {
 export type EventMilestone = {
   id: string;
   tick: number;
+  timelineStep?: string;
+  timelineDays?: string;
   years?: number;
   kind: string;
   ruleId: string;
@@ -848,10 +1073,13 @@ export type EventArchive = {
   archivedCultureCount: number;
   archivedRelationshipCount: number;
   firstEventTick?: number;
+  firstEventTimelineStep?: string;
   firstEventYears?: number;
   latestEventTick?: number;
+  latestEventTimelineStep?: string;
   latestEventYears?: number;
   archivedThroughTick?: number;
+  archivedThroughTimelineStep?: string;
   archivedThroughYears?: number;
   kindCounts: Record<string, number>;
   regionCounts: Record<string, number>;
@@ -859,7 +1087,38 @@ export type EventArchive = {
   organizationFormationCounts: Record<string, number>;
   tradeVolumeByResource: Record<string, number>;
   archivedSpeciesRoleCounts: Partial<Record<SpeciesRole, number>>;
+  archivedSpeciesSummaries: ArchivedSpeciesSummary[];
+  archivedOrganizationCount: number;
+  archivedOrganizationSummaries: ArchivedOrganizationSummary[];
   milestones: EventMilestone[];
+  historySamples: WorldHistorySample[];
+};
+
+/** Compact annual observation used to inspect continuous world evolution. */
+export type WorldHistorySample = {
+  tick: number;
+  years: number;
+  timelineStep: string;
+  timelineDays: string;
+  meanTemperature: number;
+  oceanCoverage: number;
+  biomass: number;
+  oxygen: number;
+  organics: number;
+  populationCount: number;
+  speciesCount: number;
+  organizationCount: number;
+  facilityCount: number;
+  knowledgeCount: number;
+  foodSecurity: number;
+  diseasePrevalence: number;
+  annualMeanTemperature?: number;
+  annualMeanHumidity?: number;
+  annualMeanWater?: number;
+  annualMeanSolarFlux?: number;
+  annualMinimumTemperature?: number;
+  annualMaximumTemperature?: number;
+  annualSeasonalRange?: number;
 };
 
 export type WorldState = {
@@ -867,6 +1126,12 @@ export type WorldState = {
   seed: number;
   tick: number;
   years: number;
+  /** Exact whole simulated days; omitted only for legacy saves. */
+  simulationDays?: number;
+  /** Exact clock used after the compatibility number fields reach their precision limit. */
+  timeline?: SimulationTimeline;
+  orbital: OrbitalState;
+  climateCycle: ClimateCycleState;
   random: RandomState;
   formation: PlanetFormationState;
   fields: {
@@ -885,11 +1150,13 @@ export type WorldState = {
     oxygen: Grid;
   };
   substances: SubstanceState[];
+  pathogens: PathogenState[];
   species: SpeciesState[];
   populations: PopulationState[];
   agents: AgentState[];
   knowledge: KnowledgeState[];
   relationships: RelationshipState[];
+  ecologicalRelationships?: EcologicalRelationshipState[];
   cultures: CultureState[];
   organizations: OrganizationState[];
   facilities: FacilityState[];

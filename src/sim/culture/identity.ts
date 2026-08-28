@@ -10,6 +10,7 @@ import type {
   KnowledgeDomain,
   RegionId,
 } from "../types.ts";
+import { simulationStepModulo } from "../time.ts";
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const rounded = (value: number): number => Math.round(clamp(value) * 1_000_000) / 1_000_000;
@@ -63,6 +64,7 @@ export const createCultureIdentity = (
   members: readonly AgentState[] = [],
   environment: Partial<{ elevation: number; water: number; humidity: number; nutrients: number; biomass: number }> = {},
   parentCultureIds?: EntityId[],
+  timelineStep = String(tick),
 ): CultureIdentity => {
   const local = environmentFor(regionId, environment);
   const languageFamily = choice(languages, `${seed}:language`);
@@ -82,6 +84,7 @@ export const createCultureIdentity = (
     symbol: `${(hashString(`${seed}:symbol`) % 16).toString(16)}${(hashString(`${seed}:symbol:2`) % 16).toString(16)}`,
     originRegionId: regionId,
     originTick: tick,
+    originTimelineStep: timelineStep,
     originYears: years,
     generation: 0,
     noveltySignature: hashString(`culture:${seed}:${languageFamily}:${communicationStyle}`).toString(16).padStart(8, "0"),
@@ -102,8 +105,9 @@ export const evolveCultureIdentity = (
   members: readonly AgentState[],
   environment: Partial<{ elevation: number; water: number; humidity: number; nutrients: number; biomass: number }> = {},
   knowledgeDomains: readonly KnowledgeDomain[] = [],
+  timelineStep = String(tick),
 ): CultureIdentity => {
-  if (tick % 12 !== 0 && knowledgeDomains.length === 0) return identity;
+  if (simulationStepModulo(timelineStep, 12) !== 0 && knowledgeDomains.length === 0) return identity;
   const local = environmentFor(identity.originRegionId, environment);
   const target = valuesFor(`${seed}:${identity.noveltySignature}`, members, local);
   const values = Object.fromEntries(Object.keys(identity.values).map((key) => {
@@ -116,11 +120,11 @@ export const evolveCultureIdentity = (
     if (!traditions.includes(tradition)) traditions.push(tradition);
   }
   while (traditions.length > 6) traditions.shift();
-  const languageFamily = fraction(`${seed}:language-drift:${tick}`) < 0.014
-    ? choice(languages.filter((candidate) => candidate !== identity.languageFamily), `${seed}:language-choice:${tick}`)
+  const languageFamily = fraction(`${seed}:language-drift:${timelineStep}`) < 0.014
+    ? choice(languages.filter((candidate) => candidate !== identity.languageFamily), `${seed}:language-choice:${timelineStep}`)
     : identity.languageFamily;
-  const communicationStyle = fraction(`${seed}:style-drift:${tick}`) < 0.018
-    ? choice(communicationStyles.filter((candidate) => candidate !== identity.communicationStyle), `${seed}:style-choice:${tick}`)
+  const communicationStyle = fraction(`${seed}:style-drift:${timelineStep}`) < 0.018
+    ? choice(communicationStyles.filter((candidate) => candidate !== identity.communicationStyle), `${seed}:style-choice:${timelineStep}`)
     : identity.communicationStyle;
   return {
     ...identity,
@@ -129,7 +133,7 @@ export const evolveCultureIdentity = (
     languageFamily,
     communicationStyle,
     generation: identity.generation + 1,
-    noveltySignature: hashString(`culture-branch:${identity.noveltySignature}:${seed}:${tick}:${languageFamily}:${communicationStyle}`).toString(16).padStart(8, "0"),
+    noveltySignature: hashString(`culture-branch:${identity.noveltySignature}:${seed}:${timelineStep}:${languageFamily}:${communicationStyle}`).toString(16).padStart(8, "0"),
   };
 };
 

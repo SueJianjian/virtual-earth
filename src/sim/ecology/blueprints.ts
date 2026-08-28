@@ -133,6 +133,36 @@ export const speciesNameFor = (seed: string, role: SpeciesRole): string => {
 export const speciesBlueprintFor = (species: Pick<SpeciesState, "id" | "role" | "blueprint">): SpeciesBlueprint =>
   species.blueprint ?? createSpeciesBlueprint(String(species.id), species.role);
 
+export const isSpeciesBlueprint = (value: unknown): value is SpeciesBlueprint => {
+  if (!value || typeof value !== "object") return false;
+  const blueprint = value as Partial<SpeciesBlueprint>;
+  const bodyPlan = blueprint.bodyPlan;
+  const numericValues = [
+    blueprint.lifespanYears,
+    blueprint.adultScale,
+    blueprint.metabolicEfficiency,
+    blueprint.fecundity,
+    blueprint.thermalTolerance,
+    blueprint.hydrationRetention,
+    blueprint.mutationRate,
+    blueprint.inheritanceFidelity,
+  ];
+  return typeof blueprint.biochemistry === "string" && biochemistries.includes(blueprint.biochemistry as LifeBiochemistry)
+    && typeof blueprint.geneticCarrier === "string" && geneticCarriers.includes(blueprint.geneticCarrier as GeneticCarrier)
+    && typeof blueprint.cellArchitecture === "string" && cellArchitectures.includes(blueprint.cellArchitecture as CellArchitecture)
+    && typeof blueprint.metabolism === "string" && metabolisms["producer"].concat(metabolisms["consumer"], metabolisms["decomposer"]).includes(blueprint.metabolism as MetabolismMode)
+    && Boolean(bodyPlan)
+    && typeof bodyPlan?.symmetry === "string" && symmetries.includes(bodyPlan.symmetry as BodySymmetry)
+    && typeof bodyPlan.structure === "string" && structures.includes(bodyPlan.structure as BodyStructure)
+    && typeof bodyPlan.locomotion === "string" && locomotionModes.includes(bodyPlan.locomotion as LocomotionMode)
+    && Number.isInteger(bodyPlan?.appendagePairs) && bodyPlan.appendagePairs >= 0 && bodyPlan.appendagePairs <= 6
+    && typeof bodyPlan?.colonial === "boolean"
+    && Array.isArray(blueprint.senses) && blueprint.senses.length > 0 && blueprint.senses.every((sense) => typeof sense === "string" && senses.includes(sense as SensoryMode))
+    && typeof blueprint.reproduction === "string" && reproductions.includes(blueprint.reproduction as ReproductionMode)
+    && typeof blueprint.noveltySignature === "string"
+    && numericValues.every((number) => Number.isFinite(number) && (number as number) >= 0);
+};
+
 export const ensureSpeciesIdentity = (species: SpeciesState): SpeciesState => {
   if (species.blueprint && species.name) return species;
   return {

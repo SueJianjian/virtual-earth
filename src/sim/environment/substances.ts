@@ -9,6 +9,8 @@ import type {
   WorldDelta,
   WorldState,
 } from "../types.ts";
+import { nextSimulationStep, nextSimulationTick, projectedYearsAfterStep, simulationStepForWorld, simulationStepModulo } from "../time.ts";
+import { addPersistentTotal } from "../numeric.ts";
 
 export const MAX_SUBSTANCES = 256;
 const CELLS_PER_STEP = 16;
@@ -26,6 +28,84 @@ const emptyDelta = (): WorldDelta => ({
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const rounded = (value: number): number => Math.round(clamp(value) * 1_000_000) / 1_000_000;
+const roundedReserve = (value: number): number => Math.round(Math.max(0, value) * 1_000_000) / 1_000_000;
+
+export const MAX_SUBSTANCE_RESERVE = 1_000;
+
+export const defaultSubstanceReserveCapacity = (
+  substance: Pick<SubstanceState, "kind" | "formation" | "properties">,
+): number => {
+  if (substance.kind === "engineered-composite" || substance.formation === "engineered") return 0;
+  const kindBase = substance.kind === "mineral" ? 320 : substance.kind === "crystal" ? 220 : 140;
+  const quality = substance.properties.stability * 0.35
+    + substance.properties.density * 0.25
+    + substance.properties.hardness * 0.2
+    + substance.properties.energyPotential * 0.2;
+  return Math.min(MAX_SUBSTANCE_RESERVE, roundedReserve(kindBase * (0.65 + quality)));
+};
+
+export const normalizeSubstanceReserve = (substance: SubstanceState): SubstanceState => {
+  const { depletedTick, depletedTimelineStep, ...base } = substance;
+  const fallbackCapacity = defaultSubstanceReserveCapacity(substance);
+  const rawCapacity = Number(substance.reserveCapacity);
+  const reserveCapacity = Number.isFinite(rawCapacity)
+    ? Math.min(MAX_SUBSTANCE_RESERVE, roundedReserve(rawCapacity))
+    : fallbackCapacity;
+  const rawRemaining = Number(substance.remainingReserve);
+  const remainingReserve = Math.min(
+    reserveCapacity,
+    Number.isFinite(rawRemaining) ? roundedReserve(rawRemaining) : reserveCapacity,
+  );
+  const rawExtracted = Number(substance.extractedTotal);
+  const extractedTotal = Math.min(reserveCapacity, Number.isFinite(rawExtracted) ? roundedReserve(rawExtracted) : 0);
+  const depleted = reserveCapacity > 0 && remainingReserve <= 0;
+  return {
+    ...base,
+    reserveCapacity,
+    remainingReserve,
+    extractedTotal,
+    ...(depleted ? {
+      ...(Number.isFinite(depletedTick) ? { depletedTick } : {}),
+      ...(typeof depletedTimelineStep === "string" ? { depletedTimelineStep } : {}),
+    } : {}),
+  };
+};
+
+export const substanceReserveRatio = (substance: SubstanceState): number => {
+  const normalized = normalizeSubstanceReserve(substance);
+  return normalized.reserveCapacity <= 0 ? 1 : clamp(normalized.remainingReserve / normalized.reserveCapacity);
+};
+
+export type SubstanceExtraction = {
+  substance: SubstanceState;
+  amount: number;
+  becameDepleted: boolean;
+};
+
+export const extractSubstanceReserve = (
+  substance: SubstanceState,
+  requestedAmount: number,
+  tick: number,
+  timelineStep: string,
+): SubstanceExtraction => {
+  const current = normalizeSubstanceReserve(substance);
+  if (current.status !== "known" || current.reserveCapacity <= 0 || current.remainingReserve <= 0 || !Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+    return { substance: current, amount: 0, becameDepleted: false };
+  }
+  const amount = Math.min(current.remainingReserve, roundedReserve(requestedAmount));
+  const remainingReserve = roundedReserve(current.remainingReserve - amount);
+  const becameDepleted = current.remainingReserve > 0 && remainingReserve <= 0;
+  return {
+    amount,
+    becameDepleted,
+    substance: {
+      ...current,
+      remainingReserve,
+      extractedTotal: roundedReserve(addPersistentTotal(current.extractedTotal, amount)),
+      ...(becameDepleted ? { depletedTick: tick, depletedTimelineStep: timelineStep } : {}),
+    },
+  };
+};
 
 const regionForIndex = (state: WorldState, index: number): RegionId =>
   `region:${index % state.fields.elevation.width}:${Math.floor(index / state.fields.elevation.width)}` as RegionId;
@@ -129,6 +209,8 @@ export const deriveNaturalSubstance = (state: WorldState, index: number, elapsed
   };
   const hydrothermal = candidate.kind === "crystal" && environment.water >= 0.16 && environment.temperature >= 0.45;
   const formation = candidate.kind === "organic-compound" ? "biochemical" : hydrothermal ? "hydrothermal" : "geological";
+  const properties = propertiesFor(candidate.kind, composition, environment);
+  const reserveCapacity = defaultSubstanceReserveCapacity({ kind: candidate.kind, formation, properties });
   return {
     id: `substance:${candidate.kind}:${hashString(`${state.seed}:${signature}`).toString(16)}`,
     name: nameFor(state.seed, signature, candidate.kind),
@@ -136,11 +218,15 @@ export const deriveNaturalSubstance = (state: WorldState, index: number, elapsed
     formation,
     status: "latent",
     regionId,
-    originTick: state.tick + 1,
-    originYears: state.years + Math.max(0, elapsedYears),
+    originTick: nextSimulationTick(state),
+    originTimelineStep: nextSimulationStep(state),
+    originYears: projectedYearsAfterStep(state, Math.max(0, elapsedYears)),
     parentIds: [],
     composition,
-    properties: propertiesFor(candidate.kind, composition, environment),
+    properties,
+    reserveCapacity,
+    remainingReserve: reserveCapacity,
+    extractedTotal: 0,
     discoveredByIds: [],
   };
 };
@@ -159,7 +245,7 @@ const discoverSubstance = (state: WorldState, elapsedYears: number): { substance
     const toolUse = agents.reduce((sum, agent) => sum + (agent.skills.toolUse ?? 0), 0) / agents.length;
     const technology = technologyProfileForRegion(state, substance.regionId);
     const probability = clamp(0.035 + observation * 0.22 + toolUse * 0.14 + technology.construction * 0.18, 0.035, 0.6);
-    const [roll] = randomFloat(forkRandom(state.random, `substance-discovery:${substance.id}:${state.tick}`));
+    const [roll] = randomFloat(forkRandom(state.random, `substance-discovery:${substance.id}:${simulationStepForWorld(state)}`));
     if (roll >= probability) continue;
     const discoverers = [...agents]
       .sort((left, right) => ((right.skills.observation ?? 0) + (right.skills.toolUse ?? 0)) - ((left.skills.observation ?? 0) + (left.skills.toolUse ?? 0)) || left.id.localeCompare(right.id))
@@ -170,8 +256,9 @@ const discoverSubstance = (state: WorldState, elapsedYears: number): { substance
         ...substance,
         status: "known",
         discoveredByIds: discoverers,
-        discoveryTick: state.tick + 1,
-        discoveryYears: state.years + Math.max(0, elapsedYears),
+        discoveryTick: nextSimulationTick(state),
+        discoveryTimelineStep: nextSimulationStep(state),
+        discoveryYears: projectedYearsAfterStep(state, Math.max(0, elapsedYears)),
       },
       probability,
       roll,
@@ -198,7 +285,7 @@ const engineerComposite = (state: WorldState, elapsedYears: number): { substance
     if (!source) continue;
     const inventiveness = agents.reduce((sum, agent) => sum + (agent.traits.curiosity ?? 0) + (agent.skills.toolUse ?? 0), 0) / (agents.length * 2);
     const probability = clamp(0.015 + inventiveness * 0.05 + technology.construction * 0.06 + technology.energy * 0.05, 0.015, 0.16);
-    const [roll] = randomFloat(forkRandom(state.random, `substance-engineering:${culture.id}:${source.id}:${state.tick}`));
+    const [roll] = randomFloat(forkRandom(state.random, `substance-engineering:${culture.id}:${source.id}:${simulationStepForWorld(state)}`));
     if (roll >= probability) continue;
     const inventors = [...agents]
       .sort((left, right) => ((right.traits.curiosity ?? 0) + (right.skills.toolUse ?? 0)) - ((left.traits.curiosity ?? 0) + (left.skills.toolUse ?? 0)) || left.id.localeCompare(right.id))
@@ -222,14 +309,19 @@ const engineerComposite = (state: WorldState, elapsedYears: number): { substance
         formation: "engineered",
         status: "known",
         regionId: culture.regionId,
-        originTick: state.tick + 1,
-        originYears: state.years + Math.max(0, elapsedYears),
+        originTick: nextSimulationTick(state),
+        originTimelineStep: nextSimulationStep(state),
+        originYears: projectedYearsAfterStep(state, Math.max(0, elapsedYears)),
         parentIds: [source.id],
         composition: { ...source.composition },
         properties,
+        reserveCapacity: 0,
+        remainingReserve: 0,
+        extractedTotal: 0,
         discoveredByIds: inventors,
-        discoveryTick: state.tick + 1,
-        discoveryYears: state.years + Math.max(0, elapsedYears),
+        discoveryTick: nextSimulationTick(state),
+        discoveryTimelineStep: nextSimulationStep(state),
+        discoveryYears: projectedYearsAfterStep(state, Math.max(0, elapsedYears)),
       },
       probability,
       roll,
@@ -247,7 +339,7 @@ export const stepSubstances = (state: WorldState, elapsedYears = 1): WorldDelta 
   const cellCount = state.fields.elevation.values.length;
   let created = 0;
   for (let offset = 0; offset < Math.min(CELLS_PER_STEP, cellCount) && created < remaining; offset += 1) {
-    const index = (state.tick * CELLS_PER_STEP + offset) % cellCount;
+    const index = (simulationStepModulo(simulationStepForWorld(state), cellCount) * CELLS_PER_STEP + offset) % cellCount;
     const regionId = regionForIndex(state, index);
     if (plannedRegions.has(regionId)) continue;
     const substance = deriveNaturalSubstance(state, index, elapsedYears);
@@ -307,22 +399,39 @@ export type SubstanceEffectProfile = {
   structuralStrength: number;
   energyEfficiency: number;
   biologicalUtility: number;
+  naturalMaterialYield: number;
+  naturalEnergyYield: number;
 };
+
+const emptySubstanceEffectProfile = (): SubstanceEffectProfile => ({
+  materialYield: 0,
+  structuralStrength: 0,
+  energyEfficiency: 0,
+  biologicalUtility: 0,
+  naturalMaterialYield: 0,
+  naturalEnergyYield: 0,
+});
 
 export const substanceEffectProfilesForState = (state: Pick<WorldState, "substances">): ReadonlyMap<RegionId, SubstanceEffectProfile> => {
   const profiles = new Map<RegionId, SubstanceEffectProfile>();
   for (const substance of state.substances) {
     if (substance.status !== "known") continue;
-    const current = profiles.get(substance.regionId) ?? { materialYield: 0, structuralStrength: 0, energyEfficiency: 0, biologicalUtility: 0 };
+    const current = profiles.get(substance.regionId) ?? emptySubstanceEffectProfile();
     const engineeredFactor = substance.kind === "engineered-composite" ? 1 : 0.82;
-    current.materialYield = Math.max(current.materialYield, rounded((substance.properties.hardness * 0.45 + substance.properties.stability * 0.55) * engineeredFactor));
+    const materialYield = rounded((substance.properties.hardness * 0.45 + substance.properties.stability * 0.55) * engineeredFactor);
+    const energyYield = rounded((substance.properties.conductivity * 0.55 + substance.properties.energyPotential * 0.45) * engineeredFactor);
+    current.materialYield = Math.max(current.materialYield, materialYield);
     current.structuralStrength = Math.max(current.structuralStrength, rounded((substance.properties.hardness * 0.55 + substance.properties.stability * 0.45) * engineeredFactor));
-    current.energyEfficiency = Math.max(current.energyEfficiency, rounded((substance.properties.conductivity * 0.55 + substance.properties.energyPotential * 0.45) * engineeredFactor));
+    current.energyEfficiency = Math.max(current.energyEfficiency, energyYield);
     current.biologicalUtility = Math.max(current.biologicalUtility, rounded((substance.properties.biologicalAffinity * 0.7 + (1 - substance.properties.reactivity) * 0.3) * engineeredFactor));
+    if (substance.formation !== "engineered" && substanceReserveRatio(substance) > 0) {
+      current.naturalMaterialYield = Math.max(current.naturalMaterialYield, materialYield);
+      current.naturalEnergyYield = Math.max(current.naturalEnergyYield, energyYield);
+    }
     profiles.set(substance.regionId, current);
   }
   return profiles;
 };
 
 export const substanceEffectProfileForRegion = (state: Pick<WorldState, "substances">, regionId: RegionId): SubstanceEffectProfile =>
-  substanceEffectProfilesForState(state).get(regionId) ?? { materialYield: 0, structuralStrength: 0, energyEfficiency: 0, biologicalUtility: 0 };
+  substanceEffectProfilesForState(state).get(regionId) ?? emptySubstanceEffectProfile();

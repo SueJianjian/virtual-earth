@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { createSimulationRuntime, RECENT_REGION_EVENT_LIMIT } from "../../src/worker/runtime.ts";
+import { AUTOSAVE_INTERVAL_STEPS, createSimulationRuntime, MAX_SCENE_STRATEGIC_LINKS, RECENT_REGION_EVENT_LIMIT } from "../../src/worker/runtime.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { clearSimulationStages, registerSimulationStage } from "../../src/sim/engine.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
@@ -9,6 +9,7 @@ import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
 import { snapshotTransferables } from "../../src/worker/transfer.ts";
+import { derivePathogen } from "../../src/sim/health/disease.ts";
 
 describe("simulation worker runtime", () => {
   beforeEach(() => clearSimulationStages());
@@ -45,6 +46,64 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.runtime?.peakStepMs).toBeGreaterThanOrEqual(snapshot.snapshot.runtime?.lastStepMs ?? 0);
   });
 
+  it("exposes bounded annual history samples through worker snapshots", () => {
+    const runtime = createSimulationRuntime(createWorld(152, { width: 8, height: 8, formation: "formed" }));
+    const messages = runtime.dispatch({ type: "step", count: 365 });
+    const snapshot = messages.find((message) => message.type === "snapshot");
+
+    expect(snapshot?.type).toBe("snapshot");
+    if (snapshot?.type !== "snapshot") return;
+    expect(snapshot.snapshot.historySamples).toHaveLength(1);
+    expect(snapshot.snapshot.historySamples?.[0]).toMatchObject({ timelineDays: "365", timelineStep: "365" });
+    expect(snapshot.snapshot.historySamples).toEqual(snapshot.snapshot.eventArchive?.historySamples);
+  });
+
+  it("emits a checkpoint with the newest exact timeline at a bounded interval", () => {
+    const runtime = createSimulationRuntime(createWorld(153, { width: 8, height: 8, formation: "formed" }));
+    runtime.dispatch({ type: "step", count: AUTOSAVE_INTERVAL_STEPS });
+    const checkpoint = runtime.dispatch({ type: "checkpoint" })[0];
+
+    expect(checkpoint?.type).toBe("autosaved");
+    if (checkpoint?.type !== "autosaved") return;
+    expect(checkpoint.timelineDays).toBe(String(AUTOSAVE_INTERVAL_STEPS));
+    expect(JSON.parse(checkpoint.payload)).toMatchObject({ schemaVersion: 1, world: { tick: AUTOSAVE_INTERVAL_STEPS } });
+  });
+
+  it("continues through repeated pause, resume, autosave, and restore cycles", () => {
+    let runtime = createSimulationRuntime(createWorld(154, {
+      width: 8,
+      height: 8,
+      formation: "formed",
+      enabledPackIds: ["emergence.original-worldview"],
+    }));
+    let expectedTimelineDays = 0;
+
+    for (let cycle = 0; cycle < 12; cycle += 1) {
+      runtime.dispatch({ type: "start" });
+      runtime.dispatch({ type: "setSpeed", multiplier: ([1, 4, 16, 64] as const)[cycle % 4]! });
+      const advanced = runtime.dispatch({ type: "step", count: AUTOSAVE_INTERVAL_STEPS });
+      expectedTimelineDays += AUTOSAVE_INTERVAL_STEPS;
+
+      expect(runtime.isPaused()).toBe(false);
+      expect(runtime.getState().timeline?.days).toBe(String(expectedTimelineDays));
+      const autosave = advanced.find((message) => message.type === "autosaved");
+      expect(autosave?.type).toBe("autosaved");
+      if (autosave?.type !== "autosaved") return;
+      expect(autosave.timelineDays).toBe(String(expectedTimelineDays));
+
+      runtime.dispatch({ type: "pause" });
+      expect(runtime.isPaused()).toBe(true);
+      const restored = createSimulationRuntime(createWorld(cycle + 10_000, { width: 8, height: 8 }));
+      restored.dispatch({ type: "load", payload: autosave.payload });
+      expect(worldDigest(restored.getState())).toBe(autosave.digest);
+      expect(restored.getState().timeline?.days).toBe(String(expectedTimelineDays));
+      runtime = restored;
+    }
+
+    expect(runtime.getState().tick).toBe(expectedTimelineDays);
+    expect(runtime.getState().timeline?.step).toBe(String(expectedTimelineDays));
+  });
+
   it("keeps authoritative grids attached after transferring a snapshot", () => {
     const runtime = createSimulationRuntime(createWorld(149, { width: 8, height: 8, formation: "formed" }));
     const message = runtime.dispatch({ type: "pause" })[0];
@@ -63,6 +122,16 @@ describe("simulation worker runtime", () => {
     runtime.dispatch({ type: "setSpeed", multiplier: 16 });
     expect(runtime.getSpeed()).toBe(16);
     expect(runtime.dispatch({ type: "setSpeed", multiplier: 4 })[0]).toMatchObject({ type: "snapshot", speed: 4 });
+  });
+
+  it("normalizes invalid manual step counts into one safe step", () => {
+    const runtime = createSimulationRuntime(createWorld(136, { width: 8, height: 8 }));
+
+    runtime.dispatch({ type: "step", count: Number.NaN });
+    expect(runtime.getState().tick).toBe(1);
+
+    runtime.dispatch({ type: "step", count: Number.POSITIVE_INFINITY });
+    expect(runtime.getState().tick).toBe(2);
   });
 
   it("resets to the initial seed state and clears runtime diagnostics", () => {
@@ -181,7 +250,14 @@ describe("simulation worker runtime", () => {
     expect(message.snapshot.organizationDirectory).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: city.id, type: "city", regionId }),
     ]));
-    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({ fromId: agents[0]!.id, toId: agents[1]!.id, kind: "partner" }));
+    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({
+      fromId: agents[0]!.id,
+      toId: agents[1]!.id,
+      fromRegion: regionId,
+      toRegion: regionId,
+      kind: "partner",
+      scope: "personal",
+    }));
     expect(message.snapshot.worldviewEntities).toEqual(state.worldview.entities);
   });
 
@@ -236,6 +312,9 @@ describe("simulation worker runtime", () => {
       parentIds: [],
       composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.2, organics: 0.2, oxygen: 0.2 },
       properties: { hardness: 0.8, density: 0.7, reactivity: 0.2, conductivity: 0.6, energyPotential: 0.5, biologicalAffinity: 0.3, stability: 0.9 },
+      reserveCapacity: 240,
+      remainingReserve: 180,
+      extractedTotal: 60,
       discoveredByIds: [],
     }];
     const runtime = createSimulationRuntime(state);
@@ -244,6 +323,33 @@ describe("simulation worker runtime", () => {
 
     expect(message.snapshot.substances).toEqual(state.substances);
     expect(message.snapshot.substanceRichnessByRegion?.[regionId]).toBeGreaterThan(0);
+  });
+
+  it("projects bounded pathogens and regional disease prevalence", () => {
+    const state = createWorld(143, { width: 8, height: 8, formation: "formed" });
+    const regionId = "region:2:2" as never;
+    const species = createSpecies("worker-health", "consumer");
+    const population = { id: "population:worker-health" as never, speciesId: species.id, regionId, count: 20, energy: 1 };
+    const agent = createAgent(population, species, 0, "worker-health");
+    const pathogen = { ...derivePathogen(state, regionId, species.id), prevalence: 1, status: "outbreak" as const, cumulativeCases: 1 };
+    const destinationRegion = "region:4:2" as never;
+    pathogen.regionalOutbreaks = [
+      { regionId, status: "outbreak", prevalence: 1, firstDetectedTick: 1, lastActiveTick: 1 },
+      { regionId: destinationRegion, status: "outbreak", prevalence: 0.6, firstDetectedTick: 2, lastActiveTick: 2 },
+    ];
+    agent.health = { vitality: 0.7, infections: [{ pathogenId: pathogen.id, infectedTick: 1, severity: 0.4 }], immunityIds: [] };
+    state.species = [species];
+    state.populations = [population];
+    state.agents = [agent];
+    state.pathogens = [pathogen];
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    expect(message.snapshot.pathogens).toEqual(state.pathogens);
+    expect(message.snapshot.diseasePrevalence?.values[2 * 8 + 2]).toBe(1);
+    expect(message.snapshot.diseasePrevalence?.values[2 * 8 + 4]).toBeCloseTo(0.6);
+    expect(snapshotTransferables(message.snapshot)).toContain(message.snapshot.diseasePrevalence!.values.buffer);
   });
 
   it("exposes recent supply routes in snapshots for inspection", () => {
@@ -277,6 +383,89 @@ describe("simulation worker runtime", () => {
       totalAmount: 0.5,
       shipmentCount: 1,
     }));
+    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({
+      fromId: source.id,
+      toId: destination.id,
+      fromRegion: region,
+      toRegion: destinationRegion,
+      kind: "trade",
+      scope: "strategic",
+    }));
+  });
+
+  it("projects persistent diplomacy and directional migration as strategic routes", () => {
+    const state = createWorld(146, { width: 8, height: 8, formation: "formed" });
+    const firstRegion = "region:1:2" as never;
+    const secondRegion = "region:5:2" as never;
+    const thirdRegion = "region:3:6" as never;
+    const first = createOrganization("city", firstRegion, []);
+    const second = createOrganization("state", secondRegion, []);
+    const third = createOrganization("federation", thirdRegion, []);
+    first.diplomacy = { [second.id]: "trade", [third.id]: "rival" };
+    second.diplomacy = { [first.id]: "trade", [third.id]: "allied" };
+    third.diplomacy = { [first.id]: "rival", [second.id]: "allied" };
+    state.organizations = [first, second, third];
+    state.events = [{
+      id: "event:migration:strategic",
+      tick: 12,
+      years: 12,
+      kind: "population-migration",
+      ruleId: "ecology:local-migration",
+      source: "natural",
+      sourceIds: ["population:route"],
+      probability: 0.4,
+      roll: 0.2,
+      evidence: { fromRegion: firstRegion, toRegion: thirdRegion, mobility: 0.8 },
+      payload: { populationId: "population:route", fromRegion: firstRegion, toRegion: thirdRegion },
+    }];
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+    const orderedAlliance = [second, third].sort((left, right) => left.id.localeCompare(right.id));
+    const allianceFrom = orderedAlliance[0]!;
+    const allianceTo = orderedAlliance[1]!;
+
+    expect(message.snapshot.sceneLinks?.filter((link) => link.scope === "strategic")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromId: first.id, toId: second.id, kind: "trade", fromRegion: firstRegion, toRegion: secondRegion }),
+      expect.objectContaining({ fromId: first.id, toId: third.id, kind: "border-conflict", fromRegion: firstRegion, toRegion: thirdRegion }),
+      expect.objectContaining({ fromId: allianceFrom.id, toId: allianceTo.id, kind: "alliance", fromRegion: allianceFrom.regionId, toRegion: allianceTo.regionId }),
+      expect.objectContaining({ fromId: "population:route", toId: "population:route", kind: "migration", fromRegion: firstRegion, toRegion: thirdRegion }),
+    ]));
+    expect(message.snapshot.sceneLinks?.filter((link) => link.scope === "strategic")).toHaveLength(4);
+  });
+
+  it("bounds dense diplomacy before sending strategic scene routes", () => {
+    const state = createWorld(147, { width: 32, height: 16, formation: "formed" });
+    state.organizations = Array.from({ length: 180 }, (_, index) => createOrganization(
+      index % 2 === 0 ? "city" : "state",
+      `region:${index % 32}:${Math.floor(index / 32)}` as never,
+      [],
+    ));
+    for (const organization of state.organizations) {
+      organization.diplomacy = Object.fromEntries(state.organizations
+        .filter((peer) => peer.id !== organization.id)
+        .slice(0, 64)
+        .map((peer, index) => [peer.id, index % 3 === 0 ? "allied" : index % 3 === 1 ? "trade" : "rival"]));
+    }
+    state.events = Array.from({ length: 180 }, (_, index) => ({
+      id: `event:dense-route:${index}`,
+      tick: index,
+      years: index / 365,
+      kind: "population-migration",
+      ruleId: "ecology:local-migration",
+      source: "natural" as const,
+      sourceIds: [`population:dense-route:${index}`],
+      probability: 0.5,
+      roll: 0.2,
+      evidence: { fromRegion: `region:${index % 32}:${Math.floor(index / 32)}`, toRegion: `region:${(index + 7) % 32}:${Math.floor((index + 7) / 32)}` },
+      payload: { populationId: `population:dense-route:${index}`, fromRegion: `region:${index % 32}:${Math.floor(index / 32)}`, toRegion: `region:${(index + 7) % 32}:${Math.floor((index + 7) / 32)}` },
+    }));
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    expect(message.snapshot.sceneLinks?.filter((link) => link.scope === "strategic")).toHaveLength(MAX_SCENE_STRATEGIC_LINKS);
+    expect(message.snapshot.sceneLinks?.every((link) => link.fromRegion !== link.toRegion || link.scope === "personal")).toBe(true);
   });
 
   it("projects a bounded causal event history for the focused region", () => {
@@ -291,11 +480,22 @@ describe("simulation worker runtime", () => {
       kind: index % 2 === 0 ? "flood" : "interregional-trade",
       ruleId: "test:regional-history",
       source: "natural" as const,
-      sourceIds: [city.id],
+      sourceIds: [city.id, ...Array.from({ length: 40 }, (_, sourceIndex) => `agent:history-source:${sourceIndex}`)],
       probability: 0.4,
       roll: 0.2,
       evidence: { regionId: region, intensity: 0.25 },
-      payload: { regionId: region, organizationId: city.id, resourceId: "food", amount: index + 1 },
+      payload: {
+        regionId: region,
+        organizationId: city.id,
+        speciesId: "species:history",
+        populationId: "population:history",
+        cultureId: "culture:history",
+        substanceId: "substance:history",
+        facilityId: "facility:history",
+        pathogenId: "pathogen:history",
+        resourceId: "food",
+        amount: index + 1,
+      },
     }));
     const runtime = createSimulationRuntime(state);
     const before = worldDigest(runtime.getState());
@@ -308,6 +508,16 @@ describe("simulation worker runtime", () => {
       organizationIds: [city.id],
       amount: RECENT_REGION_EVENT_LIMIT + 4,
     });
+    expect(message.snapshot.recentRegionEvents?.[0]?.relatedIds).toEqual(expect.arrayContaining([
+      city.id,
+      "culture:history",
+      "facility:history",
+      "pathogen:history",
+      "population:history",
+      "species:history",
+      "substance:history",
+    ]));
+    expect(message.snapshot.recentRegionEvents?.[0]?.relatedIds?.length).toBeLessThanOrEqual(32);
     expect(message.snapshot.recentRegionEvents?.every((event) => event.regionIds.includes(region))).toBe(true);
     expect(worldDigest(runtime.getState())).toBe(before);
   });

@@ -49,9 +49,16 @@ export const createOrganization = (
   diplomacy: {},
 });
 
+export type OrganizationCapacityInputs = {
+  ledgerResources?: number;
+  foodSecurity?: number;
+  constructionLevel?: number;
+};
+
 export const organizationCapacity = (
   organization: OrganizationState,
   context: SocietyContext,
+  inputs: OrganizationCapacityInputs = {},
 ): number => {
   const base: Record<OrganizationType, number> = {
     family: 8,
@@ -63,11 +70,13 @@ export const organizationCapacity = (
     federation: 100_000,
     empire: 500_000,
   };
-  const ledgerResources = context.state.resources
+  const ledgerResources = inputs.ledgerResources ?? context.state.resources
     .filter((resource) => resource.regionId === organization.regionId && resource.holderId === organization.id)
     .reduce((sum, resource) => sum + resource.amount, 0);
-  const foodSecurity = foodSecurityForOrganization(context.state, { ...organization, memberIds: context.candidateMemberIds }, context.foodIndex);
-  const constructionLevel = technologyProfileForRegion(context.state, organization.regionId).construction;
+  const foodSecurity = inputs.foodSecurity
+    ?? foodSecurityForOrganization(context.state, { ...organization, memberIds: context.candidateMemberIds }, context.foodIndex);
+  const constructionLevel = inputs.constructionLevel
+    ?? technologyProfileForRegion(context.state, organization.regionId).construction;
   const resourceFactor = Math.max(0.5, Math.min(1.5, (Object.values(organization.resources).reduce((sum, value) => sum + value, 0) + ledgerResources + 1) / 10));
   const foodFactor = 0.7 + foodSecurity * 0.3;
   const constructionFactor = 1 + constructionLevel * 0.22;

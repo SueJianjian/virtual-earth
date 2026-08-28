@@ -1,12 +1,17 @@
 import type { CellSelection } from "./map-canvas.ts";
 import { summarizeLineage } from "../sim/lod/lineage.ts";
-import type { AggregateKnowledgeSummary, CultureIdentity, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SubstanceState, WorldviewEntityState } from "../sim/types.ts";
+import type { AgentState, AggregateKnowledgeSummary, ArchivedOrganizationSummary, ArchivedSpeciesSummary, CultureIdentity, EcologicalRelationshipKind, EcologicalRelationshipState, EventMilestone, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, PathogenState, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SpeciesState, SubstanceState, WorldviewEntityState } from "../sim/types.ts";
 import { governanceForOrganization } from "../sim/society/organization.ts";
 import { speciesBlueprintFor } from "../sim/ecology/blueprints.ts";
 import { facilityOperationalEffect, facilityWorkforceRequiredFor } from "../sim/society/facilities.ts";
 import { technologyProfileForRegion } from "../sim/culture/technology.ts";
 import type { OrganizationDirectoryEntry, RecentRegionEvent, WorldSnapshot } from "../worker/protocol.ts";
-import { formatElevation, formatIndex, formatModelTemperature, formatNumber, formatPercent, formatRegionCoordinates, formatResource, formatSimulationAge, type FormattedMetric } from "./formatters.ts";
+import { formatElevation, formatIndex, formatModelTemperature, formatNumber, formatPercent, formatRegionCoordinates, formatResource, formatSimulationAge, formatSimulationAgeFromDays, type FormattedMetric } from "./formatters.ts";
+import { pathogenOutbreakForRegion, pathogenPrevalenceForRegion } from "../sim/health/disease.ts";
+import { geneticEnvironmentFitness, HERITABLE_AGENT_TRAITS } from "../sim/agents/genetics.ts";
+import { substanceReserveRatio } from "../sim/environment/substances.ts";
+import { seasonalTemperatureOffset } from "../sim/environment/orbit.ts";
+import { compareSimulationSteps } from "../sim/time.ts";
 
 const format = (value: number): string => formatNumber(value);
 const relationshipLabels: Array<[keyof RegionLineageSummary["relationshipCounts"], string]> = [
@@ -115,6 +120,23 @@ const substanceFormationLabels: Record<SubstanceState["formation"], string> = {
   biochemical: "生化聚合",
   engineered: "文明工程",
 };
+const pathogenKindLabels: Record<PathogenState["kind"], string> = {
+  "virus-like": "类病毒体",
+  "bacterial-colony": "菌落体",
+  "fungal-spore": "孢子体",
+  "parasitic-cell": "寄生细胞",
+};
+const pathogenStatusLabels: Record<PathogenState["status"], string> = {
+  outbreak: "区域暴发",
+  endemic: "地方流行",
+  dormant: "传播沉寂",
+};
+const ecologicalRelationshipLabels: Record<EcologicalRelationshipKind, string> = {
+  predation: "捕食",
+  competition: "竞争",
+  mutualism: "共生",
+  parasitism: "寄生",
+};
 const cultureLanguageLabels: Record<CultureIdentity["languageFamily"], string> = {
   "pulse-tonal": "脉冲声调语系",
   "scent-glyph": "气味符号语系",
@@ -137,42 +159,85 @@ const cultureValueLabels: Array<[keyof CultureIdentity["values"], string]> = [
   ["tradition", "传统"],
   ["stewardship", "环境守护"],
 ];
-type DetailLevel = "region" | "substance" | "species" | "population" | "agent" | "culture" | "worldview" | OrganizationType;
-const detailLevels: DetailLevel[] = ["region", "substance", "species", "population", "agent", "culture", "family", "clan", "tribe", "settlement", "city", "state", "federation", "empire", "worldview"];
+type DetailLevel = "region" | "substance" | "pathogen" | "species" | "population" | "agent" | "culture" | "facility" | "worldview" | OrganizationType;
+const detailLevels: DetailLevel[] = ["region", "substance", "pathogen", "species", "population", "agent", "culture", "family", "clan", "tribe", "settlement", "city", "state", "federation", "empire", "facility", "worldview"];
 export type InspectorDetail = { level: DetailLevel; id?: string };
 const isOrganizationDetailLevel = (level: DetailLevel): level is OrganizationType => ["family", "clan", "tribe", "settlement", "city", "state", "federation", "empire"].includes(level);
 
 const detailLevelLabel = (level: DetailLevel): string => {
   if (level === "region") return "区域";
   if (level === "substance") return "物质";
+  if (level === "pathogen") return "病原体";
   if (level === "species") return "物种";
   if (level === "population") return "种群";
   if (level === "agent") return "个人";
   if (level === "culture") return "文化";
+  if (level === "facility") return "设施";
   if (level === "worldview") return "流派";
   return organizationLabels[level];
 };
 
-type OrganizationDetail = OrganizationState | OrganizationDirectoryEntry;
+type SpeciesRecord = SpeciesState | ArchivedSpeciesSummary;
+const allSpeciesForSnapshot = (snapshot: WorldSnapshot): SpeciesRecord[] => [
+  ...(snapshot.species ?? []),
+  ...(snapshot.eventArchive?.archivedSpeciesSummaries ?? []),
+];
+const speciesName = (species: SpeciesRecord): string => species.name ?? species.id.slice(-8);
+const isArchivedSpecies = (species: SpeciesRecord): species is ArchivedSpeciesSummary => "archivedTick" in species;
+
+type OrganizationDetail = OrganizationState | OrganizationDirectoryEntry | ArchivedOrganizationSummary;
 const organizationMemberIds = (organization: OrganizationDetail): string[] => organization.memberIds ?? [];
 const organizationChildIds = (organization: OrganizationDetail): string[] => "childIds" in organization ? organization.childIds : organization.childOrganizationIds;
-const organizationDetailTargets = (snapshot: WorldSnapshot): OrganizationDetail[] => {
+const isArchivedOrganization = (organization: OrganizationDetail): organization is ArchivedOrganizationSummary => "archiveReason" in organization;
+const allOrganizationDetails = (snapshot: WorldSnapshot): OrganizationDetail[] => {
+  const selectedRegion = snapshot.selectedRegion;
   const byId = new Map<string, OrganizationDetail>();
   for (const organization of snapshot.projection?.organizations ?? []) byId.set(organization.id, organization);
-  const focusRegionId = snapshot.focusRegionId;
-  for (const organization of snapshot.organizationDirectory ?? []) {
-    if (!focusRegionId || organization.regionId === focusRegionId || organization.territoryRegionIds.includes(focusRegionId)) {
-      if (!byId.has(organization.id)) byId.set(organization.id, organization);
+  for (const organization of snapshot.organizationDirectory ?? []) if (!byId.has(organization.id)) byId.set(organization.id, organization);
+  if (selectedRegion) {
+    for (const organization of selectedRegion.organizations) if (!byId.has(organization.id)) {
+      byId.set(organization.id, {
+        id: organization.id,
+        type: organization.type,
+        regionId: selectedRegion.regionId,
+        memberCount: organization.memberCount,
+        memberIds: [...organization.memberIds],
+        childIds: [...organization.childIds],
+        resourceIds: [...organization.resourceIds],
+        historyCount: organization.historyIds.length,
+        archivedHistoryCount: organization.archivedHistoryCount ?? 0,
+        relationshipCount: 0,
+        territoryRegionIds: [...organization.territoryRegionIds],
+        ...(organization.governance ? { governance: { ...organization.governance } } : {}),
+        ...(organization.diplomacy ? { diplomacy: { ...organization.diplomacy } } : {}),
+      });
     }
+  }
+  for (const organization of snapshot.eventArchive?.archivedOrganizationSummaries ?? []) {
+    if (!byId.has(organization.id)) byId.set(organization.id, organization);
   }
   return [...byId.values()];
 };
+const organizationDetailTargets = (snapshot: WorldSnapshot): OrganizationDetail[] => {
+  const byId = new Map(allOrganizationDetails(snapshot).map((organization) => [organization.id, organization]));
+  const focusRegionId = snapshot.focusRegionId;
+  return [...byId.values()].filter((organization) => !focusRegionId || organization.regionId === focusRegionId || organization.territoryRegionIds.includes(focusRegionId));
+};
 const organizationForSnapshot = (snapshot: WorldSnapshot, id: string): OrganizationDetail | undefined =>
-  snapshot.projection?.organizations.find((organization) => organization.id === id)
-  ?? snapshot.organizationDirectory?.find((organization) => organization.id === id);
+  allOrganizationDetails(snapshot).find((organization) => organization.id === id);
+const organizationParentForSnapshot = (snapshot: WorldSnapshot, id: string): OrganizationDetail | undefined =>
+  allOrganizationDetails(snapshot).find((organization) => organizationChildIds(organization).includes(id));
 const resourcesForOrganization = (snapshot: WorldSnapshot, organizationId: string): NonNullable<WorldSnapshot["resources"]> => {
   const resources = snapshot.resources ?? snapshot.selectedRegion?.resources ?? [];
   return resources.filter((resource) => resource.holderId === organizationId);
+};
+const resourceBalancesForOrganization = (snapshot: WorldSnapshot, organization: OrganizationDetail): Record<string, number> => {
+  const balances: Record<string, number> = {};
+  for (const resource of resourcesForOrganization(snapshot, organization.id)) balances[resource.resourceId] = (balances[resource.resourceId] ?? 0) + resource.amount;
+  if (isArchivedOrganization(organization)) {
+    for (const [resourceId, amount] of Object.entries(organization.resources)) balances[resourceId] = Math.max(balances[resourceId] ?? 0, amount);
+  }
+  return balances;
 };
 const knowledgeForRegions = (snapshot: WorldSnapshot, regionIds: readonly RegionId[]): KnowledgeState[] => {
   const regions = new Set(regionIds);
@@ -217,6 +282,23 @@ const regionEventLabels: Record<string, string> = {
   "aggregate-organization-dissolution": "聚合组织解体",
   "species-emergence": "物种出现",
   "species-divergence": "物种分化",
+  "agent-birth": "个体出生",
+  "genetic-mutation": "遗传变异出现",
+  "pathogen-emergence": "病原体出现",
+  "disease-outbreak": "区域疫情暴发",
+  "disease-contained": "区域疫情受控",
+  "disease-regional-spread": "疫情跨区域传播",
+};
+const geneticTraitLabels: Record<typeof HERITABLE_AGENT_TRAITS[number], string> = {
+  cognitivePotential: "认知潜力",
+  sociality: "社会性",
+  cooperation: "合作性",
+  curiosity: "好奇心",
+  fertility: "繁殖力",
+  metabolicEfficiency: "代谢效率",
+  thermalTolerance: "温度耐受",
+  hydrationRetention: "保水能力",
+  diseaseResistance: "抗病性",
 };
 const regionEventContext = (event: RecentRegionEvent): string => {
   const parts: string[] = [];
@@ -232,13 +314,102 @@ const regionalHistoryReport = (snapshot: WorldSnapshot, organizationId?: string)
   const events = (snapshot.recentRegionEvents ?? []).filter((event) => !organizationId || event.organizationIds.includes(organizationId));
   const summaryOrganization = organizationId ? snapshot.selectedRegion?.organizations.find((organization) => organization.id === organizationId) : undefined;
   const directoryOrganization = organizationId ? snapshot.organizationDirectory?.find((organization) => organization.id === organizationId) : undefined;
+  const archivedOrganization = organizationId ? snapshot.eventArchive?.archivedOrganizationSummaries.find((organization) => organization.id === organizationId) : undefined;
   const archiveCount = organizationId
-    ? Math.max(0, summaryOrganization?.archivedHistoryCount ?? 0, directoryOrganization?.archivedHistoryCount ?? 0)
+    ? Math.max(0, summaryOrganization?.archivedHistoryCount ?? 0, directoryOrganization?.archivedHistoryCount ?? 0, archivedOrganization?.historyCount ?? 0)
     : Math.max(0, snapshot.selectedRegion?.archivedHistoryCount ?? 0);
   const scope = organizationId ? "该组织在当前区域内" : "当前区域";
-  return `<section class="worldview-records regional-history" aria-label="区域因果历史"><div class="worldview-heading"><strong>区域因果历史</strong><span>${scope}最近 ${format(events.length)} 条${archiveCount > 0 ? `，另有 ${format(archiveCount)} 条已归档` : ""}</span></div><ol class="worldview-list">${events.length > 0 ? events.map((event) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${formatSimulationAge(event.years ?? event.tick)} · ${event.archived ? "历史档案" : "近期账本"}</small></div><strong>${regionEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 触发概率 ${formatPercent(event.probability).value}%</p></li>`).join("") : `<li class="worldview-empty">${archiveCount > 0 ? "近期事件已归档；当前保留账本中没有该范围的可读记录" : "尚未形成可追溯事件"}</li>`}</ol></section>`;
+  return `<section class="worldview-records regional-history" aria-label="区域因果历史"><div class="worldview-heading"><strong>区域因果历史</strong><span>${scope}最近 ${format(events.length)} 条${archiveCount > 0 ? `，另有 ${format(archiveCount)} 条已归档` : ""}</span></div><ol class="worldview-list">${events.length > 0 ? events.map((event) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${event.archived ? "历史档案" : "近期账本"}</small></div><strong>${regionEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 触发概率 ${formatPercent(event.probability).value}%</p></li>`).join("") : `<li class="worldview-empty">${archiveCount > 0 ? "近期事件已归档；当前保留账本中没有该范围的可读记录" : "尚未形成可追溯事件"}</li>`}</ol></section>`;
+};
+type InspectorHistoryEvent = RecentRegionEvent | EventMilestone;
+const historyEventIds = (event: InspectorHistoryEvent): string[] => {
+  const ids = new Set<string>([
+    ...event.sourceIds,
+    ...event.organizationIds,
+    ...("relatedIds" in event ? event.relatedIds ?? [] : []),
+  ]);
+  if ("details" in event) {
+    for (const value of Object.values(event.details)) if (typeof value === "string") ids.add(value);
+  }
+  return [...ids];
+};
+const historyEventValue = (event: InspectorHistoryEvent, key: string): string | number | boolean | undefined => {
+  if ("details" in event) {
+    const value = event.details[key];
+    return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : undefined;
+  }
+  const value = event[key as keyof RecentRegionEvent];
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : undefined;
+};
+const historyEventContext = (event: InspectorHistoryEvent): string => {
+  const parts: string[] = [];
+  const name = historyEventValue(event, "name");
+  const intensity = historyEventValue(event, "intensity");
+  const resourceId = historyEventValue(event, "resourceId");
+  const amount = historyEventValue(event, "amount");
+  const result = historyEventValue(event, "result") ?? historyEventValue(event, "outcome");
+  const route = historyEventValue(event, "route");
+  const destinationRegionId = historyEventValue(event, "toRegion") ?? historyEventValue(event, "destinationRegionId");
+  if (typeof name === "string") parts.push(name);
+  if (typeof intensity === "number") parts.push(`强度 ${formatPercent(intensity).value}%`);
+  if (typeof resourceId === "string") parts.push(`${resourceId}${typeof amount === "number" ? ` ${formatNumber(amount, 2)} 单位` : ""}`);
+  if (typeof result === "string") parts.push(`结果 ${result}`);
+  if (typeof route === "string") parts.push(`路径 ${route}`);
+  if (typeof destinationRegionId === "string") parts.push(`前往 ${destinationRegionId}`);
+  if (parts.length === 0 && "details" in event) {
+    for (const [key, value] of Object.entries(event.details).slice(0, 3)) parts.push(`${key} ${String(value)}`);
+  }
+  return parts.length > 0 ? parts.map(escapeHtml).join(" · ") : "未记录额外结果";
+};
+const detailHistoryIds = (snapshot: WorldSnapshot, detail: InspectorDetail): string[] => {
+  if (!detail.id) return [];
+  const detailId = detail.id;
+  const ids = new Set<string>([detailId]);
+  if (detail.level === "agent") {
+    const agent = snapshot.projection?.agents.find((candidate) => candidate.id === detailId);
+    if (agent?.sourceId) ids.add(agent.sourceId);
+    const family = snapshot.projection?.organizations.find((organization) => organization.type === "family" && organization.memberIds.includes(detailId as AgentState["id"]));
+    if (family) ids.add(family.id);
+  } else if (detail.level === "population") {
+    const population = snapshot.populations?.find((candidate) => candidate.id === detailId);
+    if (population) ids.add(population.speciesId);
+  } else if (detail.level === "species") {
+    for (const population of snapshot.populations ?? []) if (population.speciesId === detailId) ids.add(population.id);
+  } else if (detail.level === "worldview") {
+    const entity = snapshot.worldviewEntities?.find((candidate) => candidate.id === detailId);
+    if (entity?.sourcePhenomenonId) ids.add(entity.sourcePhenomenonId);
+  }
+  return [...ids];
+};
+const objectHistoryReport = (snapshot: WorldSnapshot, detail: InspectorDetail): string => {
+  if (detail.level === "region" || !detail.id) return "";
+  const targetIds = new Set(detailHistoryIds(snapshot, detail));
+  const events = new Map<string, { event: InspectorHistoryEvent; archived: boolean }>();
+  for (const event of snapshot.eventArchive?.milestones ?? []) {
+    if (historyEventIds(event).some((id) => targetIds.has(id))) events.set(event.id, { event, archived: true });
+  }
+  for (const event of snapshot.recentRegionEvents ?? []) {
+    if (historyEventIds(event).some((id) => targetIds.has(id))) events.set(event.id, { event, archived: event.archived ?? false });
+  }
+  const ordered = [...events.values()]
+    .sort((left, right) => compareSimulationSteps(right.event.timelineStep ?? String(right.event.tick), left.event.timelineStep ?? String(left.event.tick)) || right.event.id.localeCompare(left.event.id))
+    .slice(0, 24);
+  const label = detailLevelLabel(detail.level);
+  return `<section class="worldview-records entity-history" data-history-level="${detail.level}" data-history-id="${escapeHtml(detail.id)}" aria-label="对象演化时间轴"><div class="worldview-heading"><strong>对象演化时间轴</strong><span>${escapeHtml(label)} ${escapeHtml(detail.id.slice(-12))} · 显示 ${format(ordered.length)} 条关联记录</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map(({ event, archived }) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${archived ? "历史档案" : "近期账本"}</small></div><strong>${historyEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 关联 ${format(historyEventIds(event).filter((id) => targetIds.has(id)).length)} 个对象</p></li>`).join("") : "<li class=\"worldview-empty\">尚未形成该对象的可追溯演化记录</li>"}</ol></section>`;
 };
 const organizationName = (organization: { id: string; type: OrganizationType }): string => `${organizationLabels[organization.type]} · ${organization.id.slice(-8)}`;
+const detailLink = (level: DetailLevel, id: string, label: string, regionId?: RegionId): string => `<button type="button" class="detail-link" data-detail-link data-detail-level="${level}" data-detail-id="${escapeHtml(id)}"${regionId ? ` data-detail-region="${escapeHtml(regionId)}"` : ""}>${escapeHtml(label)}</button>`;
+const organizationNavigationReport = (snapshot: WorldSnapshot, organization: OrganizationDetail, memberIds: readonly string[], projectedMembers: readonly AgentState[]): string => {
+  const parent = organizationParentForSnapshot(snapshot, organization.id);
+  const children = organizationChildIds(organization)
+    .map((id) => organizationForSnapshot(snapshot, id))
+    .filter((candidate): candidate is OrganizationDetail => Boolean(candidate))
+    .sort((left, right) => left.type.localeCompare(right.type) || left.id.localeCompare(right.id));
+  const memberLinks = projectedMembers.slice(0, 24).map((agent) => detailLink("agent", agent.id, `${agent.id.slice(-8)} · ${Math.floor(agent.age)}岁`, agent.regionId));
+  const memberCount = "memberCount" in organization ? organization.memberCount : memberIds.length;
+  const unavailableMemberCount = Math.max(0, memberCount - projectedMembers.length);
+  return `<section class="organization-governance detail-navigation" aria-label="组织关系导航"><div class="detail-heading"><strong>关系导航</strong><span>点击对象进入对应详情报告</span></div><div class="detail-navigation-group"><span>所属上级</span>${parent ? detailLink(parent.type, parent.id, organizationName(parent), parent.regionId) : "<em>顶层组织</em>"}</div><div class="detail-navigation-group"><span>下属组织</span>${children.length > 0 ? children.map((child) => detailLink(child.type, child.id, organizationName(child), child.regionId)).join("") : "<em>暂无下属组织记录</em>"}</div><div class="detail-navigation-group"><span>可观察成员</span>${memberLinks.length > 0 ? memberLinks.join("") : "<em>当前投影没有该组织成员</em>"}${unavailableMemberCount > 0 ? `<small>另有 ${format(unavailableMemberCount)} 名成员仅保留聚合记录</small>` : ""}</div></section>`;
+};
 const diplomaticLabels = { neutral: "中立", trade: "贸易", allied: "盟友", rival: "敌对" } as const;
 const knowledgeDomainLabels: Record<KnowledgeDomain, string> = {
   subsistence: "生计",
@@ -252,7 +423,14 @@ const supplyResourceLabels = { food: "食物", materials: "建造材料", energy
 const substanceInventoryReport = (substances: SubstanceState[]): string => {
   const ordered = [...substances].sort((left, right) => Number(right.status === "known") - Number(left.status === "known") || right.originYears - left.originYears || left.id.localeCompare(right.id));
   const known = ordered.filter((substance) => substance.status === "known").length;
-  return `<section class="worldview-records substance-records" aria-label="原创物质"><div class="worldview-heading"><strong>原创物质</strong><span>${format(ordered.length)} 种形成 · ${format(known)} 种已发现</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.slice(0, 12).map((substance) => `<li data-substance-kind="${substance.kind}" data-substance-status="${substance.status}"><div><span>${substanceKindLabels[substance.kind]}</span><small>${substance.status === "known" ? "已发现" : "潜藏"}</small></div><strong>${escapeHtml(substance.name)}</strong><p>${substanceFormationLabels[substance.formation]} · 稳定性 ${formatPercent(substance.properties.stability).value}% · 能量潜力 ${formatPercent(substance.properties.energyPotential).value}%</p></li>`).join("") : '<li class="worldview-empty">当地尚未形成可记录的原创物质</li>'}</ol></section>`;
+  return `<section class="worldview-records substance-records" aria-label="原创物质"><div class="worldview-heading"><strong>原创物质</strong><span>${format(ordered.length)} 种形成 · ${format(known)} 种已发现</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.slice(0, 12).map((substance) => {
+    const reserve = substance.formation === "engineered"
+      ? "人工制造"
+      : substance.remainingReserve <= 0
+        ? "天然储量已枯竭"
+        : `天然储量剩余 ${formatPercent(substanceReserveRatio(substance)).value}%`;
+    return `<li data-substance-kind="${substance.kind}" data-substance-status="${substance.status}"><div><span>${substanceKindLabels[substance.kind]}</span><small>${substance.status === "known" ? "已发现" : "潜藏"}</small></div><strong>${escapeHtml(substance.name)}</strong><p>${substanceFormationLabels[substance.formation]} · ${reserve} · 稳定性 ${formatPercent(substance.properties.stability).value}%</p></li>`;
+  }).join("") : '<li class="worldview-empty">当地尚未形成可记录的原创物质</li>'}</ol></section>`;
 };
 const knowledgeName = (knowledge: KnowledgeState): string => knowledge.name ?? knowledge.kind.replace(/^practice:/, "实践 · ");
 const skillLabel = (skill: string): string => {
@@ -311,6 +489,14 @@ const facilityAssetsReport = (facilities: FacilityState[]): string => {
     return labels[facility.type];
   };
   return `<section class="organization-governance facility-assets" aria-label="资产记录"><div class="detail-heading"><strong>资产记录</strong><span>${format(activeCount)} 项在役 · 累计投入 ${formatNumber(totalInvestment, 1)} 材料单位</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map((facility) => `<li data-facility-status="${facility.status}"><div><span>${knowledgeDomainLabels[facility.type]}设施 · ${facility.level} 级</span><small>${facilityStatusLabels[facility.status]}</small></div><strong>${escapeHtml(facility.id.slice(-8))}</strong><p>耐久 ${formatPercent(facility.condition).value}% · 编制 ${format(facility.workforceIds.length)}/${format(facility.workforceRequired ?? facilityWorkforceRequiredFor(facility.type))} 人 · 岗位效率 ${formatPercent(facility.workforceEfficiency ?? 1).value}%</p><p>材料投入 ${formatNumber(facility.materialInvested, 1)} 单位 · 运行贡献：${contribution(facility)}</p><p>${facility.builtTick >= 0 ? `建成于演化步 ${format(facility.builtTick)}` : `规划于演化步 ${format(facility.plannedTick)}`} · 最近维护 ${format(facility.lastMaintainedTick)} · 所有者 ${escapeHtml(facility.ownerOrganizationId.slice(-8))}</p></li>`).join("") : '<li class="worldview-empty">尚无已规划或已建成设施</li>'}</ol></section>`;
+};
+const facilityDetailReport = (snapshot: WorldSnapshot, facilityId: string): string => {
+  const facility = snapshot.facilities?.find((candidate) => candidate.id === facilityId);
+  if (!facility) return `<div class="empty-state"><strong>设施暂不可用</strong><span>该设施可能已在下一次快照中废弃或尚未同步</span></div>`;
+  const owner = facility.ownerOrganizationId ? organizationForSnapshot(snapshot, facility.ownerOrganizationId) : undefined;
+  const effect = facilityOperationalEffect(facility);
+  const requiredWorkforce = facility.workforceRequired ?? facilityWorkforceRequiredFor(facility.type);
+  return `<div class="detail-report"><div class="detail-title"><strong>设施报告</strong><span>${escapeHtml(facility.id)}</span></div><dl class="detail-grid"><div><dt>设施类型</dt><dd>${knowledgeDomainLabels[facility.type]}</dd></div><div><dt>生命周期状态</dt><dd>${facilityStatusLabels[facility.status]}</dd></div><div><dt>设施等级</dt><dd>${format(facility.level)} 级</dd></div><div><dt>耐久度</dt><dd>${formatPercent(facility.condition).value}%</dd></div><div><dt>建成时间</dt><dd>${facility.builtTick >= 0 ? `演化步 ${format(facility.builtTick)}` : "尚未建成"}</dd></div><div><dt>最近维护</dt><dd>演化步 ${format(facility.lastMaintainedTick)}</dd></div><div><dt>劳动力</dt><dd>${format(facility.workforceIds.length)} / ${format(requiredWorkforce)} 人</dd></div><div><dt>岗位效率</dt><dd>${formatPercent(facility.workforceEfficiency ?? 1).value}%</dd></div><div><dt>材料投入</dt><dd>${formatNumber(facility.materialInvested, 1)} 材料单位</dd></div><div><dt>所有者</dt><dd>${owner ? escapeHtml(organizationName(owner)) : escapeHtml(facility.ownerOrganizationId)}</dd></div></dl><section class="organization-governance" aria-label="设施运行效果"><div class="detail-heading"><strong>设施运行效果</strong><span>当前状态、维护和劳动力共同决定实际贡献</span></div><div class="detail-tags"><span>运行贡献 ${formatPercent(effect).value}%</span><span>${effect > 0 ? "正在影响当地生产与公共能力" : "当前不产生运行贡献"}</span><span>最近事件 演化步 ${format(facility.lastIncidentTick)}</span></div></section></div>`;
 };
 const supplyChainReport = (snapshot: WorldSnapshot, organization: { id: string }, balances: Record<keyof typeof supplyResourceLabels, number>): string => {
   const routes = (snapshot.supplyRoutes ?? [])
@@ -452,24 +638,59 @@ export const lineageForSnapshot = (snapshot: WorldSnapshot): InspectorLineage =>
   };
 };
 
+const regionalHealthReport = (snapshot: WorldSnapshot, regionId?: RegionId): string => {
+  if (!regionId) return "";
+  const pathogenRecords = (snapshot.pathogens ?? []).map((pathogen) => ({
+    pathogen,
+    outbreak: pathogenOutbreakForRegion(pathogen, regionId),
+  })).filter((record) => Boolean(record.outbreak));
+  const agents = snapshot.projection?.agents.filter((agent) => agent.regionId === regionId) ?? [];
+  const summary = snapshot.selectedRegion?.regionId === regionId ? snapshot.selectedRegion.healthSummary : undefined;
+  const infectedCount = summary?.infectedCount ?? agents.filter((agent) => (agent.health?.infections.length ?? 0) > 0).length;
+  const prevalence = summary?.prevalence ?? (agents.length > 0
+    ? infectedCount / agents.length
+    : pathogenRecords.reduce((maximum, record) => Math.max(maximum, record.outbreak?.prevalence ?? 0), 0));
+  const meanVitality = summary?.meanVitality ?? (agents.length > 0 ? agents.reduce((sum, agent) => sum + (agent.health?.vitality ?? 1), 0) / agents.length : Math.max(0, 1 - prevalence * 0.35));
+  const immuneCount = summary?.immuneCount ?? agents.filter((agent) => (agent.health?.immunityIds.length ?? 0) > 0).length;
+  return `<section class="organization-governance public-health" aria-label="区域公共健康"><div class="detail-heading"><strong>公共健康</strong><span>${pathogenRecords.length > 0 ? `${format(pathogenRecords.length)} 种病原体有演化记录` : "当前没有已记录病原体"}</span></div><dl class="detail-grid"><div><dt>当前流行率</dt><dd>${formatPercent(prevalence).value}%</dd></div><div><dt>感染个体</dt><dd>${format(infectedCount)} 人</dd></div><div><dt>免疫个体</dt><dd>${format(immuneCount)} 人</dd></div><div><dt>平均活力</dt><dd>${formatPercent(meanVitality).value}%</dd></div></dl><div class="detail-tags">${pathogenRecords.length > 0 ? pathogenRecords.slice(0, 8).map(({ pathogen, outbreak }) => `<span>${escapeHtml(pathogen.name)} · ${pathogenStatusLabels[outbreak!.status]} · ${formatPercent(outbreak!.prevalence).value}%</span>`).join("") : "<span>环境与宿主密度尚未产生可持续传播</span>"}</div></section>`;
+};
+
 const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"]): Array<{ id: string; label: string }> => {
   if (level === "region") return [];
   if (level === "substance") return (snapshot.substances ?? [])
     .filter((substance) => substance.regionId === snapshot.focusRegionId)
     .sort((left, right) => Number(right.status === "known") - Number(left.status === "known") || left.id.localeCompare(right.id))
     .map((substance) => ({ id: substance.id, label: `${substance.name} · ${substanceKindLabels[substance.kind]}` }));
+  if (level === "pathogen") return (snapshot.pathogens ?? [])
+    .filter((pathogen) => !snapshot.focusRegionId || pathogenPrevalenceForRegion(pathogen, snapshot.focusRegionId) > 0 || pathogen.regionId === snapshot.focusRegionId)
+    .sort((left, right) => Number(right.status === "outbreak") - Number(left.status === "outbreak") || pathogenPrevalenceForRegion(right, snapshot.focusRegionId ?? right.regionId) - pathogenPrevalenceForRegion(left, snapshot.focusRegionId ?? left.regionId) || left.id.localeCompare(right.id))
+    .map((pathogen) => ({ id: pathogen.id, label: `${pathogen.name} · ${pathogenStatusLabels[pathogen.status]}` }));
   const regionalPopulations = (snapshot.populations ?? []).filter((population) => population.regionId === snapshot.focusRegionId);
   if (level === "species") {
     const speciesIds = new Set(regionalPopulations.map((population) => population.speciesId));
-    return (snapshot.species ?? [])
-      .filter((species) => speciesIds.has(species.id))
-      .map((species) => ({ id: species.id, label: `${speciesRoleLabels[species.role]} · ${species.name ?? species.id.slice(-8)}` }));
+    const targets = new Map<string, { id: string; label: string }>();
+    for (const species of snapshot.species ?? []) {
+      if (!speciesIds.has(species.id)) continue;
+      targets.set(species.id, { id: species.id, label: `${speciesRoleLabels[species.role]} · ${speciesName(species)}` });
+    }
+    for (const species of snapshot.eventArchive?.archivedSpeciesSummaries ?? []) {
+      const inRegion = !snapshot.focusRegionId
+        || species.originRegionId === snapshot.focusRegionId
+        || species.lastKnownRegionIds.includes(snapshot.focusRegionId);
+      if (!inRegion) continue;
+      targets.set(species.id, { id: species.id, label: `${speciesRoleLabels[species.role]} · ${speciesName(species)} · 已灭绝` });
+    }
+    return [...targets.values()]
   }
   if (level === "population") return regionalPopulations.map((population) => {
     const species = snapshot.species?.find((candidate) => candidate.id === population.speciesId);
     return { id: population.id, label: `${species?.name ?? population.id.slice(-8)} · ${format(population.count)} 个体` };
   });
   if (level === "agent") return (snapshot.projection?.agents ?? []).map((agent) => ({ id: agent.id, label: `${agent.id.slice(-8)} · ${Math.floor(agent.age)}岁` }));
+  if (level === "facility") return (snapshot.facilities ?? [])
+    .filter((facility) => !snapshot.focusRegionId || facility.regionId === snapshot.focusRegionId)
+    .sort((left, right) => right.level - left.level || right.condition - left.condition || left.id.localeCompare(right.id))
+    .map((facility) => ({ id: facility.id, label: `${knowledgeDomainLabels[facility.type]}设施 · ${facility.id.slice(-8)}` }));
   if (level === "culture") {
     const targets = new Map<string, { id: string; label: string }>();
     const summary = snapshot.selectedRegion?.cultureSummary;
@@ -487,7 +708,31 @@ const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"])
     .map((entity) => ({ id: entity.id, label: `${worldviewEntityLabels[entity.kind]} · ${entity.name ?? entity.id.slice(-8)}` }));
   return organizationDetailTargets(snapshot)
     .filter((organization) => organization.type === level)
-    .map((organization) => ({ id: organization.id, label: organizationName(organization) }));
+    .map((organization) => ({ id: organization.id, label: `${organizationName(organization)}${isArchivedOrganization(organization) ? " · 已归档" : ""}` }));
+};
+
+const ecologicalRelationshipsForSnapshot = (snapshot: WorldSnapshot, regionId?: RegionId): EcologicalRelationshipState[] => {
+  const records = [
+    ...(snapshot.ecologicalRelationships ?? []),
+    ...(snapshot.selectedRegion?.ecologicalRelationships ?? []),
+    ...(snapshot.projection?.ecologicalRelationships ?? []),
+  ];
+  const seen = new Set<string>();
+  return records
+    .filter((record) => (!regionId || record.regionId === regionId) && !seen.has(record.id) && seen.add(record.id))
+    .sort((left, right) => Number(right.status === "active") - Number(left.status === "active") || right.strength - left.strength || left.id.localeCompare(right.id));
+};
+
+const ecologicalRelationshipReport = (snapshot: WorldSnapshot, regionId?: RegionId, speciesId?: string): string => {
+  const speciesById = new Map((snapshot.species ?? []).map((species) => [species.id, species]));
+  const records = ecologicalRelationshipsForSnapshot(snapshot, regionId)
+    .filter((record) => !speciesId || record.fromSpeciesId === speciesId || record.toSpeciesId === speciesId)
+    .slice(0, 12);
+  return `<section class="organization-governance ecological-relationships" aria-label="种间关系"><div class="detail-heading"><strong>种间关系</strong><span>${records.length > 0 ? `当前记录 ${format(records.length)} 条，按活跃度排序` : "当前区域尚未形成稳定种间关系"}</span></div><dl class="detail-grid">${records.map((record) => {
+    const from = speciesById.get(record.fromSpeciesId);
+    const to = speciesById.get(record.toSpeciesId);
+    return `<div><dt>${ecologicalRelationshipLabels[record.kind]}</dt><dd>${escapeHtml(from?.name ?? record.fromSpeciesId.slice(-8))} → ${escapeHtml(to?.name ?? record.toSpeciesId.slice(-8))}</dd></div><div><dt>强度 / 状态</dt><dd>${formatPercent(record.strength).value}% / ${record.status === "active" ? "活跃" : "休眠"}</dd></div><div><dt>累计交互</dt><dd>${format(record.interactionCount)} 次</dd></div><div><dt>累计影响</dt><dd>${formatNumber(record.cumulativeImpact, 2)} 单位</dd></div>`;
+  }).join("")}</dl>${records.length > 0 ? `<div class="detail-tags">${records.slice(0, 8).map((record) => `<span>${ecologicalRelationshipLabels[record.kind]} · ${record.regionId} · 最近影响 ${formatNumber(record.lastImpact, 3)}</span>`).join("")}</div>` : ""}</section>`;
 };
 
 const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage: InspectorLineage): string => {
@@ -512,6 +757,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     }).join("");
     const facilities = (snapshot.facilities ?? []).filter((facility) => facility.regionId === snapshot.focusRegionId);
     const substances = (snapshot.substances ?? []).filter((substance) => substance.regionId === snapshot.focusRegionId);
+    const healthReport = regionalHealthReport(snapshot, snapshot.focusRegionId) + ecologicalRelationshipReport(snapshot, snapshot.focusRegionId);
     const regionalCulture = (snapshot.cultures ?? []).find((culture) => culture.regionId === snapshot.focusRegionId);
     const regionalCultureSummary = snapshot.selectedRegion?.cultureSummary;
     const regionalIdentity = regionalCulture
@@ -521,7 +767,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const aggregateSociety = lineage.source === "aggregate" && regionalSocietySummary
       ? aggregateSocietyReport(regionalSocietySummary, snapshot.selectedRegion?.population ?? 0, snapshot.selectedRegion?.socialPopulation ?? snapshot.selectedRegion?.population ?? 0)
       : "";
-    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${regionalIdentity ? cultureSummaryReport(regionalIdentity, regionalCultureSummary) : ""}${aggregateSociety}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
+    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${healthReport}${regionalIdentity ? cultureSummaryReport(regionalIdentity, regionalCultureSummary) : ""}${aggregateSociety}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
   }
   if (!detail.id) return `<div class="empty-state"><strong>请选择${detailLevelLabel(detail.level)}</strong><span>对象选择器会列出当前区域可查看的实体</span></div>`;
   if (detail.level === "culture") {
@@ -548,20 +794,55 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const discovered = substance.status === "known"
       ? `已于 ${formatSimulationAge(substance.discoveryYears ?? substance.originYears)} 被 ${format(substance.discoveredByIds.length)} 名个体发现`
       : "仍处于潜藏状态，仅上帝视角可见";
-    return `<div class="detail-report"><div class="detail-title"><strong>物质报告</strong><span>${escapeHtml(substance.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(substance.name)}</dd></div><div><dt>类型</dt><dd>${substanceKindLabels[substance.kind]}</dd></div><div><dt>形成方式</dt><dd>${substanceFormationLabels[substance.formation]}</dd></div><div><dt>状态</dt><dd>${substance.status === "known" ? "已发现并可利用" : "自然潜藏"}</dd></div><div><dt>形成时间</dt><dd>${formatSimulationAge(substance.originYears)}</dd></div><div><dt>形成区域</dt><dd>${escapeHtml(substance.regionId)}</dd></div><div><dt>母材</dt><dd>${parentNames.length > 0 ? parentNames.map(escapeHtml).join("、") : "自然原生物质"}</dd></div><div><dt>发现记录</dt><dd>${discovered}</dd></div></dl><section class="organization-governance"><div class="detail-heading"><strong>性质</strong><span>全部为该世界规则内的相对指标</span></div><div class="detail-tags">${propertyLabels.map(([key, label]) => `<span>${label} ${formatPercent(substance.properties[key]).value}%</span>`).join("")}</div></section><section class="organization-governance"><div class="detail-heading"><strong>组成</strong><span>局地基础化学归一化比例</span></div><div class="detail-tags">${Object.entries(substance.composition).map(([field, value]) => `<span>${compositionLabels[field as keyof typeof compositionLabels]} ${formatPercent(value).value}%</span>`).join("")}</div></section><div class="detail-tags">${substance.discoveredByIds.map((id) => `<span>发现者 · ${escapeHtml(id.slice(-8))}</span>`).join("") || "<span>尚无文明发现记录</span>"}</div></div>`;
+    const depletionMilestone = snapshot.eventArchive?.milestones
+      .filter((event) => event.kind === "substance-depletion" && event.sourceIds.includes(substance.id))
+      .sort((left, right) => Number(right.tick) - Number(left.tick))[0];
+    const depletionTime = depletionMilestone?.timelineDays
+      ? formatSimulationAgeFromDays(depletionMilestone.timelineDays)
+      : substance.depletedTimelineStep
+        ? `时间线步骤 ${escapeHtml(substance.depletedTimelineStep)}`
+        : "仍可开采";
+    const reserveReport = substance.formation === "engineered"
+      ? `<div><dt>天然储量</dt><dd>人工制造，不属于天然矿藏</dd></div>`
+      : `<div><dt>初始储量</dt><dd>${formatNumber(substance.reserveCapacity, 2)} 单位</dd></div><div><dt>剩余储量</dt><dd>${formatNumber(substance.remainingReserve, 2)} 单位（${formatPercent(substanceReserveRatio(substance)).value}%）</dd></div><div><dt>累计开采</dt><dd>${formatNumber(substance.extractedTotal, 2)} 单位</dd></div><div><dt>枯竭时间</dt><dd>${depletionTime}</dd></div>`;
+    return `<div class="detail-report"><div class="detail-title"><strong>物质报告</strong><span>${escapeHtml(substance.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(substance.name)}</dd></div><div><dt>类型</dt><dd>${substanceKindLabels[substance.kind]}</dd></div><div><dt>形成方式</dt><dd>${substanceFormationLabels[substance.formation]}</dd></div><div><dt>状态</dt><dd>${substance.status === "known" ? substance.formation !== "engineered" && substance.remainingReserve <= 0 ? "已发现但天然储量已枯竭" : "已发现并可利用" : "自然潜藏"}</dd></div><div><dt>形成时间</dt><dd>${formatSimulationAge(substance.originYears)}</dd></div><div><dt>形成区域</dt><dd>${escapeHtml(substance.regionId)}</dd></div><div><dt>母材</dt><dd>${parentNames.length > 0 ? parentNames.map(escapeHtml).join("、") : "自然原生物质"}</dd></div><div><dt>发现记录</dt><dd>${discovered}</dd></div>${reserveReport}</dl><section class="organization-governance"><div class="detail-heading"><strong>性质</strong><span>全部为该世界规则内的相对指标</span></div><div class="detail-tags">${propertyLabels.map(([key, label]) => `<span>${label} ${formatPercent(substance.properties[key]).value}%</span>`).join("")}</div></section><section class="organization-governance"><div class="detail-heading"><strong>组成</strong><span>局地基础化学归一化比例</span></div><div class="detail-tags">${Object.entries(substance.composition).map(([field, value]) => `<span>${compositionLabels[field as keyof typeof compositionLabels]} ${formatPercent(value).value}%</span>`).join("")}</div></section><div class="detail-tags">${substance.discoveredByIds.map((id) => `<span>发现者 · ${escapeHtml(id.slice(-8))}</span>`).join("") || "<span>尚无文明发现记录</span>"}</div></div>`;
+  }
+  if (detail.level === "pathogen") {
+    const pathogen = snapshot.pathogens?.find((candidate) => candidate.id === detail.id);
+    if (!pathogen) return `<div class="empty-state"><strong>病原体暂不可用</strong><span>该记录可能尚未同步到当前快照</span></div>`;
+    const host = snapshot.species?.find((species) => species.id === pathogen.hostSpeciesId);
+    return `<div class="detail-report"><div class="detail-title"><strong>病原体报告</strong><span>${escapeHtml(pathogen.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(pathogen.name)}</dd></div><div><dt>形态</dt><dd>${pathogenKindLabels[pathogen.kind]}</dd></div><div><dt>状态</dt><dd>${pathogenStatusLabels[pathogen.status]}</dd></div><div><dt>宿主谱系</dt><dd>${host ? escapeHtml(host.name ?? host.id.slice(-8)) : escapeHtml(pathogen.hostSpeciesId.slice(-8))}</dd></div><div><dt>起源区域</dt><dd>${escapeHtml(pathogen.regionId)}</dd></div><div><dt>出现时间</dt><dd>${formatSimulationAge(pathogen.originYears)}</dd></div><div><dt>当前流行率</dt><dd>${formatPercent(pathogen.prevalence).value}%</dd></div><div><dt>传播能力</dt><dd>${formatPercent(pathogen.transmission).value}%</dd></div><div><dt>致病强度</dt><dd>${formatPercent(pathogen.severity).value}%</dd></div><div><dt>环境持久性</dt><dd>${formatPercent(pathogen.persistence).value}%</dd></div><div><dt>累计病例</dt><dd>${format(pathogen.cumulativeCases)} 例</dd></div><div><dt>累计康复</dt><dd>${format(pathogen.cumulativeRecoveries)} 例</dd></div><div><dt>累计死亡</dt><dd>${format(pathogen.cumulativeDeaths)} 人</dd></div><div><dt>创新签名</dt><dd>${escapeHtml(pathogen.noveltySignature)}</dd></div></dl><section class="organization-governance" aria-label="疾病因果说明"><div class="detail-heading"><strong>演化依据</strong><span>由当地环境、宿主密度、接触关系和医疗能力共同决定</span></div><div class="detail-tags"><span>环境产生</span><span>接触传播</span><span>康复免疫</span><span>医疗抑制</span></div></section></div>`;
   }
   if (detail.level === "species") {
-    const species = snapshot.species?.find((candidate) => candidate.id === detail.id);
-    if (!species) return `<div class="empty-state"><strong>物种暂不可用</strong><span>该谱系可能已在下一次快照中灭绝</span></div>`;
+    const species = allSpeciesForSnapshot(snapshot).find((candidate) => candidate.id === detail.id);
+    if (!species) return `<div class="empty-state"><strong>物种暂不可用</strong><span>该谱系没有保留在当前历史摘要容量内</span></div>`;
     const populations = (snapshot.populations ?? []).filter((population) => population.speciesId === species.id);
     const localCount = populations.filter((population) => population.regionId === snapshot.focusRegionId).reduce((sum, population) => sum + population.count, 0);
-    const globalCount = populations.reduce((sum, population) => sum + population.count, 0);
+    const globalCount = isArchivedSpecies(species)
+      ? species.lastKnownPopulation
+      : populations.reduce((sum, population) => sum + population.count, 0);
     const blueprint = speciesBlueprintFor(species);
-    const parent = species.parentId ? snapshot.species?.find((candidate) => candidate.id === species.parentId) : undefined;
+    const lineageRecords = allSpeciesForSnapshot(snapshot);
+    const parent = species.parentId ? lineageRecords.find((candidate) => candidate.id === species.parentId) : undefined;
+    const children = lineageRecords.filter((candidate) => candidate.parentId === species.id);
     const origin = species.originRegionId
-      ? `${escapeHtml(species.originRegionId)} · ${formatSimulationAge(species.originYears ?? species.originTick ?? 0)}`
+      ? `${escapeHtml(species.originRegionId)} · ${species.originTimelineStep ? formatSimulationAgeFromDays(species.originTimelineStep) : formatSimulationAge(species.originYears ?? species.originTick ?? 0)}`
       : "旧历史记录，已补全生命蓝图";
-    return `<div class="detail-report"><div class="detail-title"><strong>物种报告</strong><span>${escapeHtml(species.name ?? species.id)}</span></div><dl class="detail-grid"><div><dt>生态角色</dt><dd>${speciesRoleLabels[species.role]}</dd></div><div><dt>亲本谱系</dt><dd>${parent ? escapeHtml(parent.name ?? parent.id.slice(-8)) : species.parentId ? escapeHtml(species.parentId.slice(-8)) : "原生谱系"}</dd></div><div><dt>起源</dt><dd>${origin}</dd></div><div><dt>局地数量</dt><dd>${format(localCount)} 个体</dd></div><div><dt>全球数量</dt><dd>${format(globalCount)} 个体</dd></div><div><dt>适应温度</dt><dd>${formatPercent(species.traits.temperatureOptimum ?? 0).value}%</dd></div><div><dt>适应湿度</dt><dd>${formatPercent(species.traits.humidityOptimum ?? 0).value}%</dd></div><div><dt>移动性</dt><dd>${formatPercent(species.traits.mobility ?? 0).value}%</dd></div><div><dt>认知潜力</dt><dd>${formatPercent(species.traits.cognitivePotential ?? 0).value}%</dd></div></dl><section class="organization-governance" aria-label="生命蓝图"><div class="detail-heading"><strong>原创生命蓝图</strong><span>可遗传、可分化、可追溯</span></div><div class="detail-tags"><span>生化基础 · ${lifeBiochemistryLabels[blueprint.biochemistry]}</span><span>遗传载体 · ${geneticCarrierLabels[blueprint.geneticCarrier]}</span><span>细胞结构 · ${cellArchitectureLabels[blueprint.cellArchitecture]}</span><span>代谢方式 · ${metabolismLabels[blueprint.metabolism]}</span><span>身体结构 · ${bodyStructureLabels[blueprint.bodyPlan.structure]}</span><span>身体对称 · ${bodySymmetryLabels[blueprint.bodyPlan.symmetry]}</span><span>移动方式 · ${locomotionLabels[blueprint.bodyPlan.locomotion]}</span><span>附肢对数 · ${format(blueprint.bodyPlan.appendagePairs)}</span><span>感官系统 · ${blueprint.senses.map((sense) => sensoryLabels[sense]).join("、")}</span><span>繁殖方式 · ${reproductionLabels[blueprint.reproduction]}</span><span>寿命 · ${formatNumber(blueprint.lifespanYears, 1)} 年</span><span>成体尺度 · ${formatNumber(blueprint.adultScale, 2)}</span><span>代谢效率 · ${formatPercent(blueprint.metabolicEfficiency).value}%</span><span>繁殖力 · ${formatPercent(blueprint.fecundity).value}%</span><span>热耐受 · ${formatPercent(blueprint.thermalTolerance).value}%</span><span>保水性 · ${formatPercent(blueprint.hydrationRetention).value}%</span><span>突变率 · ${formatPercent(blueprint.mutationRate).value}%</span><span>遗传保真度 · ${formatPercent(blueprint.inheritanceFidelity).value}%</span><span>创新签名 · ${escapeHtml(blueprint.noveltySignature)}</span></div></section></div>`;
+    const archivedTime = isArchivedSpecies(species)
+      ? species.archivedTimelineDays
+        ? formatSimulationAgeFromDays(species.archivedTimelineDays)
+        : formatSimulationAge(species.archivedYears)
+      : "持续观测中";
+    const populationLabel = isArchivedSpecies(species) ? "最后记录数量" : "全球数量";
+    const knownRegions = isArchivedSpecies(species)
+      ? species.lastKnownRegionIds
+      : [...new Set(populations.map((population) => population.regionId))];
+    const parentReport = parent ? detailLink("species", parent.id, speciesName(parent), parent.originRegionId) : species.parentId ? escapeHtml(species.parentId.slice(-8)) : "原生谱系";
+    const lineageTags = [
+      parent ? `<span>亲本 · ${parentReport}</span>` : "<span>亲本 · 原生谱系</span>",
+      ...children.slice(0, 12).map((child) => `<span>后代分支 · ${detailLink("species", child.id, speciesName(child), child.originRegionId)}</span>`),
+    ].join("");
+    return `<div class="detail-report"><div class="detail-title"><strong>物种报告</strong><span>${escapeHtml(speciesName(species))}</span></div><dl class="detail-grid"><div><dt>生态角色</dt><dd>${speciesRoleLabels[species.role]}</dd></div><div><dt>状态</dt><dd>${isArchivedSpecies(species) ? "已灭绝 · 历史摘要" : "现存谱系"}</dd></div><div><dt>亲本谱系</dt><dd>${parentReport}</dd></div><div><dt>起源</dt><dd>${origin}</dd></div><div><dt>归档时间</dt><dd>${archivedTime}</dd></div><div><dt>局地数量</dt><dd>${format(localCount)} 个体</dd></div><div><dt>${populationLabel}</dt><dd>${format(globalCount)} 个体</dd></div><div><dt>最后活动区域</dt><dd>${knownRegions.length > 0 ? knownRegions.map(escapeHtml).join("、") : "未记录"}</dd></div><div><dt>后代分支</dt><dd>${format(children.length)} 支</dd></div><div><dt>适应温度</dt><dd>${formatPercent(species.traits.temperatureOptimum ?? 0).value}%</dd></div><div><dt>适应湿度</dt><dd>${formatPercent(species.traits.humidityOptimum ?? 0).value}%</dd></div><div><dt>移动性</dt><dd>${formatPercent(species.traits.mobility ?? 0).value}%</dd></div><div><dt>认知潜力</dt><dd>${formatPercent(species.traits.cognitivePotential ?? 0).value}%</dd></div></dl><section class="organization-governance" aria-label="生命谱系"><div class="detail-heading"><strong>演化谱系</strong><span>亲本、后代与最后活动范围</span></div><div class="detail-tags">${lineageTags || "<span>未记录分支</span>"}</div></section><section class="organization-governance" aria-label="生命蓝图"><div class="detail-heading"><strong>原创生命蓝图</strong><span>可遗传、可分化、可追溯</span></div><div class="detail-tags"><span>生化基础 · ${lifeBiochemistryLabels[blueprint.biochemistry]}</span><span>遗传载体 · ${geneticCarrierLabels[blueprint.geneticCarrier]}</span><span>细胞结构 · ${cellArchitectureLabels[blueprint.cellArchitecture]}</span><span>代谢方式 · ${metabolismLabels[blueprint.metabolism]}</span><span>身体结构 · ${bodyStructureLabels[blueprint.bodyPlan.structure]}</span><span>身体对称 · ${bodySymmetryLabels[blueprint.bodyPlan.symmetry]}</span><span>移动方式 · ${locomotionLabels[blueprint.bodyPlan.locomotion]}</span><span>附肢对数 · ${format(blueprint.bodyPlan.appendagePairs)}</span><span>感官系统 · ${blueprint.senses.map((sense) => sensoryLabels[sense]).join("、")}</span><span>繁殖方式 · ${reproductionLabels[blueprint.reproduction]}</span><span>寿命 · ${formatNumber(blueprint.lifespanYears, 1)} 年</span><span>成体尺度 · ${formatNumber(blueprint.adultScale, 2)}</span><span>代谢效率 · ${formatPercent(blueprint.metabolicEfficiency).value}%</span><span>繁殖力 · ${formatPercent(blueprint.fecundity).value}%</span><span>热耐受 · ${formatPercent(blueprint.thermalTolerance).value}%</span><span>保水性 · ${formatPercent(blueprint.hydrationRetention).value}%</span><span>突变率 · ${formatPercent(blueprint.mutationRate).value}%</span><span>遗传保真度 · ${formatPercent(blueprint.inheritanceFidelity).value}%</span><span>创新签名 · ${escapeHtml(blueprint.noveltySignature)}</span></div></section></div>`;
   }
   if (detail.level === "population") {
     const population = snapshot.populations?.find((candidate) => candidate.id === detail.id);
@@ -580,6 +861,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const reserve = entity.resourceBalances["attunement-energy"] ?? 0;
     return `<div class="detail-report"><div class="detail-title"><strong>流派报告</strong><span>${escapeHtml(entity.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(entity.name ?? worldviewEntityLabels[entity.kind])}</dd></div><div><dt>类型</dt><dd>${worldviewEntityLabels[entity.kind]}</dd></div><div><dt>状态</dt><dd>${status}</dd></div><div><dt>影响力</dt><dd>${formatPercent(entity.influence).value}%</dd></div><div><dt>存续度</dt><dd>${formatPercent(entity.viability ?? entity.influence).value}%</dd></div><div><dt>成员</dt><dd>${format(members.length)} 人</dd></div><div><dt>支持者</dt><dd>${format(entity.supporterCount ?? members.length)} 人</dd></div><div><dt>活跃修行者</dt><dd>${format(entity.activePractitionerCount ?? 0)} 人</dd></div><div><dt>赞助组织</dt><dd>${format(entity.sponsorCount ?? (entity.sponsorOrganizationId ? 1 : 0))} 个</dd></div><div><dt>复兴次数</dt><dd>${format(entity.revivalCount ?? 0)} 次</dd></div><div><dt>创始者</dt><dd>${entity.founderId ? escapeHtml(entity.founderId.slice(-8)) : "集体形成"}</dd></div><div><dt>依据规律</dt><dd>${phenomenon ? escapeHtml(phenomenon.name) : "历史规律记录"}</dd></div><div><dt>赞助组织</dt><dd>${sponsor ? escapeHtml(organizationName(sponsor)) : entity.sponsorOrganizationId ? escapeHtml(entity.sponsorOrganizationId.slice(-8)) : "自主维持"}</dd></div><div><dt>能量储备</dt><dd>${formatNumber(reserve * 100, 1)} 单位</dd></div><div><dt>形成时间</dt><dd>${entity.originTick === undefined ? "旧历史记录" : `演化步 ${format(entity.originTick)}`}</dd></div></dl><div class="detail-tags">${members.length > 0 ? members.slice(0, 16).map((id) => `<span>成员 · ${escapeHtml(id.slice(-8))}</span>`).join("") : "<span>当前没有在世传承者</span>"}</div></div>`;
   }
+  if (detail.level === "facility") return facilityDetailReport(snapshot, detail.id);
   if (detail.level === "agent") {
     const agent = projection?.agents.find((candidate) => candidate.id === detail.id);
     if (!agent) return `<div class="empty-state"><strong>对象暂不可用</strong><span>该实体可能已在下一次快照中离开当前区域</span></div>`;
@@ -595,7 +877,23 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const workforceId = agent.sourceId ?? agent.id;
     const workplaces = (snapshot.facilities ?? []).filter((facility) => facility.workforceIds.includes(workforceId));
     const occupationReport = `<section class="organization-governance" aria-label="职业与工作"><div class="detail-heading"><strong>职业与工作</strong><span>${workplaces.length > 0 ? `${format(workplaces.length)} 项在岗记录` : "当前未分配设施岗位"}</span></div><div class="detail-tags">${workplaces.length > 0 ? workplaces.map((facility) => `<span>${knowledgeDomainLabels[facility.type]}岗位 · ${escapeHtml(facility.id.slice(-8))} · 设施效能 ${formatPercent(facilityOperationalEffect(facility)).value}%</span>`).join("") : "<span>无设施岗位</span>"}</div></section>`;
-    return `<div class="detail-report"><div class="detail-title"><strong>个人报告</strong><span>${escapeHtml(agent.id)}</span></div><dl class="detail-grid"><div><dt>年龄 / 寿命</dt><dd>${format(agent.age)} / ${format(agent.lifespan)} 年</dd></div><div><dt>生物谱系</dt><dd>${species ? escapeHtml(species.name ?? species.id.slice(-8)) : "未同步"}</dd></div>${blueprint ? `<div><dt>遗传载体</dt><dd>${geneticCarrierLabels[blueprint.geneticCarrier]}</dd></div><div><dt>代谢方式</dt><dd>${metabolismLabels[blueprint.metabolism]}</dd></div>` : ""}<div><dt>家庭</dt><dd>${family ? escapeHtml(organizationName(family)) : "未归属"}</dd></div><div><dt>父母</dt><dd>${format(agent.parentIds.length)} 人</dd></div><div><dt>后代</dt><dd>${format(descendants)} 人</dd></div><div><dt>关系</dt><dd>${format(relationships.length)} 条</dd></div><div><dt>知识 / 信念</dt><dd>${format(agent.knowledgeIds.length)} 条 / ${format(agent.beliefIds.length)} 条</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div></dl><div class="detail-tags">${Object.entries(agent.skills).map(([skill, value]) => `<span>${escapeHtml(skillLabel(skill))} ${formatPercent(value).value}%</span>`).join("")}${knowledge.slice(0, 8).map((record) => `<span>${record.domain ? `${knowledgeDomainLabels[record.domain]} · ` : ""}${escapeHtml(knowledgeName(record))}</span>`).join("")}</div>${occupationReport}${technologyEffectsReport(technology)}</div>`;
+    const geneticFitness = species ? (() => {
+      const match = /^region:(\d+):(\d+)$/.exec(agent.regionId);
+      const x = Math.max(0, Math.min(snapshot.fields.elevation.width - 1, Number(match?.[1] ?? 0)));
+      const y = Math.max(0, Math.min(snapshot.fields.elevation.height - 1, Number(match?.[2] ?? 0)));
+      const index = y * snapshot.fields.elevation.width + x;
+      return geneticEnvironmentFitness(
+        agent,
+        species,
+        snapshot.fields.temperature.values[index] ?? 0.5,
+        snapshot.fields.humidity.values[index] ?? 0.5,
+      );
+    })() : undefined;
+    const genetics = agent.genetics;
+    const geneticReport = `<section class="organization-governance personal-genetics" aria-label="个体遗传"><div class="detail-heading"><strong>遗传与适应</strong><span>${genetics ? `第 ${format(genetics.generation)} 代 · 谱系 ${escapeHtml(genetics.lineageSignature)}` : "旧记录尚无遗传摘要"}</span></div><dl class="detail-grid"><div><dt>本代突变</dt><dd>${format(genetics?.mutationCount ?? 0)} 项</dd></div><div><dt>亲本差异</dt><dd>${formatPercent(genetics?.parentDivergence ?? 0).value}%</dd></div><div><dt>遗传保真度</dt><dd>${formatPercent(genetics?.inheritanceFidelity ?? blueprint?.inheritanceFidelity ?? 0).value}%</dd></div><div><dt>当地适应度</dt><dd>${formatPercent(geneticFitness?.fitness ?? 0).value}%</dd></div><div><dt>温度压力</dt><dd>${formatPercent(geneticFitness?.thermalStress ?? 0).value}%</dd></div><div><dt>水分压力</dt><dd>${formatPercent(geneticFitness?.hydrationStress ?? 0).value}%</dd></div></dl><div class="detail-tags">${HERITABLE_AGENT_TRAITS.map((trait) => `<span>${geneticTraitLabels[trait]} ${formatPercent(agent.traits[trait] ?? 0).value}%</span>`).join("")}</div></section>`;
+    const infectionRecords = (agent.health?.infections ?? []).map((infection) => ({ infection, pathogen: snapshot.pathogens?.find((pathogen) => pathogen.id === infection.pathogenId) }));
+    const personalHealthReport = `<section class="organization-governance personal-health" aria-label="个人健康"><div class="detail-heading"><strong>个人健康</strong><span>${infectionRecords.length > 0 ? `${format(infectionRecords.length)} 项活动感染` : "当前没有活动感染"}</span></div><dl class="detail-grid"><div><dt>生命活力</dt><dd>${formatPercent(agent.health?.vitality ?? 1).value}%</dd></div><div><dt>免疫记录</dt><dd>${format(agent.health?.immunityIds.length ?? 0)} 种</dd></div></dl><div class="detail-tags">${infectionRecords.length > 0 ? infectionRecords.map(({ infection, pathogen }) => `<span>${escapeHtml(pathogen?.name ?? infection.pathogenId.slice(-8))} · 病程强度 ${formatPercent(infection.severity).value}%</span>`).join("") : "<span>健康状态稳定</span>"}</div></section>`;
+    return `<div class="detail-report"><div class="detail-title"><strong>个人报告</strong><span>${escapeHtml(agent.id)}</span></div><dl class="detail-grid"><div><dt>年龄 / 寿命</dt><dd>${format(agent.age)} / ${format(agent.lifespan)} 年</dd></div><div><dt>生物谱系</dt><dd>${species ? escapeHtml(species.name ?? species.id.slice(-8)) : "未同步"}</dd></div>${blueprint ? `<div><dt>遗传载体</dt><dd>${geneticCarrierLabels[blueprint.geneticCarrier]}</dd></div><div><dt>代谢方式</dt><dd>${metabolismLabels[blueprint.metabolism]}</dd></div>` : ""}<div><dt>健康活力</dt><dd>${formatPercent(agent.health?.vitality ?? 1).value}%</dd></div><div><dt>活动感染</dt><dd>${format(infectionRecords.length)} 项</dd></div><div><dt>家庭</dt><dd>${family ? escapeHtml(organizationName(family)) : "未归属"}</dd></div><div><dt>父母</dt><dd>${format(agent.parentIds.length)} 人</dd></div><div><dt>后代</dt><dd>${format(descendants)} 人</dd></div><div><dt>关系</dt><dd>${format(relationships.length)} 条</dd></div><div><dt>知识 / 信念</dt><dd>${format(agent.knowledgeIds.length)} 条 / ${format(agent.beliefIds.length)} 条</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div></dl><div class="detail-tags">${Object.entries(agent.skills).map(([skill, value]) => `<span>${escapeHtml(skillLabel(skill))} ${formatPercent(value).value}%</span>`).join("")}${knowledge.slice(0, 8).map((record) => `<span>${record.domain ? `${knowledgeDomainLabels[record.domain]} · ` : ""}${escapeHtml(knowledgeName(record))}</span>`).join("")}</div>${geneticReport}${personalHealthReport}${occupationReport}${technologyEffectsReport(technology)}</div>`;
   }
   const organization = organizationForSnapshot(snapshot, detail.id);
   if (!organization) return `<div class="empty-state"><strong>组织暂不可用</strong><span>该组织可能已在下一次快照中发生演化</span></div>`;
@@ -608,10 +906,10 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
   const relationshipCount = localRelationships.length > 0 || projection?.organizations.some((candidate) => candidate.id === organization.id)
     ? localRelationships.length
     : directoryRelationshipCount;
-  const heldResources = resourcesForOrganization(snapshot, organization.id);
-  const food = heldResources.filter((resource) => resource.resourceId === "food").reduce((sum, resource) => sum + resource.amount, 0);
-  const materials = heldResources.filter((resource) => resource.resourceId === "materials").reduce((sum, resource) => sum + resource.amount, 0);
-  const energy = heldResources.filter((resource) => resource.resourceId === "energy").reduce((sum, resource) => sum + resource.amount, 0);
+  const organizationBalances = resourceBalancesForOrganization(snapshot, organization);
+  const food = organizationBalances.food ?? 0;
+  const materials = organizationBalances.materials ?? 0;
+  const energy = organizationBalances.energy ?? 0;
   const governance = governanceForOrganization({ type: organization.type, ...(organization.governance ? { governance: organization.governance } : {}) });
   const diplomacy = Object.entries(organization.diplomacy ?? {})
     .filter(([, stance]) => stance !== "neutral")
@@ -625,11 +923,38 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
   const jurisdiction = new Set(organization.territoryRegionIds);
   const facilities = (snapshot.facilities ?? []).filter((facility) => facility.ownerOrganizationId === organization.id || jurisdiction.has(facility.regionId));
   const substances = (snapshot.substances ?? []).filter((substance) => jurisdiction.has(substance.regionId));
+  const jurisdictionPathogenRecords = (snapshot.pathogens ?? []).map((pathogen) => {
+    const outbreaks = [...jurisdiction]
+      .map((regionId) => pathogenOutbreakForRegion(pathogen, regionId))
+      .filter((outbreak): outbreak is NonNullable<typeof outbreak> => Boolean(outbreak))
+      .sort((left, right) => right.prevalence - left.prevalence || left.regionId.localeCompare(right.regionId));
+    return { pathogen, outbreak: outbreaks[0] };
+  }).filter((record) => Boolean(record.outbreak));
+  const projectedMembers = projection?.agents.filter((agent) => memberIds.includes(agent.id) || (agent.sourceId ? memberIds.includes(agent.sourceId) : false)) ?? [];
+  const infectedMembers = projectedMembers.filter((agent) => (agent.health?.infections.length ?? 0) > 0).length;
+  const jurisdictionPrevalence = Math.max(0, ...jurisdictionPathogenRecords.map((record) => record.outbreak?.prevalence ?? 0));
+  const publicHealthReport = `<section class="organization-governance public-health" aria-label="组织公共健康"><div class="detail-heading"><strong>公共健康</strong><span>医疗知识和设施会抑制传播、重症与死亡</span></div><dl class="detail-grid"><div><dt>辖区病原体</dt><dd>${format(jurisdictionPathogenRecords.length)} 种</dd></div><div><dt>最高流行率</dt><dd>${formatPercent(jurisdictionPrevalence).value}%</dd></div><div><dt>可观察感染成员</dt><dd>${format(infectedMembers)} 人</dd></div><div><dt>医养技术</dt><dd>${formatPercent(technology.medicine).value}%</dd></div></dl><div class="detail-tags">${jurisdictionPathogenRecords.length > 0 ? jurisdictionPathogenRecords.slice(0, 8).map(({ pathogen, outbreak }) => `<span>${escapeHtml(pathogen.name)} · ${pathogenStatusLabels[outbreak!.status]} · ${formatPercent(outbreak!.prevalence).value}%</span>`).join("") : "<span>辖区尚无已记录疫情</span>"}</div></section>`;
   const recentHistoryCount = summaryOrganization?.historyIds.length ?? ("historyCount" in organization ? organization.historyCount : 0);
-  const archivedHistoryCount = Math.max(summaryOrganization?.archivedHistoryCount ?? 0, organization.archivedHistoryCount ?? 0);
+  const archivedHistoryCount = isArchivedOrganization(organization)
+    ? 0
+    : Math.max(summaryOrganization?.archivedHistoryCount ?? 0, organization.archivedHistoryCount ?? 0);
   const childIds = organizationChildIds(organization);
   const status = "status" in organization ? organization.status : "active";
-  return `<div class="detail-report"><div class="detail-title"><strong>${organizationLabels[organization.type]}报告</strong><span>${escapeHtml(organization.id)}</span></div><dl class="detail-grid"><div><dt>成员</dt><dd>${format(memberCount)} 人</dd></div><div><dt>状态</dt><dd>${status === "active" ? "活跃" : status}</dd></div><div><dt>领土</dt><dd>${format(organization.territoryRegionIds.length)} 格</dd></div><div><dt>下属组织</dt><dd>${format(childIds.length)} 个</dd></div><div><dt>内部关系</dt><dd>${format(relationshipCount)} 条</dd></div><div><dt>食物资源</dt><dd>${formatResource(food).value} ${formatResource(food).unit}</dd></div><div><dt>建造材料</dt><dd>${formatNumber(materials, 1)} 材料单位</dd></div><div><dt>能源储备</dt><dd>${formatNumber(energy, 2)} 能源单位</dd></div><div><dt>谱系 / 知识</dt><dd>${familyLineage ? `${format(familyLineage.generationDepth)} 代 / ${format(familyLineage.knowledgeInheritanceCount)} 条` : "聚合统计"}</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div><div><dt>原创物质</dt><dd>${format(substances.length)} 种</dd></div><div><dt>可追溯事件</dt><dd>${format(recentHistoryCount + archivedHistoryCount)} 条${archivedHistoryCount > 0 ? `（${format(archivedHistoryCount)} 条已归档）` : ""}</dd></div><div><dt>中心区域</dt><dd>${escapeHtml(organization.regionId)}</dd></div></dl><div class="detail-tags">${organization.territoryRegionIds.slice(0, 12).map((id) => `<span>${escapeHtml(id)}</span>`).join("") || "<span>暂无领土记录</span>"}</div>${technologyReport}${technologyEffectsReport(technology)}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}${supplyChainReport(snapshot, organization, { food, materials, energy })}${governanceReport}</div>`;
+  const statusLabels = { active: "活跃", migrating: "迁徙中", fragmenting: "分裂中", collapsed: "已解体" } as const;
+  const archiveReport = isArchivedOrganization(organization)
+    ? `<section class="organization-governance organization-archive" aria-label="历史组织摘要"><div class="detail-heading"><strong>历史组织摘要</strong><span>${organization.archiveReason === "capacity" ? "因运行容量限制归档" : "因组织生命周期结束归档"}</span></div><dl class="detail-grid"><div><dt>归档时间</dt><dd>${organization.archivedTimelineDays ? formatSimulationAgeFromDays(organization.archivedTimelineDays) : formatSimulationAge(organization.archivedYears)}</dd></div><div><dt>归档状态</dt><dd>${statusLabels[organization.status]}</dd></div><div><dt>历史事件</dt><dd>${format(organization.historyCount)} 条</dd></div><div><dt>保留成员</dt><dd>${format(organization.memberIds.length)} / ${format(organization.memberCount)} 人</dd></div></dl></section>`
+    : "";
+  return `<div class="detail-report"><div class="detail-title"><strong>${organizationLabels[organization.type]}报告</strong><span>${escapeHtml(organization.id)}</span></div>${archiveReport}<dl class="detail-grid"><div><dt>成员</dt><dd>${format(memberCount)} 人</dd></div><div><dt>状态</dt><dd>${statusLabels[status]}</dd></div><div><dt>领土</dt><dd>${format(organization.territoryRegionIds.length)} 格</dd></div><div><dt>下属组织</dt><dd>${format(childIds.length)} 个</dd></div><div><dt>内部关系</dt><dd>${format(relationshipCount)} 条</dd></div><div><dt>食物资源</dt><dd>${formatResource(food).value} ${formatResource(food).unit}</dd></div><div><dt>建造材料</dt><dd>${formatNumber(materials, 1)} 材料单位</dd></div><div><dt>能源储备</dt><dd>${formatNumber(energy, 2)} 能源单位</dd></div><div><dt>谱系 / 知识</dt><dd>${familyLineage ? `${format(familyLineage.generationDepth)} 代 / ${format(familyLineage.knowledgeInheritanceCount)} 条` : "聚合统计"}</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div><div><dt>原创物质</dt><dd>${format(substances.length)} 种</dd></div><div><dt>病原体记录</dt><dd>${format(jurisdictionPathogenRecords.length)} 种</dd></div><div><dt>可追溯事件</dt><dd>${format(recentHistoryCount + archivedHistoryCount)} 条${archivedHistoryCount > 0 ? `（${format(archivedHistoryCount)} 条已归档）` : ""}</dd></div><div><dt>中心区域</dt><dd>${escapeHtml(organization.regionId)}</dd></div></dl><div class="detail-tags">${organization.territoryRegionIds.slice(0, 12).map((id) => `<span>${escapeHtml(id)}</span>`).join("") || "<span>暂无领土记录</span>"}</div>${organizationNavigationReport(snapshot, organization, memberIds, projectedMembers)}${publicHealthReport}${technologyReport}${technologyEffectsReport(technology)}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}${supplyChainReport(snapshot, organization, { food, materials, energy })}${governanceReport}</div>`;
+};
+
+const pathogenRegionalSpreadReport = (snapshot: WorldSnapshot, detail: InspectorDetail): string => {
+  if (detail.level !== "pathogen" || !detail.id) return "";
+  const pathogen = snapshot.pathogens?.find((candidate) => candidate.id === detail.id);
+  if (!pathogen) return "";
+  const outbreaks = [...pathogen.regionalOutbreaks]
+    .sort((left, right) => Number(right.status === "outbreak") - Number(left.status === "outbreak") || right.prevalence - left.prevalence || left.regionId.localeCompare(right.regionId));
+  const activeCount = outbreaks.filter((outbreak) => outbreak.status !== "dormant").length;
+  return `<section class="organization-governance public-health" aria-label="跨区域疫情"><div class="detail-heading"><strong>跨区域疫情</strong><span>${format(activeCount)} 个活跃区域 · ${format(outbreaks.length)} 个历史落点</span></div><div class="detail-tags">${outbreaks.slice(0, 16).map((outbreak) => `<span>${escapeHtml(outbreak.regionId)} · ${pathogenStatusLabels[outbreak.status]} · ${formatPercent(outbreak.prevalence).value}%</span>`).join("") || "<span>尚未建立区域传播记录</span>"}</div></section>`;
 };
 
 export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, selection?: CellSelection, detail: InspectorDetail = { level: "region" }): void => {
@@ -675,7 +1000,13 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
   }))).slice(0, 3).map((family, index) => `
     <li><span>家庭 ${String(index + 1).padStart(2, "0")} · ${format(family.relationshipCount)} 关系</span><strong>${format(family.memberCount)} 名成员 · ${format(family.descendantCount)} 后代 · ${format(family.knowledgeInheritanceCount)} 条知识</strong></li>
   `).join("");
-  const entityHistory = isOrganizationDetailLevel(detail.level) && detail.id ? regionalHistoryReport(snapshot, detail.id) : "";
+  const entityHistory = isOrganizationDetailLevel(detail.level) && detail.id
+    ? `${regionalHistoryReport(snapshot, detail.id)}${objectHistoryReport(snapshot, detail)}`
+    : objectHistoryReport(snapshot, detail);
+  const seasonLabels = { spring: "春季", summer: "夏季", autumn: "秋季", winter: "冬季" } as const;
+  const seasonalOffset = snapshot.orbital
+    ? seasonalTemperatureOffset(snapshot.orbital, selection.y, fields.elevation.height)
+    : undefined;
   element.innerHTML = `
     <div class="inspector-head"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
     <section class="observation-group" aria-label="区域地表">
@@ -685,6 +1016,8 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
         ${observationMetric("模型温度", formatModelTemperature(fields.temperature.values[selection.index]), "换算温标")}
         ${observationMetric("地表水量", formatIndex(fields.water.values[selection.index]), "相对指数")}
         ${observationMetric("空气湿度", formatPercent(fields.humidity.values[selection.index]))}
+        ${snapshot.orbital ? observationMetric("当前季节", { value: seasonLabels[snapshot.orbital.season], unit: "" }) : ""}
+        ${seasonalOffset === undefined ? "" : observationMetric("季节温度偏置", { value: formatNumber(seasonalOffset * 100, 1), unit: "模型点" }, "由轴倾角与纬度决定")}
       </dl>
     </section>
     <section class="observation-group" aria-label="区域生态">
@@ -774,7 +1107,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
       <div class="detail-heading"><strong>层级详情报告</strong><span>可查看当前区域的社会实体</span></div>
       <nav class="detail-tabs" aria-label="详情层级">${detailLevels.map((level) => `<button type="button" data-detail-level="${level}" class="detail-tab${detail.level === level ? " active" : ""}">${detailLevelLabel(level)}</button>`).join("")}</nav>
       <select class="detail-target" data-detail-target aria-label="选择详情对象">${targetOptions}</select>
-      <div class="detail-report-container">${detailReport(snapshot, detail, lineage)}${entityHistory}</div>
+      <div class="detail-report-container">${detailReport(snapshot, detail, lineage)}${detail.level === "region" ? "" : ecologicalRelationshipReport(snapshot, snapshot.focusRegionId, detail.level === "species" ? detail.id : undefined)}${pathogenRegionalSpreadReport(snapshot, detail)}${entityHistory}</div>
     </section>
   `;
 };

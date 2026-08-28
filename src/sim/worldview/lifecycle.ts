@@ -5,6 +5,8 @@ import type {
   WorldviewPracticeState,
 } from "../types.ts";
 import { getWorldviewPack } from "./registry.ts";
+import { addPersistentTotal } from "../numeric.ts";
+import { nextSimulationStep, nextSimulationTick } from "../time.ts";
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 const practiceKey = (packId: string, regionId: string, phenomenonId?: string): string =>
@@ -60,7 +62,8 @@ const activeFor = (
 export const reconcileWorldviewLifecycle = (state: WorldState): WorldEventDraft[] => {
   if (state.worldview.entities.length === 0) return [];
 
-  const nextTick = state.tick + 1;
+  const nextTick = nextSimulationTick(state);
+  const nextStep = nextSimulationStep(state);
   const agentIds = new Set(state.agents.map((agent) => agent.id));
   const activeOrganizations = new Map(
     state.organizations
@@ -164,9 +167,10 @@ export const reconcileWorldviewLifecycle = (state: WorldState): WorldEventDraft[
       sponsorCount: sponsorIds.size,
       viability,
       lastStatusChangeTick: changed ? nextTick : (entity.lastStatusChangeTick ?? entity.originTick ?? nextTick),
-      ...(status === "active" ? { lastActiveTick: nextTick } : entity.lastActiveTick === undefined ? {} : { lastActiveTick: entity.lastActiveTick }),
-      ...(status === "dormant" ? { dormantSinceTick: changed ? nextTick : (entity.dormantSinceTick ?? nextTick) } : {}),
-      revivalCount: Math.max(0, entity.revivalCount ?? 0) + (revived ? 1 : 0),
+      lastStatusChangeTimelineStep: changed ? nextStep : (entity.lastStatusChangeTimelineStep ?? entity.originTimelineStep ?? nextStep),
+      ...(status === "active" ? { lastActiveTick: nextTick, lastActiveTimelineStep: nextStep } : entity.lastActiveTick === undefined ? {} : { lastActiveTick: entity.lastActiveTick }),
+      ...(status === "dormant" ? { dormantSinceTick: changed ? nextTick : (entity.dormantSinceTick ?? nextTick), dormantSinceTimelineStep: changed ? nextStep : (entity.dormantSinceTimelineStep ?? nextStep) } : {}),
+      revivalCount: addPersistentTotal(entity.revivalCount ?? 0, revived ? 1 : 0),
       ...(sponsorOrganizationId ? { sponsorOrganizationId } : {}),
     };
     if (!sponsorOrganizationId) delete next.sponsorOrganizationId;

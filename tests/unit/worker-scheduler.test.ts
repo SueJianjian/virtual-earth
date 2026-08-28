@@ -27,4 +27,16 @@ describe("worker simulation scheduler", () => {
     });
     expect(scheduledStepBatch(999, 1_000, 64)).toEqual({ count: 0, nextStepAtMs: 1_000 });
   });
+
+  it("falls back to a bounded batch for invalid limits", () => {
+    const interval = simulationStepIntervalMs(64);
+    expect(scheduledStepBatch(1_000 + interval * 100, 1_000, 64, Number.NaN)).toEqual({
+      count: MAX_SCHEDULED_STEP_BATCH,
+      nextStepAtMs: 1_000 + interval * 100 + interval,
+    });
+    expect(scheduledStepBatch(1_000 + interval * 2, 1_000, 64, 0)).toEqual({
+      count: 1,
+      nextStepAtMs: 1_000 + interval * 3,
+    });
+  });
 });

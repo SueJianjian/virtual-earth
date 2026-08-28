@@ -5,6 +5,7 @@ import { createRandom } from "../../src/sim/random.ts";
 import { nextPopulationCount } from "../../src/sim/ecology/populations.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import type { RuleContext } from "../../src/sim/types.ts";
+import { createAgent } from "../../src/sim/agents/lifecycle.ts";
 
 const ecologyContext = (state: ReturnType<typeof createWorld>): RuleContext => ({
   state,
@@ -99,6 +100,22 @@ describe("emergent ecology", () => {
 
     expect(second.species.filter((species) => species.role !== "producer").length).toBeGreaterThanOrEqual(0);
     expect(second.species.every((species) => species.role === "producer" || species.parentId)).toBe(true);
+  });
+
+  it("replays the indexed ecological step deterministically", () => {
+    const source = initializeEnvironment(createWorld(307, { width: 8, height: 8, formation: "formed" }));
+    const producer = { id: "species:indexed-producer" as never, role: "producer" as const, traits: { energyUse: 0.2, reproduction: 0.3, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 0.8, cognitivePotential: 0 } };
+    const consumer = { id: "species:indexed-consumer" as never, role: "consumer" as const, traits: { energyUse: 0.2, reproduction: 0.3, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 0.6, cognitivePotential: 0 } };
+    source.species = [producer, consumer];
+    source.populations = [
+      { id: "population:indexed-producer" as never, speciesId: producer.id, regionId: "region:2:2" as never, count: 1_000, energy: 1 },
+      { id: "population:indexed-consumer" as never, speciesId: consumer.id, regionId: "region:2:2" as never, count: 200, energy: 1 },
+    ];
+    source.resources = [{ id: "resource:indexed-food", resourceId: "food", regionId: "region:3:2" as never, amount: 12, cap: 20, originEventId: "test" }];
+
+    const left = structuredClone(source);
+    const right = structuredClone(source);
+    expect(stepEcology(left, ecologyContext(left))).toEqual(stepEcology(right, ecologyContext(right)));
   });
 
   it("reduces populations when conditions and food are poor", () => {
@@ -263,6 +280,12 @@ describe("emergent ecology", () => {
       state.fields.humidity.values.fill(0);
       state.species = [species];
       state.populations = [population];
+      state.agents = [createAgent(population, species, 0, "adaptive-sample"), createAgent(population, species, 1, "adaptive-sample")];
+      for (const agent of state.agents) {
+        agent.traits.metabolicEfficiency = 0.9;
+        agent.traits.thermalTolerance = 0.85;
+        agent.traits.hydrationRetention = 0.8;
+      }
       const delta = stepEcology(state, ecologyContext(state));
       return { state, species, population, delta };
     }).find(({ delta }) => delta.eventDrafts.some((event) => event.kind === "species-divergence"));
@@ -283,7 +306,7 @@ describe("emergent ecology", () => {
     expect(outcome?.delta.eventDrafts).toContainEqual(expect.objectContaining({
       kind: "species-divergence",
       ruleId: "ecology:adaptive-speciation",
-      evidence: expect.objectContaining({ branchCount: childPopulation?.count }),
+      evidence: expect.objectContaining({ branchCount: childPopulation?.count, selectedSampleSize: 2, selectedMetabolicEfficiency: 0.9 }),
     }));
   });
 
@@ -297,11 +320,45 @@ describe("emergent ecology", () => {
         role: "consumer" as const,
         traits: { energyUse: 0.2, reproduction: 0.3, temperatureOptimum: 1, humidityOptimum: 1, mobility: 0, cognitivePotential: 0.2 },
       }));
-      state.populations = [{ id: `population:capped-consumer:${seed}` as never, speciesId: state.species[0]!.id, regionId: "region:3:3" as never, count: 10_000, energy: 1 }];
+      state.populations = state.species.map((species, index) => ({
+        id: `population:capped-consumer:${seed}:${index}` as never,
+        speciesId: species.id,
+        regionId: `region:${index + 1}:3` as never,
+        count: index === 0 ? 10_000 : 4,
+        energy: 1,
+      }));
       return stepEcology(state, ecologyContext(state));
     });
 
     expect(outcomes.every((delta) => delta.eventDrafts.every((event) => event.kind !== "species-divergence"))).toBe(true);
+  });
+
+  it("refills an open ecological niche after historical lineages go extinct", () => {
+    const outcome = Array.from({ length: 256 }, (_, seed) => {
+      const state = initializeEnvironment(createWorld(1_800 + seed, { width: 8, height: 8, formation: "formed" }));
+      state.fields.temperature.values.fill(0);
+      state.fields.humidity.values.fill(0);
+      state.species = Array.from({ length: 5 }, (_, index) => ({
+        id: `species:historical-consumer:${seed}:${index}` as never,
+        role: "consumer" as const,
+        traits: { energyUse: 0.2, reproduction: 0.3, temperatureOptimum: 1, humidityOptimum: 1, mobility: 0, cognitivePotential: 0.2 },
+      }));
+      state.populations = [{
+        id: `population:surviving-consumer:${seed}` as never,
+        speciesId: state.species[0]!.id,
+        regionId: "region:3:3" as never,
+        count: 10_000,
+        energy: 1,
+      }];
+      return stepEcology(state, ecologyContext(state));
+    }).find((delta) => delta.eventDrafts.some((event) => event.kind === "species-divergence"));
+
+    expect(outcome).toBeDefined();
+    expect(outcome?.entityEffects).toContainEqual(expect.objectContaining({
+      collection: "species",
+      operation: "create",
+      value: expect.objectContaining({ role: "consumer" }),
+    }));
   });
 
   it("splits a large mobile population into a conserved neighboring branch", () => {

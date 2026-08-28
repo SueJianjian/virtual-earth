@@ -1,4 +1,5 @@
 import { forkRandom, randomFloat } from "../random.ts";
+import { projectedYearsAfterStep, simulationCycleAngle, simulationDaysForWorld, simulationStepForWorld } from "../time.ts";
 import type { ChemistryChange, EnvironmentDelta, FieldChange, RegionId, WorldEventDraft, WorldState } from "../types.ts";
 
 export const MAX_NATURAL_HAZARDS_PER_STEP = 3;
@@ -35,8 +36,13 @@ const neighborsForIndex = (state: WorldState, index: number): number[] => {
 };
 
 const probabilityAcross = (annualProbability: number, elapsedYears: number): number => {
-  const years = Math.max(0, Math.min(20_000, elapsedYears));
-  return clamp(1 - Math.pow(1 - clamp(annualProbability), years));
+  const rate = clamp(annualProbability);
+  const years = Math.max(0, elapsedYears);
+  if (rate <= 0 || years <= 0) return 0;
+  if (rate >= 1) return 1;
+  // expm1/log1p preserve small probabilities without imposing an arbitrary
+  // maximum duration on a long simulation step.
+  return clamp(-Math.expm1(years * Math.log1p(-rate)));
 };
 
 const intensityFor = (score: number, threshold: number): number =>
@@ -55,7 +61,7 @@ const evaluateHazard = (
   if (score < threshold) return undefined;
   const probability = probabilityAcross(annualProbability, elapsedYears);
   const regionId = regionForIndex(state, index);
-  const [roll] = randomFloat(forkRandom(state.random, `natural-hazard:${kind}:${regionId}:${state.tick}:${state.years}`));
+  const [roll] = randomFloat(forkRandom(state.random, `natural-hazard:${kind}:${regionId}:${simulationStepForWorld(state)}`));
   if (roll >= probability) return undefined;
   return {
     kind,
@@ -102,7 +108,7 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
   const width = elevation.width;
   const height = elevation.height;
   const phase = (state.seed % 4096) / 4096 * Math.PI * 2;
-  const pulse = 0.55 + Math.sin(state.years / 180 + phase) * 0.45;
+  const pulse = 0.55 + Math.sin(simulationCycleAngle(simulationDaysForWorld(state), Math.round(180 * 2 * Math.PI * 365)) + phase) * 0.45;
   const xScale = Math.PI * 4 / Math.max(1, width);
   const yScale = Math.PI * 2 / Math.max(1, height - 1);
   const phaseOffset = phase * 0.7;
@@ -197,7 +203,7 @@ export const naturalHazardDelta = (state: WorldState, elapsedYears = 1): { hazar
       delta.fieldChanges.push(fieldChange(hazard, "temperature", -intensity * 0.025), fieldChange(hazard, "humidity", intensity * 0.12), fieldChange(hazard, "nutrients", intensity * 0.06), fieldChange(hazard, "biomass", -intensity * 0.11));
       delta.chemistryChanges.push(chemistryChange(hazard, "organics", -intensity * 0.006), chemistryChange(hazard, "phosphorus", intensity * 0.012));
     }
-    const years = state.years + Math.max(0, elapsedYears);
+    const years = projectedYearsAfterStep(state, Math.max(0, elapsedYears));
     const event: WorldEventDraft = {
       kind: hazard.kind,
       ruleId: `environment:natural-${hazard.kind}`,
@@ -216,6 +222,7 @@ export const naturalHazardDelta = (state: WorldState, elapsedYears = 1): { hazar
 };
 
 export const applyNaturalHazardWaterEffects = (state: WorldState, water: Float32Array, hazards: readonly NaturalHazard[]): Float32Array => {
+  if (!hazards.some((hazard) => hazard.kind === "drought" || hazard.kind === "flood")) return water;
   const result = new Float32Array(water);
   for (const hazard of hazards) {
     if (hazard.kind !== "drought" && hazard.kind !== "flood") continue;

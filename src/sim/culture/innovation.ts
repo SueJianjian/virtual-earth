@@ -2,6 +2,7 @@ import { forkRandom, hashString, randomFloat } from "../random.ts";
 import type { AgentState, CultureState, KnowledgeDomain, KnowledgeState, OrganizationState, RegionId, WorldEventDraft, WorldState } from "../types.ts";
 import { createKnowledge, knowledgeIdFor } from "./knowledge.ts";
 import { culturalCompatibility, cultureIdentityFor } from "./identity.ts";
+import { simulationStepForWorld, simulationStepDistance, nextSimulationStep, nextSimulationTick, projectedYearsAfterStep } from "../time.ts";
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
@@ -82,7 +83,7 @@ export const attemptKnowledgeInnovation = (
   const domainLevel = innovations.filter((knowledgeId) => knowledgeById.get(knowledgeId)?.domain === candidate.domain).length + 1;
   if (domainLevel > 6) return undefined;
   const probability = clamp(0.025 + curiosity * 0.055 + observation * 0.06 + communication * 0.025 + candidate.score * 0.035, 0, 0.16);
-  const [roll] = randomFloat(forkRandom(state.random, `innovation:${culture.id}:${candidate.domain}:${domainLevel}:${state.tick}`));
+  const [roll] = randomFloat(forkRandom(state.random, `innovation:${culture.id}:${candidate.domain}:${domainLevel}:${simulationStepForWorld(state)}`));
   if (roll >= probability) return undefined;
 
   const sources = [...members]
@@ -105,8 +106,9 @@ export const attemptKnowledgeInnovation = (
     name,
     domain: candidate.domain,
     originRegionId: culture.regionId,
-    originTick: state.tick + 1,
-    originYears: Math.floor(state.years) + 1,
+    originTick: nextSimulationTick(state),
+    originTimelineStep: nextSimulationStep(state),
+    originYears: projectedYearsAfterStep(state, 1),
     parentIds,
     credibility: clamp(base.credibility * 0.65 + candidate.score * 0.35),
     transmissionCost: clamp(base.transmissionCost + domainLevel * 0.025, 0.06, 0.72),
@@ -143,7 +145,7 @@ const organizationRegion = (organizations: ReadonlyMap<string, OrganizationState
 
 const routeKey = (first: RegionId, second: RegionId): string => [first, second].sort().join("|");
 
-export const knowledgeDiffusionRoutes = (state: Pick<WorldState, "organizations" | "events" | "tick">): DiffusionRoute[] => {
+export const knowledgeDiffusionRoutes = (state: Pick<WorldState, "organizations" | "events" | "tick"> & { timeline?: { step: string } }): DiffusionRoute[] => {
   const organizations = new Map(state.organizations.map((organization) => [String(organization.id), organization]));
   const routes = new Map<string, DiffusionRoute>();
   const add = (first: RegionId | undefined, second: RegionId | undefined, kind: DiffusionRoute["kind"], strength: number, sourceIds: string[]): void => {
@@ -162,9 +164,10 @@ export const knowledgeDiffusionRoutes = (state: Pick<WorldState, "organizations"
       else if (stance === "rival") add(organization.regionId, other.regionId, "war", 0.08, [organization.id, other.id]);
     }
   }
+  const currentStep = state.timeline?.step ?? String(state.tick);
   for (let index = state.events.length - 1; index >= 0; index -= 1) {
     const event = state.events[index];
-    if (!event || state.tick - event.tick > 16) break;
+    if (!event || simulationStepDistance(currentStep, event.timelineStep ?? String(event.tick)) > 16) break;
     const first = (event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion
       ?? organizationRegion(organizations, event.payload.fromOrganizationId ?? event.payload.leftOrganizationId)) as RegionId | undefined;
     const second = (event.payload.toRegion ?? event.evidence.toRegion ?? event.evidence.rightRegion
@@ -201,7 +204,7 @@ export const attemptKnowledgeDiffusion = (
   if (!knowledge) return undefined;
   const compatibility = culturalCompatibility(cultureIdentityFor(source), cultureIdentityFor(destination));
   const probability = clamp(route.strength * compatibility * (1 - knowledge.transmissionCost * 0.55) * (0.65 + destination.transmissionRate * 0.35), 0.01, 0.32);
-  const [roll] = randomFloat(forkRandom(state.random, `knowledge-diffusion:${source.id}:${destination.id}:${knowledge.id}:${state.tick}`));
+  const [roll] = randomFloat(forkRandom(state.random, `knowledge-diffusion:${source.id}:${destination.id}:${knowledge.id}:${simulationStepForWorld(state)}`));
   if (roll >= probability) return undefined;
   return {
     destinationCultureId: destination.id,

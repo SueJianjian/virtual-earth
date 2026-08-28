@@ -1,4 +1,4 @@
-import type { CultureIdentity, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
+import type { CultureIdentity, EcologicalRelationshipKind, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SimulationTimeline, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldHistorySample, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -8,6 +8,7 @@ export type WorkerCommand =
   | { type: "setSpeed"; multiplier: 1 | 4 | 16 | 64 }
   | { type: "applyEvent"; event: WorldEventInput }
   | { type: "focusRegion"; regionId: RegionId }
+  | { type: "checkpoint" }
   | { type: "save" }
   | { type: "load"; payload: string };
 
@@ -25,8 +26,12 @@ export type WorldSnapshot = {
   seed: number;
   tick: number;
   years: number;
+  timeline?: SimulationTimeline;
+  orbital?: WorldState["orbital"];
+  climateCycle?: WorldState["climateCycle"];
   formation: WorldState["formation"];
   eventArchive?: WorldState["eventArchive"];
+  historySamples?: WorldHistorySample[];
   runtime?: RuntimeDiagnostics;
   digest: string;
   focusRegionId?: RegionId;
@@ -34,15 +39,18 @@ export type WorldSnapshot = {
   chemistry: WorldState["chemistry"];
   metrics: Record<string, number>;
   foodSecurity?: Grid;
+  diseasePrevalence?: Grid;
   /** Legacy fixture compatibility. Runtime snapshots use the typed grid. */
   foodSecurityByRegion?: Record<string, number>;
   species?: WorldState["species"];
   populations?: WorldState["populations"];
   knowledge?: WorldState["knowledge"];
+  ecologicalRelationships?: WorldState["ecologicalRelationships"];
   cultures?: WorldState["cultures"];
   cultureIdentityByRegion?: Record<string, CultureIdentity>;
   facilities?: WorldState["facilities"];
   substances?: WorldState["substances"];
+  pathogens?: WorldState["pathogens"];
   resources?: WorldState["resources"];
   substanceRichnessByRegion?: Record<string, number>;
   organizationDirectory?: OrganizationDirectoryEntry[];
@@ -60,11 +68,15 @@ export type WorldSnapshot = {
 export type RecentRegionEvent = {
   id: string;
   tick: number;
+  timelineStep?: string;
+  timelineDays?: string;
   years?: number;
   kind: string;
   ruleId: string;
   source: WorldEvent["source"];
   sourceIds: string[];
+  /** Bounded object IDs extracted from the event payload for detail-history matching. */
+  relatedIds?: string[];
   regionIds: RegionId[];
   organizationIds: string[];
   probability: number;
@@ -129,16 +141,21 @@ export type SceneEntity = {
   cultureSignature?: string;
 };
 
+export type StrategicSceneLinkKind = "trade" | "alliance" | "migration" | "border-conflict";
 export type SceneLink = {
   fromId: string;
   toId: string;
+  fromRegion: RegionId;
+  toRegion: RegionId;
   strength: number;
-  kind: RelationshipState["kind"] | "trade" | "border-conflict";
+  scope: "personal" | "strategic";
+  kind: RelationshipState["kind"] | EcologicalRelationshipKind | StrategicSceneLinkKind;
 };
 
 export type WorkerMessage =
   | { type: "snapshot"; snapshot: WorldSnapshot; paused: boolean; speed: 1 | 4 | 16 | 64 }
   | { type: "events"; events: WorldEvent[] }
+  | { type: "autosaved"; payload: string; digest: string; timelineDays: string }
   | { type: "error"; code: string; message: string }
   | { type: "saved"; payload: string; digest: string };
 

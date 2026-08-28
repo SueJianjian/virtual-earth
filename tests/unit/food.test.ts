@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgent, foodPerCapitaForAgent, foodSecurityForAgent, foodSecurityForOrganization, meanFoodSecurity, stepAgents } from "../../src/sim/agents/index.ts";
+import { createAgent, createFoodBalanceIndex, foodPerCapitaForAgent, foodSecurityForAgent, foodSecurityForOrganization, meanFoodSecurity, stepAgents } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { metricsFor } from "../../src/sim/engine.ts";
@@ -35,6 +35,30 @@ const fixture = () => {
 };
 
 describe("food security", () => {
+  it("reuses a food index only while its organization and resource snapshots are unchanged", () => {
+    const { state, family, agents } = fixture();
+    state.resources = [{
+      id: "resource:food:cache",
+      resourceId: "food",
+      regionId: agents[0]!.regionId,
+      holderId: family.id,
+      amount: 1,
+      cap: 4,
+      originEventId: "event:food-cache",
+    }];
+    const first = createFoodBalanceIndex(state);
+
+    expect(createFoodBalanceIndex({ ...state })).toBe(first);
+    state.resources = [{ ...state.resources[0]!, amount: 2 }];
+    const afterResourceChange = createFoodBalanceIndex(state);
+    expect(afterResourceChange).not.toBe(first);
+    expect(afterResourceChange.byAgent.get(agents[0]!.id)).toBe(1);
+    state.organizations = [{ ...family, memberIds: [agents[0]!.id] }];
+    const afterOrganizationChange = createFoodBalanceIndex(state);
+    expect(afterOrganizationChange).not.toBe(afterResourceChange);
+    expect(afterOrganizationChange.byAgent.get(agents[0]!.id)).toBe(2);
+  });
+
   it("lets local biomass support an organization before food is stockpiled", () => {
     const { state, family } = fixture();
     state.fields.biomass.values[0] = 0.02;

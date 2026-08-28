@@ -6,6 +6,8 @@ import { stepTerritories } from "./territory.ts";
 import { createFoodBalanceIndex } from "../agents/food.ts";
 import { stepFacilities } from "./facilities.ts";
 import { stepSupplyChains } from "./supply.ts";
+import { minimumMembersFor } from "./organization.ts";
+import { simulationStepForWorld } from "../time.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -68,6 +70,9 @@ const merge = (target: WorldDelta, source: WorldDelta): void => {
 const resourceKey = (resourceId: string, regionId: string, holderId?: string): string =>
   `${resourceId}|${regionId}|${holderId ?? "world"}`;
 
+const entityPairKey = (leftId: string, rightId: string): string =>
+  leftId < rightId ? `${leftId}\0${rightId}` : `${rightId}\0${leftId}`;
+
 const addEconomy = (state: WorldState, delta: WorldDelta, organizations: OrganizationState[]): void => {
   const balances = new Map<string, number>();
   for (const resource of state.resources) {
@@ -93,7 +98,7 @@ const addEconomy = (state: WorldState, delta: WorldDelta, organizations: Organiz
       if (worldFood <= 0.001) break;
       const amount = Math.min(worldFood, Math.max(0.05, Math.min(1, organization.memberIds.length * 0.02)));
       delta.resourceTransactions.push({
-        id: `resource:food:allocation:${state.tick}:${organization.id}`,
+        id: `resource:food:allocation:${simulationStepForWorld(state)}:${organization.id}`,
         resourceId: "food",
         regionId: regionId as WorldState["organizations"][number]["regionId"],
         amount,
@@ -114,7 +119,7 @@ const addEconomy = (state: WorldState, delta: WorldDelta, organizations: Organiz
       const amount = Math.min(0.25, available * 0.1);
       if (amount <= 0.001) continue;
       delta.resourceTransactions.push({
-        id: `resource:food:trade:${state.tick}:${from.id}:${to.id}`,
+          id: `resource:food:trade:${simulationStepForWorld(state)}:${from.id}:${to.id}`,
         resourceId: "food",
         regionId: regionId as WorldState["organizations"][number]["regionId"],
         amount,
@@ -143,7 +148,7 @@ const addEconomy = (state: WorldState, delta: WorldDelta, organizations: Organiz
       const amount = Math.min(available, Math.max(0.01, Math.min(0.2, organization.memberIds.length * 0.002)));
       if (amount <= 0.001) continue;
       delta.resourceTransactions.push({
-        id: `resource:food:consume:${state.tick}:${organization.id}`,
+        id: `resource:food:consume:${simulationStepForWorld(state)}:${organization.id}`,
         resourceId: "food",
         regionId: regionId as WorldState["organizations"][number]["regionId"],
         amount,
@@ -159,6 +164,10 @@ const addEconomy = (state: WorldState, delta: WorldDelta, organizations: Organiz
 };
 
 const addConflicts = (state: WorldState, delta: WorldDelta, organizations: OrganizationState[]): void => {
+  const rivalAgentPairs = new Set<string>();
+  for (const relationship of state.relationships) {
+    if (relationship.kind === "rival") rivalAgentPairs.add(entityPairKey(relationship.fromId, relationship.toId));
+  }
   const byRegion = new Map<string, OrganizationState[]>();
   for (const organization of organizations.filter((candidate) => candidate.status === "active")) {
     const list = byRegion.get(organization.regionId) ?? [];
@@ -173,11 +182,11 @@ const addConflicts = (state: WorldState, delta: WorldDelta, organizations: Organ
       if (!left || !right) continue;
       const leftMember = left.memberIds[0];
       const rightMember = right.memberIds[0];
-      if (!leftMember || !rightMember || state.relationships.some((relationship) => relationship.kind === "rival" && ((relationship.fromId === leftMember && relationship.toId === rightMember) || (relationship.fromId === rightMember && relationship.toId === leftMember)))) continue;
-      const [roll] = randomFloat(forkRandom(state.random, `conflict:${left.id}:${right.id}:${state.tick}`));
+      if (!leftMember || !rightMember || rivalAgentPairs.has(entityPairKey(leftMember, rightMember))) continue;
+      const [roll] = randomFloat(forkRandom(state.random, `conflict:${left.id}:${right.id}:${simulationStepForWorld(state)}`));
       const probability = 0.08 + Math.min(0.2, Math.abs(left.memberIds.length - right.memberIds.length) / 200);
       if (roll >= probability) continue;
-      merge(delta, applyOrganizationConflict(left, right, state.tick));
+      merge(delta, applyOrganizationConflict(left, right, state.tick, simulationStepForWorld(state)));
       delta.eventDrafts.push({
         kind: "organization-conflict",
         ruleId: "society:organization-conflict",
@@ -207,7 +216,7 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
       if (resource.amount <= 0.000000001) continue;
       delta.resourceTransactions.push(
         {
-          id: `resource:${resource.resourceId}:dissolve-consume:${state.tick}:${organization.id}`,
+          id: `resource:${resource.resourceId}:dissolve-consume:${simulationStepForWorld(state)}:${organization.id}`,
           resourceId: resource.resourceId,
           regionId: resource.regionId,
           amount: resource.amount,
@@ -218,7 +227,7 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
           causeRuleId: "society:organization-resource-recovery",
         },
         {
-          id: `resource:${resource.resourceId}:dissolve-recover:${state.tick}:${organization.id}`,
+          id: `resource:${resource.resourceId}:dissolve-recover:${simulationStepForWorld(state)}:${organization.id}`,
           resourceId: resource.resourceId,
           regionId: resource.regionId,
           amount: resource.amount,
@@ -260,14 +269,16 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
   const foodIndex = createFoodBalanceIndex(socialState);
   const types: OrganizationType[] = ["clan", "tribe", "settlement", "city", "state", "federation", "empire"];
   for (const [regionId, memberIds] of [...regions.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const candidateMemberIds = [...memberIds].sort() as SocietyContext["candidateMemberIds"];
     for (const type of types) {
       if (existing.has(`${type}:${regionId}`)) continue;
+      if (candidateMemberIds.length < minimumMembersFor(type)) continue;
       const context: SocietyContext = {
         state,
         random: state.random,
         metrics: {} as never,
         regionId: regionId as SocietyContext["regionId"],
-        candidateMemberIds: [...memberIds].sort() as SocietyContext["candidateMemberIds"],
+        candidateMemberIds,
         eligibilityIndex,
         foodIndex,
       };

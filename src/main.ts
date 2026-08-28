@@ -2,15 +2,17 @@ import "./styles.css";
 import { createWorkerClient } from "./worker/client.ts";
 import type { WorkerMessage, WorldSnapshot } from "./worker/protocol.ts";
 import type { WorldEvent } from "./sim/types.ts";
-import { createMapCanvas, type CellSelection } from "./ui/map-canvas.ts";
-import { mapSceneLodLabel } from "./ui/map-lod.ts";
+import { createMapCanvas, type CellSelection, type SceneEntitySelection } from "./ui/map-canvas.ts";
+import { mapSceneLodForZoom, mapSceneLodLabel } from "./ui/map-lod.ts";
 import { layerLabels, type MapLayer } from "./ui/layers.ts";
 import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
 import { renderInspector, type InspectorDetail } from "./ui/inspector.ts";
 import { renderTimeline } from "./ui/timeline.ts";
 import { bindTimeControls, downloadSave } from "./ui/controls.ts";
 import { createGodEvent, godToolLabels, type GodTool } from "./ui/god-mode.ts";
-import { formatSimulationAge } from "./ui/formatters.ts";
+import { formatSimulationAgeFromDays } from "./ui/formatters.ts";
+import { AUTO_SAVE_KEY, browserWorldStorage, readIndexedWorldPayload, readWorldPayload, removePersistentWorldPayload, writePersistentWorldPayload, type PersistentStorageResult } from "./persistence/storage.ts";
+import { createLatestOnlyQueue } from "./persistence/queue.ts";
 
 const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("Application root was not found");
@@ -60,6 +62,12 @@ app.innerHTML = `
             <button id="camera-reset" type="button" title="镜头朝北" aria-label="镜头朝北">N</button>
           </div>
         </div>
+        <div id="strategic-route-legend" class="route-legend" role="region" aria-label="文明活动路线" hidden>
+          <span><i data-route-kind="trade"></i>贸易</span>
+          <span><i data-route-kind="alliance"></i>联盟</span>
+          <span><i data-route-kind="migration"></i>迁徙</span>
+          <span><i data-route-kind="border-conflict"></i>战争</span>
+        </div>
         <div class="map-caption"><span id="phase-label">原始地质</span><span id="map-scale-level">全球观察</span><span id="digest-label">等待首个快照</span><label>画质 <select id="render-quality" aria-label="地图画质"><option value="480" selected>480p 标清</option><option value="720">720p 高清</option><option value="1080">1080p 超清</option></select></label></div>
       </section>
       <aside class="right-rail" aria-label="世界信息">
@@ -69,6 +77,7 @@ app.innerHTML = `
         <section class="rail-section god-section"><header><span>04</span><h2>上帝模式</h2></header>
           <div class="god-controls"><select id="god-tool" aria-label="选择世界事件">${(Object.entries(godToolLabels) as Array<[GodTool, string]>).map(([id, label]) => `<option value="${id}">${label}</option>`).join("")}</select><button id="god-apply" type="button">施加事件</button></div>
           <div class="file-controls"><button id="save-button" type="button">保存世界</button><label for="load-input">加载世界</label><input id="load-input" type="file" accept="application/json" /></div>
+          <output id="persistence-status" class="persistence-status" aria-live="polite">恢复点：检查中</output>
         </section>
       </aside>
     </main>
@@ -115,6 +124,7 @@ const statusPanel = query<HTMLElement>("#status-panel");
 const inspector = query<HTMLElement>("#inspector");
 const timeline = query<HTMLElement>("#timeline");
 const status = query<HTMLOutputElement>("#simulation-status");
+const persistenceStatus = query<HTMLOutputElement>("#persistence-status");
 const year = query<HTMLElement>("#world-year");
 const phase = query<HTMLElement>("#phase-label");
 const digest = query<HTMLElement>("#digest-label");
@@ -123,25 +133,112 @@ const legendHigh = query<HTMLElement>("#legend-high");
 const renderQuality = query<HTMLSelectElement>("#render-quality");
 const zoomLevel = query<HTMLOutputElement>("#zoom-level");
 const mapScaleLevel = query<HTMLElement>("#map-scale-level");
+const routeLegend = query<HTMLElement>("#strategic-route-legend");
+const autoStorage = browserWorldStorage();
+let initialAutoSavePayload = readWorldPayload(autoStorage, AUTO_SAVE_KEY);
 let snapshot: WorldSnapshot | undefined;
 let selection: CellSelection | undefined;
 let detail: InspectorDetail = { level: "region" };
 let events: WorldEvent[] = [];
 let userEventOrdinal = 0;
+let awaitingAutoRestore = initialAutoSavePayload !== null;
+let pendingManualLoadPayload: string | undefined;
+let autoRestoreFallbackPayload: string | undefined;
+let autoRestoreSource: "browser-cache" | "indexedDB" | undefined = initialAutoSavePayload === null ? undefined : "browser-cache";
+let autoRestoreByteLength = initialAutoSavePayload === null ? 0 : new TextEncoder().encode(initialAutoSavePayload).byteLength;
 
-const map = createMapCanvas(canvas, (nextSelection) => {
+type PersistenceState = "saved" | "warning" | "loading" | "error";
+const setPersistenceStatus = (message: string, state: PersistenceState): void => {
+  persistenceStatus.textContent = message;
+  persistenceStatus.dataset.state = state;
+};
+
+if (initialAutoSavePayload !== null) setPersistenceStatus("恢复点：正在恢复最近存档", "loading");
+else setPersistenceStatus("恢复点：正在检查持久存档", "loading");
+
+const persistenceQueue = createLatestOnlyQueue();
+let persistenceGeneration = 0;
+const queuePersistence = (operation: () => Promise<void>): void => {
+  persistenceQueue.enqueue(operation);
+};
+
+const storageLabel = (result: PersistentStorageResult): string => result === "indexedDB"
+  ? "IndexedDB"
+  : result === "both"
+    ? "双重存储"
+    : result === "localStorage"
+      ? "浏览器缓存"
+      : "无可用存储";
+
+const formatCheckpointBytes = (bytes: number): string => {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
+  return `${(bytes / 1_048_576).toFixed(1)} MB`;
+};
+
+const checkpointSize = (payload: string): string => formatCheckpointBytes(new TextEncoder().encode(payload).byteLength);
+
+const persistCheckpoint = (payload: string, digest: string, prefix: string): void => {
+  const generation = ++persistenceGeneration;
+  queuePersistence(async () => {
+    const result = await writePersistentWorldPayload(autoStorage, AUTO_SAVE_KEY, payload);
+    if (generation !== persistenceGeneration) return;
+    if (result === "none") setPersistenceStatus(`${prefix}失败，模拟仍在运行`, "warning");
+    else setPersistenceStatus(`${prefix}至${storageLabel(result)} · ${checkpointSize(payload)} · ${digest.slice(0, 8)}`, "saved");
+  });
+};
+
+const clearCheckpoint = (): void => {
+  persistenceGeneration += 1;
+  queuePersistence(async () => { await removePersistentWorldPayload(autoStorage, AUTO_SAVE_KEY); });
+};
+
+const syncRouteLegend = (zoom: number): void => {
+  const hasRoutes = snapshot?.sceneLinks?.some((link) => link.scope === "strategic") ?? false;
+  routeLegend.hidden = snapshot?.formation.phase !== "stable-crust" || !hasRoutes || mapSceneLodForZoom(zoom) === "individual";
+};
+
+const detailLevelForSceneEntity = (entity: SceneEntitySelection): InspectorDetail["level"] => {
+  if (entity.kind === "agent") return "agent";
+  if (entity.kind === "population") return "population";
+  if (entity.kind === "facility") return "facility";
+  if (entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path") return "worldview";
+  return entity.kind;
+};
+
+const map = createMapCanvas(canvas, (nextSelection, entity) => {
   selection = nextSelection;
-  detail = { level: "region" };
+  detail = entity ? { level: detailLevelForSceneEntity(entity), id: entity.id } : { level: "region" };
   if (snapshot) renderInspector(inspector, snapshot, selection, detail);
   client.send({ type: "focusRegion", regionId: nextSelection.regionId });
 }, (nextZoom) => {
   zoomLevel.textContent = `${Math.round(nextZoom * 100)}%`;
   mapScaleLevel.textContent = mapSceneLodLabel(nextZoom);
+  syncRouteLegend(nextZoom);
 });
 renderInspector(inspector, emptySnapshot);
 renderTimeline(timeline, []);
 
 inspector.addEventListener("click", (event) => {
+  const link = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-detail-link]");
+  if (link && snapshot) {
+    const level = link.dataset.detailLevel as InspectorDetail["level"];
+    const id = link.dataset.detailId;
+    const regionId = link.dataset.detailRegion;
+    detail = id ? { level, id } : { level };
+    if (regionId) {
+      const match = /^region:(\d+):(\d+)$/.exec(regionId);
+      if (match) {
+        const x = Number(match[1] ?? 0);
+        const y = Number(match[2] ?? 0);
+        selection = { x, y, index: y * snapshot.fields.elevation.width + x, regionId: regionId as never };
+        map.setSelection(selection);
+        client.send({ type: "focusRegion", regionId: regionId as never });
+      }
+    }
+    renderInspector(inspector, snapshot, selection, detail);
+    return;
+  }
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-detail-level]");
   if (!button || !snapshot) return;
   detail = { level: button.dataset.detailLevel as InspectorDetail["level"] };
@@ -163,6 +260,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
       ? ["海洋", "高地"]
       : layer === "foodSecurity"
         ? ["低保障", "高保障"]
+        : layer === "health"
+          ? ["无传播", "高流行"]
         : layer === "substances"
           ? ["稀少", "富集"]
           : layer === "culture"
@@ -188,7 +287,12 @@ query<HTMLButtonElement>("#rotate-right").addEventListener("click", map.rotateRi
 query<HTMLButtonElement>("#tilt-up").addEventListener("click", map.tiltUp);
 query<HTMLButtonElement>("#tilt-down").addEventListener("click", map.tiltDown);
 query<HTMLButtonElement>("#camera-reset").addEventListener("click", map.resetCamera);
-bindTimeControls(document, client);
+bindTimeControls(document, client, {
+  onReset: () => {
+    clearCheckpoint();
+    setPersistenceStatus("恢复点：已清理，等待自动保存", "loading");
+  },
+});
 query<HTMLButtonElement>("#god-apply").addEventListener("click", () => {
   const regionId = selection?.regionId ?? "region:0:0" as never;
   const tool = query<HTMLSelectElement>("#god-tool").value as GodTool;
@@ -200,14 +304,36 @@ query<HTMLInputElement>("#load-input").addEventListener("change", async (event) 
   const input = event.currentTarget as HTMLInputElement;
   const file = input.files?.[0];
   if (file) {
-    events = [];
+    pendingManualLoadPayload = await file.text();
+    setPersistenceStatus("恢复点：正在验证导入文件", "loading");
     renderTimeline(timeline, events, snapshot?.eventArchive?.milestones ?? []);
-    client.send({ type: "load", payload: await file.text() });
+    client.send({ type: "load", payload: pendingManualLoadPayload });
   }
 });
 
 const applyMessage = (message: WorkerMessage): void => {
   if (message.type === "error") {
+    if (awaitingAutoRestore) {
+      awaitingAutoRestore = false;
+      if (autoRestoreFallbackPayload !== undefined) {
+        const fallback = autoRestoreFallbackPayload;
+        autoRestoreFallbackPayload = undefined;
+        awaitingAutoRestore = true;
+        autoRestoreSource = "indexedDB";
+        autoRestoreByteLength = new TextEncoder().encode(fallback).byteLength;
+        setPersistenceStatus("恢复点：快速缓存无效，正在恢复 IndexedDB 镜像", "loading");
+        client.send({ type: "load", payload: fallback });
+      } else {
+        clearCheckpoint();
+        setPersistenceStatus("恢复点：存档无效，已清理", "error");
+        status.textContent = "自动存档无法恢复，已从新世界开始";
+        status.dataset.state = "storage-warning";
+        client.send({ type: "start" });
+      }
+      return;
+    }
+    if (pendingManualLoadPayload !== undefined) setPersistenceStatus("恢复点：导入失败，原恢复点已保留", "error");
+    pendingManualLoadPayload = undefined;
     status.textContent = message.message;
     status.dataset.state = "error";
     return;
@@ -222,13 +348,28 @@ const applyMessage = (message: WorkerMessage): void => {
     renderTimeline(timeline, events, snapshot?.eventArchive?.milestones ?? []);
     return;
   }
+  if (message.type === "autosaved") {
+    persistCheckpoint(message.payload, message.digest, "恢复点：已自动保存");
+    return;
+  }
   if (message.type === "saved") {
     downloadSave(message.payload);
-    status.textContent = `已保存 ${message.digest.slice(0, 8)}`;
+    persistCheckpoint(message.payload, message.digest, "恢复点：已手动保存");
     return;
   }
   if (message.type !== "snapshot") return;
   snapshot = message.snapshot;
+  const shouldStartAfterRestore = awaitingAutoRestore;
+  awaitingAutoRestore = false;
+  if (shouldStartAfterRestore) {
+    const source = autoRestoreSource === "indexedDB" ? "IndexedDB 镜像" : "浏览器缓存";
+    setPersistenceStatus(`恢复点：已从${source}恢复 · ${formatCheckpointBytes(autoRestoreByteLength)} · ${message.snapshot.digest.slice(0, 8)}`, "saved");
+  }
+  if (pendingManualLoadPayload !== undefined) {
+    persistCheckpoint(pendingManualLoadPayload, message.snapshot.digest, "恢复点：已载入并保存");
+    pendingManualLoadPayload = undefined;
+    events = [];
+  }
   map.setAnimating(!message.paused && message.speed <= 4);
   if (message.snapshot.focusRegionId) {
     const match = /^region:(\d+):(\d+)$/.exec(message.snapshot.focusRegionId);
@@ -240,15 +381,40 @@ const applyMessage = (message: WorkerMessage): void => {
   }
   map.setSelection(selection);
   map.update(snapshot, message.paused, message.speed <= 4);
+  syncRouteLegend(map.getZoom());
   renderStatusPanel(statusPanel, snapshot);
   renderInspector(inspector, snapshot, selection, detail);
   renderTimeline(timeline, events, message.snapshot.eventArchive?.milestones ?? []);
-  year.textContent = formatSimulationAge(snapshot.years);
+  year.textContent = formatSimulationAgeFromDays(snapshot.timeline?.days);
   phase.textContent = phaseForSnapshot(snapshot);
   digest.textContent = `状态 ${snapshot.digest.slice(0, 8)}`;
   status.textContent = message.paused ? "模拟已暂停" : `${message.speed}× 自主演化中`;
   status.dataset.state = message.paused ? "paused" : "running";
+  if (shouldStartAfterRestore) client.send({ type: "start" });
 };
 
 client.subscribe(applyMessage);
-client.send({ type: "start" });
+const bootstrap = async (): Promise<void> => {
+  if (initialAutoSavePayload === null) {
+    initialAutoSavePayload = await readIndexedWorldPayload(AUTO_SAVE_KEY);
+    if (initialAutoSavePayload !== null) {
+      awaitingAutoRestore = true;
+      autoRestoreSource = "indexedDB";
+      autoRestoreByteLength = new TextEncoder().encode(initialAutoSavePayload).byteLength;
+      setPersistenceStatus("恢复点：正在恢复 IndexedDB 存档", "loading");
+    }
+  } else {
+    const indexedPayload = await readIndexedWorldPayload(AUTO_SAVE_KEY);
+    if (indexedPayload !== null && indexedPayload !== initialAutoSavePayload) autoRestoreFallbackPayload = indexedPayload;
+  }
+  if (initialAutoSavePayload !== null) client.send({ type: "load", payload: initialAutoSavePayload });
+  else {
+    setPersistenceStatus("恢复点：等待自动保存", "loading");
+    client.send({ type: "start" });
+  }
+};
+void bootstrap();
+window.addEventListener("pagehide", () => client.send({ type: "checkpoint" }));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") client.send({ type: "checkpoint" });
+});

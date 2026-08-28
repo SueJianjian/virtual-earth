@@ -1,4 +1,5 @@
 import type { FieldChange, WorldState } from "../types.ts";
+import { simulationCycleAngle, simulationDaysForWorld, wholePeriodsCrossed } from "../time.ts";
 
 const neighborsOf = (index: number, width: number, height: number): number[] => {
   const x = index % width;
@@ -17,14 +18,13 @@ const plateForcing = (state: WorldState, x: number, y: number): number => {
   const seedPhase = (state.seed % 4096) / 4096 * Math.PI * 2;
   const platePattern = Math.sin(x / width * Math.PI * 4 + seedPhase)
     * Math.cos(y / Math.max(1, height - 1) * Math.PI * 2 - seedPhase * 0.7);
-  const pulse = 0.55 + Math.sin(state.years / 180 + seedPhase) * 0.45;
+  const pulse = 0.55 + Math.sin(simulationCycleAngle(simulationDaysForWorld(state), Math.round(180 * 2 * Math.PI * 365)) + seedPhase) * 0.45;
   return platePattern * pulse * 0.000004;
 };
 
 export const calculateGeology = (state: WorldState, elapsedYears = 1): FieldChange[] => {
   const intervalYears = 8;
-  const completedIntervals = Math.floor((state.years + Math.max(0, elapsedYears) + Number.EPSILON) / intervalYears)
-    - Math.floor((state.years + Number.EPSILON) / intervalYears);
+  const completedIntervals = wholePeriodsCrossed(simulationDaysForWorld(state), Math.max(0, elapsedYears), intervalYears);
   if (completedIntervals <= 0) return [];
   const { elevation, water, humidity, nutrients } = state.fields;
   const geologicalYears = completedIntervals * intervalYears;

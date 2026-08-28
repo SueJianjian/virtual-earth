@@ -1,21 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { stepWorld } from "../../src/sim/engine.ts";
 import { createWorld, isFiniteWorld, worldDigest } from "../../src/sim/world.ts";
+import { isEntityHolderId } from "../../src/sim/resources.ts";
 import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS } from "../../src/sim/events/ledger.ts";
-import { EXTINCT_SPECIES_COMPACT_THRESHOLD } from "../../src/sim/ecology/archive.ts";
-import { MAX_SUBSTANCES } from "../../src/sim/environment/substances.ts";
+import { EXTINCT_SPECIES_COMPACT_THRESHOLD, MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "../../src/sim/ecology/archive.ts";
+import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../../src/sim/ecology/interactions.ts";
+import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../../src/sim/environment/substances.ts";
 import { MAX_POPULATION_RECORDS } from "../../src/sim/ecology/archive.ts";
 import { MAX_BELIEFS_PER_CULTURE, MAX_CULTURE_RECORDS, MAX_KNOWLEDGE_PER_AGENT, MAX_KNOWLEDGE_PER_CULTURE, MAX_KNOWLEDGE_RECORDS } from "../../src/sim/culture/archive.ts";
-import { MAX_AGENT_MEMORY_IDS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../../src/sim/agents/lifecycle.ts";
+import { MAX_AGENT_MEMORY_IDS, MAX_DETAILED_AGENTS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../../src/sim/agents/lifecycle.ts";
 import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../../src/sim/worldview/archive.ts";
 import { MAX_CHILD_ORGANIZATION_IDS, MAX_DIPLOMATIC_RELATIONS, MAX_ORGANIZATION_RECORDS, MAX_ORGANIZATIONS_PER_SUMMARY } from "../../src/sim/society/archive.ts";
+import { MAX_IMMUNITY_IDS_PER_AGENT, MAX_INFECTIONS_PER_AGENT, MAX_PATHOGENS, MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "../../src/sim/health/disease.ts";
+import { MAX_FACILITIES_PER_REGION } from "../../src/sim/society/facilities.ts";
+import { HERITABLE_AGENT_TRAITS, validAgentGenetics } from "../../src/sim/agents/genetics.ts";
+import { ACTIVE_ADAPTIVE_SPECIES_LIMITS } from "../../src/sim/ecology/species.ts";
 import { deserializeWorld, serializeWorld } from "../../src/persistence/serialize.ts";
+import { MAX_SIMULATION_DAYS, MAX_SIMULATION_YEARS, SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
+import { isOrbitalState } from "../../src/sim/environment/orbit.ts";
 
 describe("long-running worlds", () => {
   const assertDenseWorldHealth = (state: ReturnType<typeof createWorld>): void => {
     expect(isFiniteWorld(state)).toBe(true);
+    expect(isOrbitalState(state.orbital)).toBe(true);
+    expect(state.orbital.seasonalPhase).toBeGreaterThanOrEqual(0);
+    expect(state.orbital.seasonalPhase).toBeLessThan(1);
+    expect(state.orbital.solarFlux).toBeGreaterThanOrEqual(0.45);
+    expect(state.orbital.solarFlux).toBeLessThanOrEqual(1.8);
     expect(state.events.length).toBeLessThanOrEqual(EVENT_LOG_MAX_COUNT);
     expect(state.eventArchive.milestones.length).toBeLessThanOrEqual(MAX_EVENT_MILESTONES);
+    expect(state.eventArchive.archivedSpeciesSummaries.length).toBeLessThanOrEqual(MAX_ARCHIVED_SPECIES_SUMMARIES);
+    expect(state.eventArchive.archivedSpeciesSummaries.every((summary) => summary.lastKnownRegionIds.length <= MAX_ARCHIVED_SPECIES_REGIONS)).toBe(true);
     expect(state.eventArchive.milestones.every((milestone) => [
       milestone.sourceIds.length,
       milestone.regionIds.length,
@@ -68,19 +83,45 @@ describe("long-running worlds", () => {
       expect(organization.territoryRegionIds.every((regionId) => /^region:(\d+):(\d+)$/.test(regionId))).toBe(true);
     }
     expect(state.organizations.length).toBeLessThanOrEqual(MAX_ORGANIZATION_RECORDS);
+    expect(state.facilities.length).toBeLessThanOrEqual(state.fields.elevation.values.length * MAX_FACILITIES_PER_REGION);
     expect(state.lod.summaries.every((summary) => summary.organizations.length <= MAX_ORGANIZATIONS_PER_SUMMARY)).toBe(true);
     expect(state.organizations.length).toBeLessThanOrEqual(state.fields.elevation.values.length * 7 + state.agents.length);
     expect(Object.keys(state.eventArchive.organizationCounts).length).toBeLessThanOrEqual(state.organizations.length);
     expect(Object.keys(state.eventArchive.organizationCounts).every((organizationId) => organizationIds.has(organizationId))).toBe(true);
 
+    const populationSpeciesIds = new Set(state.species.map((species) => species.id));
     const substanceIds = new Set(state.substances.map((substance) => substance.id));
     expect(state.substances.length).toBeLessThanOrEqual(MAX_SUBSTANCES);
     for (const substance of state.substances) {
       expect(substance.parentIds.every((parentId) => substanceIds.has(parentId))).toBe(true);
       expect([...Object.values(substance.composition), ...Object.values(substance.properties)].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
+      expect([substance.reserveCapacity, substance.remainingReserve, substance.extractedTotal, substance.depletedTick ?? 0].every((value) => Number.isFinite(value) && value >= 0)).toBe(true);
+      expect(substance.reserveCapacity).toBeLessThanOrEqual(MAX_SUBSTANCE_RESERVE);
+      expect(substance.remainingReserve).toBeLessThanOrEqual(substance.reserveCapacity);
+      expect(substance.extractedTotal).toBeLessThanOrEqual(substance.reserveCapacity);
     }
 
-    const populationSpeciesIds = new Set(state.species.map((species) => species.id));
+    const pathogenIds = new Set(state.pathogens.map((pathogen) => pathogen.id));
+    expect(state.pathogens.length).toBeLessThanOrEqual(MAX_PATHOGENS);
+    expect(state.pathogens.every((pathogen) => populationSpeciesIds.has(pathogen.hostSpeciesId))).toBe(true);
+    for (const pathogen of state.pathogens) {
+      expect([pathogen.transmission, pathogen.severity, pathogen.persistence, pathogen.prevalence].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
+      expect([pathogen.cumulativeCases, pathogen.cumulativeRecoveries, pathogen.cumulativeDeaths].every((value) => Number.isFinite(value) && value >= 0)).toBe(true);
+      expect(pathogen.regionalOutbreaks.length).toBeLessThanOrEqual(MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN);
+      expect(new Set(pathogen.regionalOutbreaks.map((outbreak) => outbreak.regionId)).size).toBe(pathogen.regionalOutbreaks.length);
+      expect(pathogen.regionalOutbreaks.every((outbreak) => [outbreak.prevalence, outbreak.firstDetectedTick, outbreak.lastActiveTick].every(Number.isFinite))).toBe(true);
+    }
+    for (const agent of state.agents) {
+      expect(validAgentGenetics(agent.genetics)).toBe(true);
+      expect(HERITABLE_AGENT_TRAITS.every((trait) => Number.isFinite(agent.traits[trait]) && agent.traits[trait]! >= 0 && agent.traits[trait]! <= 1)).toBe(true);
+      expect(agent.health).toBeDefined();
+      expect(agent.health!.infections.length).toBeLessThanOrEqual(MAX_INFECTIONS_PER_AGENT);
+      expect(agent.health!.immunityIds.length).toBeLessThanOrEqual(MAX_IMMUNITY_IDS_PER_AGENT);
+      expect(agent.health!.infections.every((infection) => pathogenIds.has(infection.pathogenId))).toBe(true);
+      expect(agent.health!.immunityIds.every((id) => pathogenIds.has(id))).toBe(true);
+      expect(Number.isFinite(agent.health!.vitality) && agent.health!.vitality >= 0 && agent.health!.vitality <= 1).toBe(true);
+    }
+
     const populationIds = new Set(state.populations.map((population) => population.id));
     expect(state.populations.length).toBeLessThanOrEqual(MAX_POPULATION_RECORDS);
     expect(new Set(state.populations.map((population) => `${population.speciesId}|${population.regionId}`)).size).toBe(state.populations.length);
@@ -88,6 +129,38 @@ describe("long-running worlds", () => {
       expect(populationSpeciesIds.has(population.speciesId)).toBe(true);
       expect(Number.isFinite(population.count) && population.count >= 0).toBe(true);
       expect(Number.isFinite(population.energy) && population.energy >= 0 && population.energy <= 1).toBe(true);
+    }
+    const speciesIds = new Set(state.species.map((species) => species.id));
+    for (const role of ["producer", "consumer", "decomposer"] as const) {
+      const roleSpeciesIds = new Set(state.species.filter((species) => species.role === role).map((species) => species.id));
+      const minimumViableCount = role === "producer" ? 1 : 4;
+      const activeIds = new Set(state.populations
+        .filter((population) => roleSpeciesIds.has(population.speciesId) && population.count >= minimumViableCount)
+        .map((population) => population.speciesId));
+      expect(activeIds.size).toBeLessThanOrEqual(ACTIVE_ADAPTIVE_SPECIES_LIMITS[role]);
+    }
+    const ecologicalRelationships = state.ecologicalRelationships ?? [];
+    expect(ecologicalRelationships.length).toBeLessThanOrEqual(MAX_ECOLOGICAL_RELATIONSHIPS);
+    const ecologicalKeys = new Set<string>();
+    for (const relationship of ecologicalRelationships) {
+      const key = `${relationship.kind}|${relationship.regionId}|${relationship.fromSpeciesId}|${relationship.toSpeciesId}`;
+      expect(ecologicalKeys.has(key)).toBe(false);
+      ecologicalKeys.add(key);
+      expect(speciesIds.has(relationship.fromSpeciesId)).toBe(true);
+      expect(speciesIds.has(relationship.toSpeciesId)).toBe(true);
+      const regionMatch = /^region:(\d+):(\d+)$/.exec(relationship.regionId);
+      expect(regionMatch).not.toBeNull();
+      if (regionMatch) {
+        expect(Number(regionMatch[1])).toBeLessThan(state.fields.elevation.width);
+        expect(Number(regionMatch[2])).toBeLessThan(state.fields.elevation.height);
+      }
+      expect([relationship.strength, relationship.lastImpact].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
+      expect([relationship.firstTick, relationship.lastTick, relationship.interactionCount].every((value) => Number.isSafeInteger(value) && value >= 0)).toBe(true);
+      expect(Number.isFinite(relationship.cumulativeImpact) && relationship.cumulativeImpact >= 0).toBe(true);
+      expect(relationship.lastTick).toBeGreaterThanOrEqual(relationship.firstTick);
+      expect(relationship.interactionCount).toBeGreaterThan(0);
+      expect(["active", "dormant"]).toContain(relationship.status);
+      expect(Object.values(relationship.details).every((value) => typeof value !== "number" || Number.isFinite(value))).toBe(true);
     }
     expect(state.agents.every((agent) => populationIds.has(agent.populationId))).toBe(true);
     for (const species of state.species) {
@@ -129,7 +202,9 @@ describe("long-running worlds", () => {
       expect(Number.isFinite(resource.amount) && resource.amount >= 0).toBe(true);
       expect(Number.isFinite(resource.cap) && resource.cap >= resource.amount).toBe(true);
       if (resource.holderId) {
-        expect(agentIds.has(resource.holderId) || organizationIds.has(resource.holderId)).toBe(true);
+        expect(!isEntityHolderId(resource.holderId)
+          || agentIds.has(resource.holderId)
+          || organizationIds.has(resource.holderId)).toBe(true);
       }
     }
     expect(resourceKeys.size).toBeLessThanOrEqual(state.fields.elevation.values.length + 4 * (state.agents.length + state.organizations.length));
@@ -157,7 +232,7 @@ describe("long-running worlds", () => {
   };
 
   it("continues from an arbitrary high year and remains restorable", () => {
-    const startingYear = 1_000_000;
+    const startingYear = 1_000_000_000;
     let state = createWorld(3480, { width: 8, height: 8, formation: "formed", enabledPackIds: ["emergence.original-worldview"] });
     state.years = startingYear;
     for (let step = 0; step < 20; step += 1) {
@@ -172,6 +247,21 @@ describe("long-running worlds", () => {
     expect(restored.years).toBe(startingYear + 20);
   });
 
+  it("retains daily calendar progress in remote eras", () => {
+    const startingYear = 1_000_000_000;
+    let state = createWorld(3481, { width: 8, height: 8, formation: "formed" });
+    state.years = startingYear;
+    for (let day = 0; day < 731; day += 1) {
+      state = stepWorld(state, { elapsedYears: 1 / 365, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+    }
+
+    expect(state.tick).toBe(731);
+    expect(state.years).toBeCloseTo(startingYear + 2 + 1 / 365, 8);
+    assertDenseWorldHealth(state);
+    const restored = deserializeWorld(serializeWorld(state));
+    expect(worldDigest(restored)).toBe(worldDigest(state));
+  });
+
   it("keeps an autonomous world advancing across a five-millennial horizon", () => {
     let state = createWorld(3479, { width: 8, height: 8 });
     const initialElevation = Array.from(state.fields.elevation.values);
@@ -180,6 +270,7 @@ describe("long-running worlds", () => {
       if ((step + 1) % 1_000 === 0) {
         const restored = deserializeWorld(serializeWorld(state));
         expect(worldDigest(restored)).toBe(worldDigest(state));
+        expect(restored.ecologicalRelationships).toEqual(state.ecologicalRelationships);
         state = restored;
         assertDenseWorldHealth(state);
       }
@@ -199,6 +290,72 @@ describe("long-running worlds", () => {
     expect(state.species.filter((species) => !livingSpeciesIds.has(species.id)).length).toBeLessThanOrEqual(EXTINCT_SPECIES_COMPACT_THRESHOLD);
   }, 300_000);
 
+  it("keeps the exact world clock advancing beyond JavaScript safe integers", () => {
+    let state = createWorld(8128, { width: 8, height: 8, formation: "formed" });
+    state.tick = Number.MAX_SAFE_INTEGER;
+    state.simulationDays = MAX_SIMULATION_DAYS;
+    state.years = MAX_SIMULATION_DAYS / 365;
+    state.timeline = { step: String(BigInt(Number.MAX_SAFE_INTEGER)), days: String(BigInt(MAX_SIMULATION_DAYS)) };
+
+    for (let day = 0; day < 32; day += 1) {
+      state = stepWorld(state, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+    }
+
+    expect(state.timeline).toEqual({
+      step: String(BigInt(Number.MAX_SAFE_INTEGER) + 32n),
+      days: String(BigInt(MAX_SIMULATION_DAYS) + 32n),
+    });
+    expect(state.tick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(state.simulationDays).toBe(MAX_SIMULATION_DAYS);
+    expect(state.years).toBe(MAX_SIMULATION_DAYS / 365);
+    const restored = deserializeWorld(serializeWorld(state));
+    expect(restored.timeline).toEqual(state.timeline);
+    expect(worldDigest(restored)).toBe(worldDigest(state));
+    expect(isFiniteWorld(restored)).toBe(true);
+  });
+
+  it("keeps an evolved world stable after numeric clock projections saturate", () => {
+    let state = createWorld(8_129, {
+      width: 8,
+      height: 8,
+      formation: "formed",
+      enabledPackIds: ["emergence.original-worldview"],
+    });
+    for (let year = 0; year < 360; year += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+    }
+
+    state.tick = Number.MAX_SAFE_INTEGER;
+    state.simulationDays = MAX_SIMULATION_DAYS;
+    state.years = MAX_SIMULATION_YEARS;
+    state.timeline = {
+      step: String(Number.MAX_SAFE_INTEGER),
+      days: String(MAX_SIMULATION_DAYS),
+    };
+
+    for (let day = 0; day < 730; day += 1) {
+      state = stepWorld(state, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+      if ((day + 1) % 365 === 0) {
+        assertDenseWorldHealth(state);
+        const restored = deserializeWorld(serializeWorld(state));
+        expect(worldDigest(restored)).toBe(worldDigest(state));
+        state = restored;
+      }
+    }
+
+    expect(state.timeline).toEqual({
+      step: String(BigInt(Number.MAX_SAFE_INTEGER) + 730n),
+      days: String(BigInt(MAX_SIMULATION_DAYS) + 730n),
+    });
+    expect(state.tick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(state.simulationDays).toBe(MAX_SIMULATION_DAYS);
+    expect(state.years).toBe(MAX_SIMULATION_YEARS);
+    const latestSampleDays = state.eventArchive.historySamples.at(-1)?.timelineDays;
+    expect(latestSampleDays).toBeDefined();
+    expect(BigInt(latestSampleDays!)).toBeGreaterThan(BigInt(MAX_SIMULATION_DAYS));
+    expect(BigInt(latestSampleDays!)).toBeLessThanOrEqual(BigInt(MAX_SIMULATION_DAYS) + 730n);
+  }, 120_000);
+
   it("keeps a dense social world healthy while every subsystem is active", () => {
     let state = createWorld(123, {
       width: 16,
@@ -213,6 +370,7 @@ describe("long-running worlds", () => {
     let sawSubstance = false;
     for (let step = 0; step < 1_400; step += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+      expect(state.agents.length).toBeLessThanOrEqual(MAX_DETAILED_AGENTS);
       sawOrganization ||= state.organizations.some((organization) => organization.status === "active");
       sawFacility ||= state.facilities.length > 0;
       sawPractice ||= state.worldview.practices.length > 0;

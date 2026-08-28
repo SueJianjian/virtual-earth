@@ -1,4 +1,5 @@
 import type { WorldState, WorldviewEntityState, WorldviewPhenomenonState, WorldviewPracticeState } from "../types.ts";
+import { compareSimulationSteps } from "../time.ts";
 
 export const MAX_WORLDVIEW_PHENOMENA = 1_024;
 export const MAX_WORLDVIEW_PRACTICES = 512;
@@ -17,14 +18,14 @@ const entityStatusRank: Record<WorldviewEntityState["status"], number> = {
 
 const comparePractices = (left: WorldviewPracticeState, right: WorldviewPracticeState): number =>
   statusRank[right.status] - statusRank[left.status]
-  || right.lastTrainedTick - left.lastTrainedTick
+  || compareSimulationSteps(right.lastTrainedTimelineStep ?? String(right.lastTrainedTick), left.lastTrainedTimelineStep ?? String(left.lastTrainedTick))
   || right.attunement - left.attunement
   || left.id.localeCompare(right.id);
 
 const compareEntities = (left: WorldviewEntityState, right: WorldviewEntityState): number =>
   entityStatusRank[right.status] - entityStatusRank[left.status]
   || Number((right.activePractitionerCount ?? 0) > 0) - Number((left.activePractitionerCount ?? 0) > 0)
-  || (right.lastActiveTick ?? right.originTick ?? -1) - (left.lastActiveTick ?? left.originTick ?? -1)
+  || compareSimulationSteps(right.lastActiveTimelineStep ?? String(right.lastActiveTick ?? right.originTick ?? 0), left.lastActiveTimelineStep ?? String(left.lastActiveTick ?? left.originTick ?? 0))
   || right.influence - left.influence
   || left.id.localeCompare(right.id);
 
@@ -33,7 +34,7 @@ const comparePhenomena = (
   left: WorldviewPhenomenonState,
   right: WorldviewPhenomenonState,
 ): number => Number(referencedIds.has(right.id)) - Number(referencedIds.has(left.id))
-  || right.originTick - left.originTick
+  || compareSimulationSteps(right.originTimelineStep ?? String(right.originTick), left.originTimelineStep ?? String(left.originTick))
   || left.id.localeCompare(right.id);
 
 const referencedPhenomenonIds = (state: WorldState, practices: readonly WorldviewPracticeState[], entities: readonly WorldviewEntityState[]): Set<string> => {

@@ -1,47 +1,74 @@
 import { forkRandom, randomFloat } from "../random.ts";
-import type { AgentState, FoodBalanceIndex, GovernanceState, OrganizationState, RelationshipState, WorldDelta, WorldState } from "../types.ts";
+import type { AgentState, EntityId, FoodBalanceIndex, GovernanceState, OrganizationState, RelationshipState, WorldDelta, WorldState } from "../types.ts";
 import { diplomacyForOrganization, governanceForOrganization, minimumMembersFor, organizationCapacity } from "./organization.ts";
 import { createFoodBalanceIndex, foodSecurityForOrganization } from "../agents/food.ts";
-import { technologyProfileForRegion } from "../culture/technology.ts";
+import { technologyProfileForRegion, technologyProfilesForState, type TechnologyProfile } from "../culture/technology.ts";
 import { cultureIdentityFor } from "../culture/identity.ts";
-import { facilityEffectProfileForRegion } from "./facilities.ts";
+import { facilityEffectProfileForRegion, facilityEffectProfilesForState, type FacilityEffectProfile } from "./facilities.ts";
 
 export type GovernanceIndex = {
-  agentIds: ReadonlySet<string>;
+  agentIds: ReadonlySet<EntityId>;
   agentsByRegion: ReadonlyMap<string, WorldState["agents"]>;
-  agentsById: ReadonlyMap<string, AgentState>;
-  relationshipIncidenceByAgent: ReadonlyMap<string, number>;
+  agentsById: ReadonlyMap<EntityId, AgentState>;
+  relationshipIncidenceByAgent: ReadonlyMap<EntityId, number>;
   knowledgeByRegion: ReadonlyMap<string, number>;
   culturesByRegion: ReadonlyMap<string, NonNullable<WorldState["cultures"]>[number]>;
   resourceByOrganization: ReadonlyMap<string, number>;
+  localResourceByOrganization: ReadonlyMap<string, number>;
+  cultureValuesByRegion: ReadonlyMap<string, ReturnType<typeof cultureIdentityFor>["values"]>;
+  technologyByRegion: ReadonlyMap<string, TechnologyProfile>;
+  facilityEffectsByRegion: ReadonlyMap<string, FacilityEffectProfile>;
+  territoryAgentIds: Map<string, OrganizationState["memberIds"]>;
 };
 
-export const createGovernanceIndex = (state: Pick<WorldState, "agents" | "relationships"> & Partial<Pick<WorldState, "cultures" | "resources">>): GovernanceIndex => {
+const organizationRegionKey = (organizationId: string, regionId: string): string => `${organizationId}|${regionId}`;
+
+export const createGovernanceIndex = (
+  state: Pick<WorldState, "agents" | "relationships" | "cultures" | "resources" | "knowledge" | "facilities">,
+): GovernanceIndex => {
   const agentsByRegion = new Map<string, WorldState["agents"]>();
-  const agentsById = new Map<string, AgentState>();
+  const agentsById = new Map<EntityId, AgentState>();
   for (const agent of state.agents) {
     const agents = agentsByRegion.get(agent.regionId) ?? [];
     agents.push(agent);
     agentsByRegion.set(agent.regionId, agents);
     agentsById.set(agent.id, agent);
   }
-  const relationshipIncidenceByAgent = new Map<string, number>();
+  const relationshipIncidenceByAgent = new Map<EntityId, number>();
   for (const relationship of state.relationships) {
     relationshipIncidenceByAgent.set(relationship.fromId, (relationshipIncidenceByAgent.get(relationship.fromId) ?? 0) + 1);
     relationshipIncidenceByAgent.set(relationship.toId, (relationshipIncidenceByAgent.get(relationship.toId) ?? 0) + 1);
   }
   const knowledgeByRegion = new Map<string, number>();
   const culturesByRegion = new Map<string, NonNullable<WorldState["cultures"]>[number]>();
-  for (const culture of state.cultures ?? []) {
+  const cultureValuesByRegion = new Map<string, ReturnType<typeof cultureIdentityFor>["values"]>();
+  for (const culture of state.cultures) {
     knowledgeByRegion.set(culture.regionId, (knowledgeByRegion.get(culture.regionId) ?? 0) + culture.knowledgeIds.length);
     culturesByRegion.set(culture.regionId, culture);
+    cultureValuesByRegion.set(culture.regionId, cultureIdentityFor(culture).values);
   }
   const resourceByOrganization = new Map<string, number>();
-  for (const resource of state.resources ?? []) {
+  const localResourceByOrganization = new Map<string, number>();
+  for (const resource of state.resources) {
     if (!resource.holderId) continue;
     resourceByOrganization.set(resource.holderId, (resourceByOrganization.get(resource.holderId) ?? 0) + resource.amount);
+    const key = organizationRegionKey(resource.holderId, resource.regionId);
+    localResourceByOrganization.set(key, (localResourceByOrganization.get(key) ?? 0) + resource.amount);
   }
-  return { agentIds: new Set(state.agents.map((agent) => agent.id)), agentsByRegion, agentsById, relationshipIncidenceByAgent, knowledgeByRegion, culturesByRegion, resourceByOrganization };
+  return {
+    agentIds: new Set(agentsById.keys()),
+    agentsByRegion,
+    agentsById,
+    relationshipIncidenceByAgent,
+    knowledgeByRegion,
+    culturesByRegion,
+    resourceByOrganization,
+    localResourceByOrganization,
+    cultureValuesByRegion,
+    technologyByRegion: technologyProfilesForState(state),
+    facilityEffectsByRegion: facilityEffectProfilesForState(state),
+    territoryAgentIds: new Map(),
+  };
 };
 
 const emptyDelta = (): WorldDelta => ({
@@ -55,11 +82,6 @@ const recruitsMembers = (organization: OrganizationState): boolean => [
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
-const meanTrait = (index: GovernanceIndex, memberIds: string[], trait: string): number => {
-  if (memberIds.length === 0) return 0;
-  return memberIds.reduce((sum, memberId) => sum + (index.agentsById.get(memberId)?.traits[trait] ?? 0), 0) / memberIds.length;
-};
-
 const governanceChanged = (before: GovernanceState | undefined, after: GovernanceState): boolean => {
   if (!before) return true;
   return Object.keys(after).some((key) => Math.abs(Number(before[key as keyof GovernanceState]) - Number(after[key as keyof GovernanceState])) > 0.0001);
@@ -68,7 +90,7 @@ const governanceChanged = (before: GovernanceState | undefined, after: Governanc
 const nextGovernance = (
   state: Readonly<Omit<WorldState, "tick" | "years" | "observation">>,
   organization: OrganizationState,
-  members: string[],
+  members: OrganizationState["memberIds"],
   capacity: number,
   foodSecurity: number,
   resourceTotal: number,
@@ -76,13 +98,20 @@ const nextGovernance = (
 ): GovernanceState => {
   const previous = governanceForOrganization(organization);
   const territorySize = Math.max(1, organization.territoryRegionIds.length || 1);
-  const cooperation = meanTrait(index, members, "cooperation");
-  const sociality = meanTrait(index, members, "sociality");
-  const relationshipIncidence = members.reduce((sum, memberId) => sum + (index.relationshipIncidenceByAgent.get(memberId) ?? 0), 0);
+  let cooperationTotal = 0;
+  let socialityTotal = 0;
+  let relationshipIncidence = 0;
+  for (const memberId of members) {
+    const member = index.agentsById.get(memberId);
+    cooperationTotal += member?.traits.cooperation ?? 0;
+    socialityTotal += member?.traits.sociality ?? 0;
+    relationshipIncidence += index.relationshipIncidenceByAgent.get(memberId) ?? 0;
+  }
+  const cooperation = members.length > 0 ? cooperationTotal / members.length : 0;
+  const sociality = members.length > 0 ? socialityTotal / members.length : 0;
   const relationshipDensity = clamp(relationshipIncidence / Math.max(1, members.length * 2.8));
   const knowledge = index.knowledgeByRegion.get(organization.regionId) ?? 0;
-  const culture = index.culturesByRegion.get(organization.regionId);
-  const cultureValues = culture ? cultureIdentityFor(culture).values : undefined;
+  const cultureValues = index.cultureValuesByRegion.get(organization.regionId);
   const culturalCooperation = cultureValues?.cooperation ?? cooperation;
   const culturalReciprocity = cultureValues?.reciprocity ?? cooperation;
   const culturalHierarchy = cultureValues?.hierarchy ?? 0.5;
@@ -90,8 +119,10 @@ const nextGovernance = (
   const culturalTradition = cultureValues?.tradition ?? 0.5;
   const culturalStewardship = cultureValues?.stewardship ?? 0.5;
   const knowledgeFactor = clamp(knowledge / 8);
-  const technology = technologyProfileForRegion(state, organization.regionId);
-  const facilities = facilityEffectProfileForRegion(state, organization.regionId);
+  const technology = index.technologyByRegion.get(organization.regionId)
+    ?? technologyProfileForRegion(state, organization.regionId);
+  const facilities = index.facilityEffectsByRegion.get(organization.regionId)
+    ?? facilityEffectProfileForRegion(state, organization.regionId);
   const resourceFactor = clamp(resourceTotal / Math.max(1, members.length * 0.12));
   const populationPressure = clamp(members.length / Math.max(1, capacity));
   const taxRate = clamp(
@@ -147,17 +178,29 @@ export const governOrganization = (
     return delta;
   }
   const territory = new Set(organization.territoryRegionIds.length > 0 ? organization.territoryRegionIds : [organization.regionId]);
-  const localAgents = [...territory]
-    .flatMap((regionId) => index.agentsByRegion.get(regionId) ?? [])
-    .map((agent) => agent.id)
-    .sort();
+  const territoryKey = [...territory].sort().join("|");
+  let localAgents = index.territoryAgentIds.get(territoryKey);
+  if (!localAgents) {
+    localAgents = [...territory]
+      .flatMap((regionId) => index.agentsByRegion.get(regionId) ?? [])
+      .map((agent) => agent.id)
+      .sort();
+    index.territoryAgentIds.set(territoryKey, localAgents);
+  }
   const members = recruitsMembers(organization)
     ? [...new Set([...existingMembers, ...localAgents])]
     : existingMembers;
   const context = { state, random: state.random, metrics: {} as never, regionId: organization.regionId, candidateMemberIds: members, foodIndex };
-  const capacity = organizationCapacity(organization, context);
   const minimumMembers = minimumMembersFor(organization.type);
   const foodSecurity = foodSecurityForOrganization(state, { ...organization, memberIds: members }, foodIndex);
+  const localResourceTotal = index.localResourceByOrganization.get(organizationRegionKey(organization.id, organization.regionId)) ?? 0;
+  const constructionLevel = index.technologyByRegion.get(organization.regionId)?.construction
+    ?? technologyProfileForRegion(state, organization.regionId).construction;
+  const capacity = organizationCapacity(organization, context, {
+    ledgerResources: localResourceTotal,
+    foodSecurity,
+    constructionLevel,
+  });
   const resourceTotal = Object.values(organization.resources).reduce((sum, value) => sum + value, 0)
     + (index.resourceByOrganization.get(organization.id) ?? 0);
   const foodResilient = organization.type === "clan" || organization.type === "tribe" || members.length <= minimumMembers * 2 || foodSecurity >= 0.075;
@@ -187,7 +230,7 @@ export const governOrganization = (
   return delta;
 };
 
-export const applyOrganizationConflict = (left: OrganizationState, right: OrganizationState, tick = 0): WorldDelta => {
+export const applyOrganizationConflict = (left: OrganizationState, right: OrganizationState, tick = 0, timelineStep?: string): WorldDelta => {
   const delta = emptyDelta();
   const fromId = left.memberIds[0];
   const toId = right.memberIds[0];
@@ -199,6 +242,7 @@ export const applyOrganizationConflict = (left: OrganizationState, right: Organi
     kind: "rival",
     strength: 0.5,
     createdTick: tick,
+    ...(timelineStep === undefined ? {} : { createdTimelineStep: timelineStep }),
     sourceEventId: `conflict:${left.id}:${right.id}`,
   };
   delta.relationshipEffects.push({ operation: "create", relationship: relation });

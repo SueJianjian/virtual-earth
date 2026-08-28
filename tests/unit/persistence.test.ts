@@ -3,7 +3,12 @@ import { deserializeWorld, serializeWorld } from "../../src/persistence/serializ
 import { summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
+import { archiveOrganizationRecords } from "../../src/sim/society/archive.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
+import { createAgent } from "../../src/sim/agents/lifecycle.ts";
+import { validAgentGenetics } from "../../src/sim/agents/genetics.ts";
+import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
+import type { ArchivedSpeciesSummary } from "../../src/sim/types.ts";
 
 describe("world persistence", () => {
   it("round-trips authoritative state and typed grids", () => {
@@ -54,6 +59,16 @@ describe("world persistence", () => {
     expect(() => deserializeWorld("not-json")).toThrow("valid JSON");
     expect(() => deserializeWorld(JSON.stringify({ schemaVersion: 2, world: {} }))).toThrow("Unsupported");
     expect(() => deserializeWorld(JSON.stringify({ schemaVersion: 1, world: {} }))).toThrow("missing required fields");
+  });
+
+  it("rejects saves with an invalid simulation clock", () => {
+    const save = JSON.parse(serializeWorld(createWorld(120, { width: 8, height: 8 }))) as { world: { tick: number; years: number } };
+    save.world.tick = -1;
+    expect(() => deserializeWorld(JSON.stringify(save))).toThrow("missing required fields");
+
+    save.world.tick = 0;
+    save.world.years = -1;
+    expect(() => deserializeWorld(JSON.stringify(save))).toThrow("invalid simulation time");
   });
 
   it("adds conservative lineage defaults to older region summaries", () => {
@@ -160,6 +175,9 @@ describe("world persistence", () => {
       parentIds: [],
       composition: { carbon: 0.3, nitrogen: 0.2, phosphorus: 0.2, organics: 0.1, oxygen: 0.2 },
       properties: { hardness: 0.82, density: 0.66, reactivity: 0.18, conductivity: 0.74, energyPotential: 0.69, biologicalAffinity: 0.22, stability: 0.88 },
+      reserveCapacity: 240,
+      remainingReserve: 180,
+      extractedTotal: 60,
       discoveredByIds: ["agent:discoverer" as never],
       discoveryTick: 8,
       discoveryYears: 8 / 365,
@@ -167,7 +185,17 @@ describe("world persistence", () => {
 
     expect(deserializeWorld(serializeWorld(world)).substances).toEqual(world.substances);
 
-    const legacy = JSON.parse(serializeWorld(world)) as { world: { substances?: unknown } };
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { substances?: Array<{ reserveCapacity?: unknown; remainingReserve?: unknown; extractedTotal?: unknown }> } };
+    delete legacy.world.substances?.[0]?.reserveCapacity;
+    delete legacy.world.substances?.[0]?.remainingReserve;
+    delete legacy.world.substances?.[0]?.extractedTotal;
+    const upgraded = deserializeWorld(JSON.stringify(legacy));
+    expect(upgraded.substances[0]).toMatchObject({
+      reserveCapacity: expect.any(Number),
+      remainingReserve: expect.any(Number),
+      extractedTotal: 0,
+    });
+
     delete legacy.world.substances;
     expect(deserializeWorld(JSON.stringify(legacy)).substances).toEqual([]);
   });
@@ -184,6 +212,29 @@ describe("world persistence", () => {
     const restored = deserializeWorld(JSON.stringify(legacy));
 
     expect(restored.species[0]).toMatchObject({ name: expect.any(String), blueprint: expect.objectContaining({ noveltySignature: expect.any(String) }) });
+  });
+
+  it("round-trips genetics and deterministically upgrades older agents", () => {
+    const world = createWorld(1_291, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("persisted-genetics", "consumer");
+    const population = { id: "population:persisted-genetics" as never, speciesId: species.id, regionId: "region:1:1" as never, count: 32, energy: 1 };
+    const agent = createAgent(population, species, 0, "persisted-genetics");
+    world.species = [species];
+    world.populations = [population];
+    world.agents = [agent];
+    world.lod.summaries = [summarizeRegionState(world, population.regionId, "aggregate")];
+
+    expect(deserializeWorld(serializeWorld(world)).agents[0]?.genetics).toEqual(agent.genetics);
+
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { agents: Array<{ genetics?: unknown }>; lod: { summaries: Array<{ agentRecords: Array<{ genetics?: unknown }> }> } } };
+    delete legacy.world.agents[0]?.genetics;
+    delete legacy.world.lod.summaries[0]?.agentRecords[0]?.genetics;
+    const first = deserializeWorld(JSON.stringify(legacy));
+    const second = deserializeWorld(JSON.stringify(legacy));
+
+    expect(validAgentGenetics(first.agents[0]?.genetics)).toBe(true);
+    expect(validAgentGenetics(first.lod.summaries[0]?.agentRecords[0]?.genetics)).toBe(true);
+    expect(second.agents[0]?.genetics).toEqual(first.agents[0]?.genetics);
   });
 
   it("restores deterministic cultural identities for older cultural records", () => {
@@ -227,6 +278,56 @@ describe("world persistence", () => {
     expect(restored.eventArchive.archivedCultureCount).toBe(0);
     expect(restored.eventArchive.archivedRelationshipCount).toBe(0);
     expect(restored.eventArchive.archivedSpeciesRoleCounts).toEqual({});
+    expect(restored.eventArchive.archivedSpeciesSummaries).toEqual([]);
+    expect(restored.eventArchive.archivedOrganizationCount).toBe(0);
+    expect(restored.eventArchive.archivedOrganizationSummaries).toEqual([]);
+  });
+
+  it("round-trips bounded extinct species history with exact archive time", () => {
+    const world = createWorld(1_283, { width: 8, height: 8, formation: "formed" });
+    const species = createSpecies("archived-persistence", "consumer", "species:ancestor" as never, {
+      regionId: "region:2:3" as never,
+      tick: 18,
+      years: 18 / 365,
+      timelineStep: "18",
+    });
+    const summary: ArchivedSpeciesSummary = {
+      id: species.id,
+      name: species.name!,
+      role: species.role,
+      traits: { ...species.traits },
+      parentId: species.parentId!,
+      originRegionId: species.originRegionId!,
+      originTick: species.originTick!,
+      originTimelineStep: species.originTimelineStep!,
+      originYears: species.originYears!,
+      blueprint: speciesBlueprintFor(species),
+      lastKnownPopulation: 42,
+      lastKnownRegionIds: ["region:2:3" as never],
+      archivedTick: 720,
+      archivedTimelineStep: "720",
+      archivedTimelineDays: "720",
+      archivedYears: 720 / 365,
+    };
+    world.eventArchive.archivedSpeciesSummaries = [summary];
+
+    const restored = deserializeWorld(serializeWorld(world));
+
+    expect(restored.eventArchive.archivedSpeciesSummaries).toEqual([summary]);
+  });
+
+  it("round-trips bounded historical organization summaries", () => {
+    const world = createWorld(1_284, { width: 8, height: 8, formation: "formed" });
+    const organization = createOrganization("city", "region:2:3" as never, ["agent:one", "agent:two"]);
+    organization.status = "collapsed";
+    organization.resources = { food: 6.5, energy: 1.75 };
+    organization.governance!.lastConflictTimelineStep = "17";
+    archiveOrganizationRecords(world, [organization], "lifecycle");
+
+    const restored = deserializeWorld(serializeWorld(world));
+
+    expect(restored.eventArchive.archivedOrganizationCount).toBe(1);
+    expect(restored.eventArchive.archivedOrganizationSummaries).toEqual(world.eventArchive.archivedOrganizationSummaries);
   });
 
   it("round-trips causal event milestones without restoring the hot ledger", () => {
@@ -251,5 +352,47 @@ describe("world persistence", () => {
 
     expect(restored.events).toEqual([]);
     expect(restored.eventArchive.milestones).toEqual(world.eventArchive.milestones);
+  });
+
+  it("round-trips bounded long-term history samples", () => {
+    const world = createWorld(1_281, { width: 8, height: 8, formation: "formed" });
+    world.eventArchive.historySamples = [{
+      tick: 365,
+      years: 1,
+      timelineStep: "365",
+      timelineDays: "365",
+      meanTemperature: 0.5,
+      oceanCoverage: 0.4,
+      biomass: 0.2,
+      oxygen: 0.1,
+      organics: 0.05,
+      populationCount: 12,
+      speciesCount: 2,
+      organizationCount: 1,
+      facilityCount: 1,
+      knowledgeCount: 3,
+      foodSecurity: 0.8,
+      diseasePrevalence: 0.02,
+    }];
+
+    const restored = deserializeWorld(serializeWorld(world));
+
+    expect(restored.eventArchive.historySamples).toEqual(world.eventArchive.historySamples);
+  });
+
+  it("round-trips an exact timeline beyond JavaScript safe integers", () => {
+    const world = createWorld(1_292, { width: 8, height: 8, formation: "formed" });
+    world.timeline = {
+      step: "9007199254740992",
+      days: "9007199254740993",
+    };
+    world.tick = Number.MAX_SAFE_INTEGER;
+    world.simulationDays = Number.MAX_SAFE_INTEGER;
+    world.years = Number.MAX_SAFE_INTEGER / 365;
+
+    const restored = deserializeWorld(serializeWorld(world));
+
+    expect(restored.timeline).toEqual(world.timeline);
+    expect(worldDigest(restored)).toBe(worldDigest(world));
   });
 });

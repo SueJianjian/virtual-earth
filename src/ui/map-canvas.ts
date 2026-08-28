@@ -7,6 +7,7 @@ import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZo
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
 export type RenderQuality = 480 | 720 | 1080;
+export type SceneEntitySelection = { id: string; kind: SceneEntity["kind"] };
 
 const renderDimensions: Record<RenderQuality, { width: number; height: number }> = {
   480: { width: 854, height: 480 },
@@ -46,7 +47,7 @@ const clearGroup = (group: THREE.Group): void => {
 
 export const createMapCanvas = (
   canvas: HTMLCanvasElement,
-  onSelect: (selection: CellSelection) => void,
+  onSelect: (selection: CellSelection, entity?: SceneEntitySelection) => void,
   onZoomChange?: (zoom: number) => void,
 ) => {
   for (const value of Object.values(fantasyMaterials)) value.userData.shared = true;
@@ -123,6 +124,7 @@ export const createMapCanvas = (
   let sceneLinks: SceneLink[] = [];
   let frameCount = 0;
   const animatedObjects: THREE.Object3D[] = [];
+  const animatedRouteObjects: Array<THREE.Line | THREE.Mesh> = [];
   const entityPositions = new Map<string, THREE.Vector3>();
 
   const dimensionsFor = (): { width: number; height: number } => {
@@ -143,6 +145,16 @@ export const createMapCanvas = (
   const currentWater = (index: number): number => clamp(snapshot?.fields.water.values[index] ?? 0, 0, 1);
 
   const surfaceMode = () => snapshot ? mapSurfaceModeFor(snapshot.formation, zoom) : "forming-body";
+
+  const syncGlobeRotation = (): void => {
+    const globeView = surfaceMode() === "planet-globe";
+    const pitch = globeView ? globePitch : 0;
+    const yaw = globeView ? globeYaw : 0;
+    terrainRoot.rotation.order = "YXZ";
+    linkRoot.rotation.order = "YXZ";
+    terrainRoot.rotation.set(pitch, yaw, 0);
+    linkRoot.rotation.set(pitch, yaw, 0);
+  };
 
   const globeRadius = (): number => {
     const grid = snapshot?.fields.elevation;
@@ -233,6 +245,8 @@ export const createMapCanvas = (
     canvas.dataset.cameraPitch = String(Math.round(degrees(cameraPitch)));
     canvas.dataset.globeYaw = String(Math.round(degrees(globeYaw)));
     canvas.dataset.globePitch = String(Math.round(degrees(globePitch)));
+    canvas.dataset.routeYaw = String(Math.round(degrees(linkRoot.rotation.y)));
+    canvas.dataset.routePitch = String(Math.round(degrees(linkRoot.rotation.x)));
   };
 
   const scheduleRender = (): void => {
@@ -417,8 +431,7 @@ export const createMapCanvas = (
       && terrainMesh.userData.gridKey === globeGridKey
       && terrainMesh.geometry instanceof THREE.SphereGeometry) {
       updateGlobeGeometry(snapshot, terrainMesh.geometry);
-      terrainRoot.rotation.order = "YXZ";
-      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      syncGlobeRotation();
       canvas.dataset.terrainReuse = "true";
       return;
     }
@@ -498,8 +511,7 @@ export const createMapCanvas = (
         }),
       );
       terrainRoot.add(atmosphere);
-      terrainRoot.rotation.order = "YXZ";
-      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      syncGlobeRotation();
       canvas.dataset.terrainDetail = String(BASE_TERRAIN_DETAIL);
       canvas.dataset.terrainPatch = "global";
       canvas.dataset.surfaceMode = "planet-globe";
@@ -702,9 +714,102 @@ export const createMapCanvas = (
     return position;
   };
 
+  const pointForRegion = (regionId: RegionId, globeView: boolean, extraHeight: number): THREE.Vector3 | undefined => {
+    const match = /^region:(\d+):(\d+)$/.exec(regionId);
+    if (!match || !snapshot) return undefined;
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    return globeView ? globePointForRegion(x, y, extraHeight) : worldPosition(x, y, extraHeight);
+  };
+
+  const strategicRoutePoints = (link: SceneLink, globeView: boolean): THREE.Vector3[] | undefined => {
+    const from = pointForRegion(link.fromRegion, globeView, globeView ? globeRadius() * 0.012 : 0.3);
+    const to = pointForRegion(link.toRegion, globeView, globeView ? globeRadius() * 0.012 : 0.3);
+    if (!from || !to || from.distanceToSquared(to) < 0.0001) return undefined;
+    const kindOffset = link.kind === "border-conflict" ? 0.85 : link.kind === "migration" ? 0.35 : link.kind === "alliance" ? 0.15 : 0;
+    const lateralOffset = link.kind === "border-conflict" ? 0.45 : link.kind === "migration" ? -0.45 : link.kind === "alliance" ? 0.16 : 0;
+    if (!globeView) {
+      const midpoint = from.clone().lerp(to, 0.5);
+      midpoint.y = Math.max(from.y, to.y) + 0.55 + kindOffset + Math.min(3.5, from.distanceTo(to) * 0.07);
+      const direction = to.clone().sub(from);
+      const horizontalLength = Math.hypot(direction.x, direction.z);
+      if (horizontalLength > 0.0001) {
+        midpoint.x += -direction.z / horizontalLength * lateralOffset;
+        midpoint.z += direction.x / horizontalLength * lateralOffset;
+      }
+      return new THREE.QuadraticBezierCurve3(from, midpoint, to).getPoints(24);
+    }
+    const radius = globeRadius();
+    const angularDistance = Math.acos(clamp(from.clone().normalize().dot(to.clone().normalize()), -1, 1));
+    const midpoint = from.clone().add(to);
+    if (midpoint.lengthSq() < 0.0001) midpoint.copy(from).cross(new THREE.Vector3(0, 1, 0));
+    if (midpoint.lengthSq() < 0.0001) midpoint.copy(from).cross(new THREE.Vector3(1, 0, 0));
+    midpoint.normalize().multiplyScalar(radius + 0.22 + kindOffset + angularDistance * 0.72);
+    const lateralDirection = from.clone().cross(to).normalize();
+    if (lateralDirection.lengthSq() > 0.0001) midpoint.addScaledVector(lateralDirection, lateralOffset);
+    return new THREE.QuadraticBezierCurve3(from, midpoint, to).getPoints(32);
+  };
+
+  const personalRoutePoints = (link: SceneLink): THREE.Vector3[] | undefined => {
+    const from = entityPositions.get(link.fromId);
+    const to = entityPositions.get(link.toId);
+    if (!from || !to) return undefined;
+    const midpoint = from.clone().lerp(to, 0.5);
+    midpoint.y += 0.7 + from.distanceTo(to) * 0.08;
+    return new THREE.QuadraticBezierCurve3(
+      from.clone().add(new THREE.Vector3(0, 0.38, 0)),
+      midpoint,
+      to.clone().add(new THREE.Vector3(0, 0.38, 0)),
+    ).getPoints(16);
+  };
+
+  const routeAppearance = (link: SceneLink): { color: number; opacity: number; pulseRate: number } => {
+    if (link.kind === "border-conflict" || link.kind === "rival") return { color: 0xe05b43, opacity: 0.82, pulseRate: 3.8 };
+    if (link.kind === "alliance") return { color: 0x61c3c7, opacity: 0.72, pulseRate: 1.15 };
+    if (link.kind === "migration") return { color: 0xa8d59d, opacity: 0.68, pulseRate: 2.2 };
+    if (link.kind === "predation") return { color: 0xf08b62, opacity: 0.7, pulseRate: 3.2 };
+    if (link.kind === "competition") return { color: 0xc982b6, opacity: 0.68, pulseRate: 2.6 };
+    if (link.kind === "mutualism") return { color: 0x72d6b0, opacity: 0.7, pulseRate: 1.1 };
+    if (link.kind === "parasitism") return { color: 0x9e86d8, opacity: 0.72, pulseRate: 3.6 };
+    return { color: 0xe6be58, opacity: link.scope === "strategic" ? 0.74 : 0.6, pulseRate: 1.55 };
+  };
+
+  const rebuildLinks = (): void => {
+    clearGroup(linkRoot);
+    animatedRouteObjects.length = 0;
+    const globeView = surfaceMode() === "planet-globe";
+    syncGlobeRotation();
+    for (const link of sceneLinks) {
+      if (globeView && link.scope !== "strategic") continue;
+      const points = link.scope === "strategic" ? strategicRoutePoints(link, globeView) : personalRoutePoints(link);
+      if (!points) continue;
+      const appearance = routeAppearance(link);
+      const route = link.scope === "strategic"
+        ? new THREE.Mesh(
+          new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), globeView ? 40 : 24, globeView ? Math.max(0.045, globeRadius() * 0.0045) : 0.045, 5, false),
+          new THREE.MeshBasicMaterial({ color: appearance.color, transparent: true, opacity: appearance.opacity, depthTest: !globeView, depthWrite: false, toneMapped: false }),
+        )
+        : new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints(points),
+          new THREE.LineBasicMaterial({ color: appearance.color, transparent: true, opacity: appearance.opacity, depthWrite: false }),
+        );
+      route.renderOrder = link.scope === "strategic" ? 8 : 2;
+      route.userData.fromId = link.fromId;
+      route.userData.toId = link.toId;
+      route.userData.fromRegion = link.fromRegion;
+      route.userData.toRegion = link.toRegion;
+      route.userData.linkScope = link.scope;
+      route.userData.linkKind = link.kind;
+      route.userData.baseOpacity = appearance.opacity;
+      route.userData.pulseRate = appearance.pulseRate;
+      route.userData.routePhase = stringSeed(`${link.kind}:${link.fromId}:${link.toId}`) % 37;
+      linkRoot.add(route);
+      if (link.scope === "strategic") animatedRouteObjects.push(route);
+    }
+  };
+
   const rebuildEntities = (): void => {
     clearGroup(entityRoot);
-    clearGroup(linkRoot);
     animatedObjects.length = 0;
     entityPositions.clear();
     for (const entity of sceneEntities) {
@@ -743,21 +848,6 @@ export const createMapCanvas = (
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
       model.traverse((child) => { if (child.userData.flame) animatedObjects.push(child); });
-    }
-    for (const link of sceneLinks) {
-      const from = entityPositions.get(link.fromId);
-      const to = entityPositions.get(link.toId);
-      if (!from || !to) continue;
-      const midpoint = from.clone().lerp(to, 0.5);
-      midpoint.y += 0.7 + from.distanceTo(to) * 0.08;
-      const curve = new THREE.QuadraticBezierCurve3(from.clone().add(new THREE.Vector3(0, 0.38, 0)), midpoint, to.clone().add(new THREE.Vector3(0, 0.38, 0)));
-      const geometry = new THREE.BufferGeometry().setFromPoints(curve.getPoints(16));
-      const conflict = link.kind === "rival" || link.kind === "border-conflict";
-      const lineMaterial = new THREE.LineBasicMaterial({ color: conflict ? 0xd5573e : 0xf1d36a, transparent: true, opacity: conflict ? 0.78 : 0.62 });
-      const line = new THREE.Line(geometry, lineMaterial);
-      line.userData.fromId = link.fromId;
-      line.userData.toId = link.toId;
-      linkRoot.add(line);
     }
     updateSceneLod();
   };
@@ -808,15 +898,27 @@ export const createMapCanvas = (
     }
     propRoot.visible = snapshot?.formation.phase !== "stable-crust" || (!globeView && propsPerCellForZoom(zoom) > 0);
     territoryRoot.visible = !globeView && sceneLod !== "individual";
-    linkRoot.visible = !globeView && sceneLod === "individual";
+    linkRoot.visible = snapshot?.formation.phase === "stable-crust";
+    let visibleStrategicLinkCount = 0;
+    let visiblePersonalLinkCount = 0;
     effectRoot.visible = !globeView;
     for (const link of linkRoot.children) {
-      link.visible = sceneLod === "individual"
-        && visibleEntityIds.has(String(link.userData.fromId))
-        && visibleEntityIds.has(String(link.userData.toId));
+      const strategic = link.userData.linkScope === "strategic";
+      const touchesSelection = !selection
+        || link.userData.fromRegion === selection.regionId
+        || link.userData.toRegion === selection.regionId;
+      link.visible = strategic
+        ? globeView || sceneLod === "continent" || sceneLod === "region" || (sceneLod === "settlement" && touchesSelection)
+        : !globeView && sceneLod === "individual"
+          && visibleEntityIds.has(String(link.userData.fromId))
+          && visibleEntityIds.has(String(link.userData.toId));
+      if (link.visible && strategic) visibleStrategicLinkCount += 1;
+      else if (link.visible) visiblePersonalLinkCount += 1;
     }
     canvas.dataset.sceneLod = sceneLod;
     canvas.dataset.visibleSceneEntityCount = String(visibleEntityCount);
+    canvas.dataset.visibleStrategicLinkCount = String(visibleStrategicLinkCount);
+    canvas.dataset.visiblePersonalLinkCount = String(visiblePersonalLinkCount);
     canvas.dataset.maxZoom = String(MAX_MAP_ZOOM);
     canvas.dataset.worldScope = snapshot?.formation.phase === "stable-crust" ? "planetary" : "forming-body";
     if (snapshot) {
@@ -868,13 +970,15 @@ export const createMapCanvas = (
     sceneLinks = next.sceneLinks ?? [];
     canvas.dataset.sceneEntityCount = String(sceneEntities.length);
     canvas.dataset.sceneLinkCount = String(sceneLinks.length);
+    canvas.dataset.strategicLinkCount = String(sceneLinks.filter((link) => link.scope === "strategic").length);
+    canvas.dataset.personalLinkCount = String(sceneLinks.filter((link) => link.scope === "personal").length);
     canvas.dataset.sceneFacilityCount = String(sceneEntities.filter((entity) => entity.kind === "facility").length);
     canvas.dataset.sceneWorldviewCount = String(sceneEntities.filter((entity) => entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path").length);
     canvas.dataset.sceneLifeformCount = String(sceneEntities.filter((entity) => (entity.kind === "agent" || entity.kind === "population") && entity.lifeBlueprint).length);
     canvas.dataset.formationPhase = next.formation.phase;
     canvas.dataset.formationProgress = (next.formation.progress * 100).toFixed(2);
     canvas.dataset.worldGrid = `${next.fields.elevation.width}x${next.fields.elevation.height}`;
-    canvas.dataset.crossRegionLinkCount = String(sceneLinks.filter((link) => link.kind === "trade" || link.kind === "border-conflict").length);
+    canvas.dataset.crossRegionLinkCount = String(sceneLinks.filter((link) => link.scope === "strategic").length);
     rebuildTerrain();
     if (surfaceMode() === "planet-globe") {
       clearGroup(territoryRoot);
@@ -883,11 +987,14 @@ export const createMapCanvas = (
       clearGroup(linkRoot);
       animatedObjects.length = 0;
       entityPositions.clear();
+      rebuildLinks();
       updateSceneLod();
     } else {
       rebuildTerritories();
       rebuildProps();
       rebuildEntities();
+      rebuildLinks();
+      updateSceneLod();
     }
     updateSelectionMarker();
   };
@@ -900,6 +1007,7 @@ export const createMapCanvas = (
       rebuildTerrain();
       rebuildProps();
       rebuildEntities();
+      rebuildLinks();
       updateSelectionMarker();
     }
     updateSceneLod();
@@ -938,6 +1046,11 @@ export const createMapCanvas = (
           object.rotation.y += 0.0015;
         }
       }
+      for (const route of animatedRouteObjects) {
+        const material = route.material as THREE.Material;
+        const baseOpacity = Number(route.userData.baseOpacity ?? 0.7);
+        material.opacity = clamp(baseOpacity + Math.sin(phase * Number(route.userData.pulseRate ?? 1.5) + Number(route.userData.routePhase ?? 0)) * 0.16, 0.25, 0.98);
+      }
       render();
     }
     requestAnimationFrame(animate);
@@ -966,16 +1079,55 @@ export const createMapCanvas = (
     return { x, y, index: y * grid.width + x, regionId: `region:${x}:${y}` as RegionId };
   };
 
+  const pickSceneEntity = (clientX: number, clientY: number): SceneEntitySelection | undefined => {
+    if (!snapshot || surfaceMode() === "planet-globe") return undefined;
+    const rect = canvas.getBoundingClientRect();
+    const pointer = new THREE.Vector2((clientX - rect.left) / Math.max(1, rect.width) * 2 - 1, -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObject(entityRoot, true)
+      .sort((left, right) => left.distance - right.distance)
+      .find((candidate) => {
+        let object: THREE.Object3D | null = candidate.object;
+        while (object && object !== entityRoot) {
+          if (typeof object.userData.sceneEntityId === "string" && typeof object.userData.sceneKind === "string") return true;
+          object = object.parent;
+        }
+        return false;
+      });
+    if (!hit) return undefined;
+    let object: THREE.Object3D | null = hit.object;
+    while (object && object !== entityRoot) {
+      const id = object.userData.sceneEntityId;
+      const kind = object.userData.sceneKind;
+      if (typeof id === "string" && typeof kind === "string") return { id, kind: kind as SceneEntity["kind"] };
+      object = object.parent;
+    }
+    return undefined;
+  };
+
   canvas.addEventListener("click", (event) => {
     if (didPan) { didPan = false; return; }
-    const next = pickRegion(event.clientX, event.clientY);
+    const entity = pickSceneEntity(event.clientX, event.clientY);
+    const next = entity
+      ? (() => {
+        const sceneEntity = sceneEntities.find((candidate) => candidate.id === entity.id);
+        if (!sceneEntity || !snapshot) return undefined;
+        const match = /^region:(\d+):(\d+)$/.exec(sceneEntity.regionId);
+        if (!match) return undefined;
+        const x = Number(match[1]);
+        const y = Number(match[2]);
+        return { x, y, index: y * snapshot.fields.elevation.width + x, regionId: sceneEntity.regionId };
+      })()
+      : pickRegion(event.clientX, event.clientY);
     if (!next) return;
     selection = next;
     panWorldX = 0;
     panWorldZ = 0;
     if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     updateSelectionMarker();
-    onSelect(next);
+    canvas.dataset.selectedSceneEntity = entity?.id ?? "";
+    onSelect(next, entity);
     scheduleRender();
   });
   canvas.addEventListener("pointerdown", (event) => {
@@ -1009,8 +1161,7 @@ export const createMapCanvas = (
     if (surfaceMode() === "planet-globe") {
       globeYaw = normalizeYaw(pointerStart.globeYaw + deltaX * 0.008);
       globePitch = clamp(pointerStart.globePitch + deltaY * 0.005, radians(-55), radians(55));
-      terrainRoot.rotation.order = "YXZ";
-      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      syncGlobeRotation();
       scheduleRender();
       return;
     }
@@ -1089,7 +1240,7 @@ export const createMapCanvas = (
       panWorldZ = 0;
       globeYaw = radians(-18);
       globePitch = radians(-12);
-      if (surfaceMode() === "planet-globe") terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      syncGlobeRotation();
       updateOrbit(0, radians(42));
     },
     getLayer: () => layer,

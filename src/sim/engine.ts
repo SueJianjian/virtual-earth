@@ -6,6 +6,7 @@ import {
   compactEventLedger,
   lifetimeTradeVolume,
   recordAppendedEvents,
+  retainHistorySamples,
   synchronizeEventArchive,
 } from "./events/ledger.ts";
 import { stepEnvironment } from "./environment/index.ts";
@@ -18,15 +19,22 @@ import { cultureStage } from "./culture/index.ts";
 import { compactCultureRecords, compactKnowledgeRecords } from "./culture/archive.ts";
 import { ensureCultureIdentity } from "./culture/identity.ts";
 import { societyStage } from "./society/index.ts";
-import { compactOrganizationRecords } from "./society/archive.ts";
+import { archiveOrganizationRecords, compactOrganizationRecords } from "./society/archive.ts";
+import { compactFacilityRecords } from "./society/facilities.ts";
 import { lodStage } from "./lod/index.ts";
 import { worldviewStage } from "./worldview/index.ts";
 import { compactWorldviewRecords } from "./worldview/archive.ts";
 import { reconcileWorldviewLifecycle } from "./worldview/lifecycle.ts";
 import { meanFoodSecurity } from "./agents/food.ts";
 import { worldDigest } from "./world.ts";
-import { wholeYearsCrossed } from "./time.ts";
+import { advanceSimulationTimeline, DAYS_PER_YEAR, simulationDaysFromWorld, nextSimulationStep, nextSimulationTick, timelineForWorld, timelineProjection, wholeYearsCrossed } from "./time.ts";
 import { governanceForOrganization } from "./society/organization.ts";
+import { compactPathogenRecords } from "./health/disease.ts";
+import { addPersistentTotal } from "./numeric.ts";
+import { compactEcologicalRelationships } from "./ecology/interactions.ts";
+import { compactResourceRecords } from "./resources.ts";
+import { orbitalStateForWorld } from "./environment/orbit.ts";
+import { isClimateCycleState } from "./environment/cycle.ts";
 import type {
   EntityEffect,
   RuleContext,
@@ -34,6 +42,7 @@ import type {
   StateMetric,
   StepInput,
   WorldDelta,
+  WorldHistorySample,
   WorldState,
   WorldviewEffect,
 } from "./types.ts";
@@ -52,6 +61,49 @@ const emptyDelta = (): WorldDelta => ({
 
 const appendItems = <T>(target: T[], source: readonly T[]): void => {
   for (const item of source) target.push(item);
+};
+
+const historySampleFor = (state: WorldState): WorldHistorySample => {
+  const timeline = timelineForWorld(state);
+  const metrics = metricsFor(state);
+  const annualClimate = state.climateCycle.lastCompleted;
+  const diseasePrevalence = state.pathogens.length === 0
+    ? 0
+    : state.pathogens.reduce((sum, pathogen) => sum + pathogen.prevalence, 0) / state.pathogens.length;
+  return {
+    tick: state.tick,
+    years: state.years,
+    timelineStep: timeline.step,
+    timelineDays: timeline.days,
+    meanTemperature: metrics.meanTemperature,
+    oceanCoverage: metrics.oceanCoverage,
+    biomass: metrics.biomass,
+    oxygen: metrics.oxygen,
+    organics: metrics.organics,
+    populationCount: metrics.populationCount,
+    speciesCount: state.species.length,
+    organizationCount: state.organizations.length,
+    facilityCount: state.facilities.length,
+    knowledgeCount: state.knowledge.length,
+    foodSecurity: metrics.foodSecurity,
+    diseasePrevalence,
+    ...(annualClimate ? {
+      annualMeanTemperature: annualClimate.meanTemperature,
+      annualMeanHumidity: annualClimate.meanHumidity,
+      annualMeanWater: annualClimate.meanWater,
+      annualMeanSolarFlux: annualClimate.meanSolarFlux,
+      annualMinimumTemperature: annualClimate.minimumTemperature,
+      annualMaximumTemperature: annualClimate.maximumTemperature,
+      annualSeasonalRange: annualClimate.seasonalRange,
+    } : {}),
+  };
+};
+
+const recordHistorySample = (state: WorldState): void => {
+  state.eventArchive.historySamples = retainHistorySamples([
+    ...(state.eventArchive.historySamples ?? []),
+    historySampleFor(state),
+  ]);
 };
 
 export const registerSimulationStage = (stage: SimulationStage): void => {
@@ -163,6 +215,11 @@ const applyChemistryPatches = (state: WorldState, patches: NonNullable<WorldDelt
   }
 };
 
+const stateWithPendingClimateCycle = (state: WorldState, priorDeltas: ReadonlyMap<string, WorldDelta>): WorldState => {
+  const climateCycle = priorDeltas.get("environment")?.climateCycleEffect;
+  return climateCycle ? { ...state, climateCycle } : state;
+};
+
 const collectionFor = (state: WorldState, collection: EntityEffect["collection"]): Array<{ id: string }> | null => {
   if (collection === "species") return state.species;
   if (collection === "populations") return state.populations;
@@ -172,6 +229,7 @@ const collectionFor = (state: WorldState, collection: EntityEffect["collection"]
   if (collection === "organizations") return state.organizations;
   if (collection === "facilities") return state.facilities;
   if (collection === "substances") return state.substances;
+  if (collection === "pathogens") return state.pathogens;
   return state.worldview.entities;
 };
 
@@ -247,7 +305,32 @@ const applyRelationshipEffects = (state: WorldState, effects: WorldDelta["relati
   }
 };
 
+const applyEcologicalRelationshipEffects = (state: WorldState, effects: NonNullable<WorldDelta["ecologicalRelationshipEffects"]>): void => {
+  const relationships = state.ecologicalRelationships ?? [];
+  const indexById = new Map(relationships.map((relationship, index) => [relationship.id, index]));
+  let removed = false;
+  for (const effect of effects) {
+    const index = indexById.get(effect.relationship.id);
+    if (effect.operation === "remove") {
+      if (index !== undefined) {
+        relationships[index] = undefined as never;
+        indexById.delete(effect.relationship.id);
+        removed = true;
+      }
+    } else if (effect.operation === "update" && index !== undefined) {
+      relationships[index] = effect.relationship;
+    } else if (effect.operation === "create" && index === undefined) {
+      indexById.set(effect.relationship.id, relationships.length);
+      relationships.push(effect.relationship);
+    }
+  }
+  state.ecologicalRelationships = removed
+    ? relationships.filter((relationship): relationship is NonNullable<typeof relationship> => Boolean(relationship))
+    : relationships;
+};
+
 const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["resourceTransactions"]): void => {
+  compactResourceRecords(state, { removeOrphanedHolders: false });
   const entryKey = (resourceId: string, regionId: string, holderId?: string): string =>
     `${resourceId}|${regionId}|${holderId ?? "world"}`;
   const entriesByKey = new Map<string, WorldState["resources"][number]>();
@@ -262,7 +345,11 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
   const changeBalance = (transaction: ResourceTransactionLike, regionId: ResourceTransactionLike["regionId"], holderId: string | undefined, amount: number, originEventId: string): void => {
     const existing = findEntry(transaction.resourceId, regionId, holderId);
     if (existing) {
-      existing.amount = Math.max(0, Math.min(existing.cap, existing.amount + amount));
+      existing.amount = amount < 0
+        ? Math.max(0, existing.amount + amount)
+        : amount >= existing.cap - existing.amount
+          ? existing.cap
+          : existing.amount + amount;
       existing.originEventId = originEventId;
       return;
     }
@@ -283,7 +370,9 @@ const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["
   for (const transaction of transactions) {
     if (appliedIds.has(transaction.id)) continue;
     appliedIds.add(transaction.id);
-    if (!Number.isFinite(transaction.amount) || transaction.amount < 0) throw new Error(`Invalid resource amount: ${transaction.id}`);
+    if (!Number.isFinite(transaction.amount) || transaction.amount < 0 || transaction.amount > Number.MAX_SAFE_INTEGER) {
+      throw new Error(`Invalid resource amount: ${transaction.id}`);
+    }
     if (transaction.operation === "mint") {
       changeBalance(transaction, transaction.regionId, transaction.toHolderId, transaction.amount, transaction.id);
     } else if (transaction.operation === "transfer") {
@@ -346,7 +435,8 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         regionId: effect.regionId,
         influence: clamp(effect.influence ?? 0.01),
         resourceBalances: {},
-        originTick: state.tick + 1,
+        originTick: nextSimulationTick(state),
+        originTimelineStep: nextSimulationStep(state),
         ...(effect.sourcePhenomenonId ? { sourcePhenomenonId: effect.sourcePhenomenonId } : {}),
         ...(founderId ? { founderId } : {}),
         ...(memberIds.length > 0 ? { memberIds } : {}),
@@ -356,8 +446,10 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         activePractitionerCount: 0,
         sponsorCount: sponsorOrganizationId ? 1 : 0,
         viability: clamp(effect.influence ?? 0.01),
-        lastStatusChangeTick: state.tick + 1,
-        lastActiveTick: state.tick + 1,
+        lastStatusChangeTick: nextSimulationTick(state),
+        lastStatusChangeTimelineStep: nextSimulationStep(state),
+        lastActiveTick: nextSimulationTick(state),
+        lastActiveTimelineStep: nextSimulationStep(state),
         revivalCount: 0,
       });
     } else if (effect.kind === "record-phenomenon") {
@@ -371,7 +463,8 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         epistemicStatus: effect.epistemicStatus,
         name: effect.name,
         regionId: effect.regionId,
-        originTick: state.tick + 1,
+        originTick: nextSimulationTick(state),
+        originTimelineStep: nextSimulationStep(state),
         parentIds: [...effect.parentIds].sort(),
         causeRuleId: effect.causeRuleId,
         evidence: { ...effect.evidence },
@@ -399,8 +492,10 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         practitionerId: effect.practitionerId,
         ...(effect.teacherId ? { teacherId: effect.teacherId } : {}),
         ...(organizationId ? { organizationId } : {}),
-        originTick: state.tick + 1,
+        originTick: nextSimulationTick(state),
+        originTimelineStep: nextSimulationStep(state),
         lastTrainedTick: state.tick,
+        lastTrainedTimelineStep: timelineForWorld(state).step,
         attunement: 0.02,
         energy: 0.12,
         attempts: 0,
@@ -408,7 +503,7 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         status: "active",
       });
       if (effect.teacherId && state.agents.some((agent) => agent.id === effect.teacherId)) {
-        const relationship = createRelationship("teacher", effect.teacherId, effect.practitionerId, state.tick + 1, 0.78);
+        const relationship = createRelationship("teacher", effect.teacherId, effect.practitionerId, nextSimulationTick(state), 0.78, nextSimulationStep(state));
         if (!state.relationships.some((candidate) => candidate.id === relationship.id)) {
           state.relationships.push(relationship);
           for (const agentId of [relationship.fromId, relationship.toId]) {
@@ -428,9 +523,10 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
       const nextEnergy = Math.max(0, Math.min(1, practice.energy + effect.energyGain - effect.energySpent));
       practice.energy = nextEnergy;
       practice.attunement = Math.max(0, Math.min(1, practice.attunement + effect.attunementDelta));
-      practice.attempts += 1;
-      practice.lastTrainedTick = state.tick + 1;
-      if (effect.outcome !== "advance") practice.failures += 1;
+      practice.attempts = addPersistentTotal(practice.attempts, 1);
+      practice.lastTrainedTick = nextSimulationTick(state);
+      practice.lastTrainedTimelineStep = nextSimulationStep(state);
+      if (effect.outcome !== "advance") practice.failures = addPersistentTotal(practice.failures, 1);
       if (effect.outcome === "exhausted" && nextEnergy <= 0.01) practice.status = "dormant";
       if (practice.failures >= 5 && practice.attunement < 0.04) practice.status = "failed";
       const organizationId = effect.organizationId ?? practice.organizationId;
@@ -476,6 +572,21 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
       throw new Error(`Invalid chemistry change: ${change.field}:${change.index}`);
     }
   }
+  for (const effect of delta.ecologicalRelationshipEffects ?? []) {
+    const relationship = effect.relationship;
+    if (!Number.isFinite(relationship.strength)
+      || !Number.isFinite(relationship.firstTick)
+      || !Number.isFinite(relationship.lastTick)
+      || !Number.isFinite(relationship.interactionCount)
+      || !Number.isFinite(relationship.cumulativeImpact)
+      || !Number.isFinite(relationship.lastImpact)
+      || !relationship.id
+      || !relationship.regionId
+      || !relationship.fromSpeciesId
+      || !relationship.toSpeciesId) {
+      throw new Error(`Invalid ecological relationship: ${relationship.id}`);
+    }
+  }
   if (delta.entityEffects.some((effect) => effect.collection === "worldviewEntities")) {
     throw new Error("Worldview entities must use constrained worldview effects");
   }
@@ -500,6 +611,9 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
   if (delta.formationEffect && !Object.values(delta.formationEffect).every((value) => typeof value !== "number" || Number.isFinite(value))) {
     throw new Error("Invalid planet formation state");
   }
+  if (delta.climateCycleEffect && !isClimateCycleState(delta.climateCycleEffect)) {
+    throw new Error("Invalid climate cycle state");
+  }
 };
 
 const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: readonly WorldDelta[] = [delta]): void => {
@@ -511,14 +625,21 @@ const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: rea
     applyChemistryPatches(state, gridDelta.chemistryPatches ?? []);
     applyChemistryChanges(state, gridDelta.chemistryChanges);
   }
-  applyEntityEffects(state, delta.entityEffects);
-  applyRelationshipEffects(state, delta.relationshipEffects);
   const worldviewTransactions = delta.worldviewEffects
     .filter((effect): effect is Extract<WorldviewEffect, { kind: "resource-transaction" }> => effect.kind === "resource-transaction")
     .map((effect) => effect.transaction);
   applyResourceTransactions(state, [...delta.resourceTransactions, ...worldviewTransactions]);
+  const removedOrganizations = delta.entityEffects
+    .filter((effect): effect is EntityEffect & { collection: "organizations"; operation: "remove" } => effect.collection === "organizations" && effect.operation === "remove")
+    .map((effect) => state.organizations.find((organization) => organization.id === effect.id))
+    .filter((organization): organization is WorldState["organizations"][number] => Boolean(organization));
+  archiveOrganizationRecords(state, removedOrganizations, "lifecycle");
+  applyEntityEffects(state, delta.entityEffects);
+  applyRelationshipEffects(state, delta.relationshipEffects);
+  applyEcologicalRelationshipEffects(state, delta.ecologicalRelationshipEffects ?? []);
   applyWorldviewEffects(state, delta.worldviewEffects);
   if (delta.formationEffect) state.formation = structuredClone(delta.formationEffect);
+  if (delta.climateCycleEffect) state.climateCycle = structuredClone(delta.climateCycleEffect);
   for (const effect of delta.lodEffects ?? []) {
     const index = state.lod.summaries.findIndex((summary) => summary.regionId === (effect.operation === "upsert-summary" ? effect.summary.regionId : effect.regionId));
     if (effect.operation === "remove-summary") {
@@ -536,6 +657,10 @@ const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: rea
 
 const pruneTransientState = (state: WorldState): WorldDelta["eventDrafts"] => {
   compactPopulationRecords(state);
+  compactExtinctSpecies(state);
+  const populationIds = new Set(state.populations.map((population) => population.id));
+  state.agents = state.agents.filter((agent) => populationIds.has(agent.populationId));
+  compactEcologicalRelationships(state, { validSpeciesIds: new Set(state.species.map((species) => species.id)) });
   const agentIds = new Set(state.agents.map((agent) => agent.id));
   // Later stages can still see an organization member that died earlier in
   // this step. Reconcile relationship endpoints at the commit boundary so
@@ -578,6 +703,7 @@ const pruneTransientState = (state: WorldState): WorldDelta["eventDrafts"] => {
     return { ...organization, memberIds, childOrganizationIds, diplomacy, status };
   });
   compactOrganizationRecords(state);
+  compactFacilityRecords(state);
   const organizationIdsAfterPrune = new Set(state.organizations.map((organization) => organization.id));
   state.worldview.practices = state.worldview.practices
     .filter((practice) => agentIds.has(practice.practitionerId))
@@ -589,15 +715,7 @@ const pruneTransientState = (state: WorldState): WorldDelta["eventDrafts"] => {
         ...(organizationId && organizationIdsAfterPrune.has(organizationId) ? { organizationId } : {}),
       };
     });
-  state.resources = state.resources.filter((resource) => {
-    if (resource.amount <= 0.000000001) return false;
-    if (!resource.holderId) return true;
-    // Typed entity ledgers must not outlive their owner. Generic holders are
-    // valid system accounts and intentionally remain available to rule packs.
-    if (resource.holderId.startsWith("agent:")) return agentIds.has(resource.holderId as WorldState["agents"][number]["id"]);
-    if (resource.holderId.startsWith("organization:")) return organizationIdsAfterPrune.has(resource.holderId as WorldState["organizations"][number]["id"]);
-    return true;
-  });
+  compactResourceRecords(state);
   compactCultureRecords(state);
   compactKnowledgeRecords(state);
   compactAgentMemoryRecords(state);
@@ -605,7 +723,7 @@ const pruneTransientState = (state: WorldState): WorldDelta["eventDrafts"] => {
   if (identifiedCultures.some((culture, index) => culture !== state.cultures[index])) state.cultures = identifiedCultures;
   const identifiedSpecies = state.species.map(ensureSpeciesIdentity);
   if (identifiedSpecies.some((species, index) => species !== state.species[index])) state.species = identifiedSpecies;
-  compactExtinctSpecies(state);
+  compactPathogenRecords(state);
   const lifecycleEvents = reconcileWorldviewLifecycle(state);
   compactWorldviewRecords(state);
   return lifecycleEvents;
@@ -616,16 +734,23 @@ const installDefaultStages = (): void => {
     registerSimulationStage({
       id: "environment",
       order: 10,
-      run: (state, input) => stepEnvironment(state, { solarFlux: 1, externalEvents: input.externalEvents, elapsedYears: input.elapsedYears }),
+      run: (state, input) => stepEnvironment(state, {
+        solarFlux: 1,
+        externalEvents: input.externalEvents,
+        elapsedYears: input.elapsedYears,
+        ...(input.timelineDays === undefined ? {} : { timelineDays: input.timelineDays }),
+        ...(input.timelineStep === undefined ? {} : { timelineStep: input.timelineStep }),
+      }),
     });
   }
   const annualized = (stage: SimulationStage): SimulationStage => ({
     ...stage,
     run: (state, input, priorDeltas) => {
       if (state.formation.phase !== "stable-crust") return emptyDelta();
-      const elapsedYears = wholeYearsCrossed(state.years, input.elapsedYears);
+      const elapsedYears = wholeYearsCrossed(state.years, input.elapsedYears, timelineForWorld(state).days);
+      const stageState = stateWithPendingClimateCycle(state, priorDeltas);
       return elapsedYears > 0
-        ? stage.run(state, { ...input, elapsedYears }, priorDeltas)
+        ? stage.run(stageState, { ...input, elapsedYears }, priorDeltas)
         : emptyDelta();
     },
   });
@@ -650,6 +775,14 @@ export const MAX_EXTERNAL_EVENTS_PER_STEP = 256;
 export type StepOptions = { computeDigest?: boolean; mutateState?: boolean };
 
 export const stepWorld = (state: WorldState, input: StepInput, options: StepOptions = {}): { state: WorldState; events: WorldState["events"]; digest: string } => {
+  if (!Number.isSafeInteger(state.tick) || state.tick < 0) {
+    throw new RangeError("World tick must be a safe, non-negative integer");
+  }
+  const currentTimeline = timelineForWorld(state);
+  // Promote legacy saves to the exact clock on their next step, even when
+  // their compatibility tick has already reached MAX_SAFE_INTEGER.
+  const nextTimeline = advanceSimulationTimeline(currentTimeline, input.elapsedYears);
+  const projection = timelineProjection(nextTimeline);
   installDefaultStages();
   const previous = state;
   const knownExternalIds = new Set(previous.events.map((event) => event.id));
@@ -662,7 +795,12 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   const orderedDeltas: WorldDelta[] = [];
   const merged = emptyDelta();
   for (const stage of listSimulationStages()) {
-    const delta = stage.run(previous, { ...input, externalEvents: acceptedExternalEvents }, priorDeltas);
+    const delta = stage.run(previous, {
+      ...input,
+      externalEvents: acceptedExternalEvents,
+      timelineDays: nextTimeline.days,
+      timelineStep: nextTimeline.step,
+    }, priorDeltas);
     priorDeltas.set(stage.id, delta);
     orderedDeltas.push(delta);
     appendItems(merged.fieldChanges, delta.fieldChanges);
@@ -671,11 +809,13 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     if (delta.chemistryPatches) merged.chemistryPatches = [...(merged.chemistryPatches ?? []), ...delta.chemistryPatches];
     appendItems(merged.entityEffects, delta.entityEffects);
     appendItems(merged.relationshipEffects, delta.relationshipEffects);
+    if (delta.ecologicalRelationshipEffects) merged.ecologicalRelationshipEffects = [...(merged.ecologicalRelationshipEffects ?? []), ...delta.ecologicalRelationshipEffects];
     appendItems(merged.resourceTransactions, delta.resourceTransactions);
     appendItems(merged.worldviewEffects, delta.worldviewEffects);
     appendItems(merged.eventDrafts, delta.eventDrafts);
     if (delta.lodEffects) merged.lodEffects = [...(merged.lodEffects ?? []), ...delta.lodEffects];
     if (delta.formationEffect) merged.formationEffect = delta.formationEffect;
+    if (delta.climateCycleEffect) merged.climateCycleEffect = delta.climateCycleEffect;
   }
   const next = options.mutateState
     ? previous
@@ -687,12 +827,16 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   appendItems(merged.eventDrafts, pruneTransientState(next));
   const [, nextRandom] = nextRandomValue(previous.random);
   next.random = nextRandom;
-  next.tick += 1;
-  next.years += Math.max(0, input.elapsedYears);
-  const emittedExternal = appendExternalEventsInPlace(next.events, acceptedExternalEvents);
-  const emittedNatural = appendEventsInPlace(next.events, merged.eventDrafts, next.tick, next.years);
+  next.timeline = nextTimeline;
+  next.tick = projection.tick;
+  next.simulationDays = projection.simulationDays;
+  next.years = projection.years;
+  next.orbital = orbitalStateForWorld(next);
+  const emittedExternal = appendExternalEventsInPlace(next.events, acceptedExternalEvents, currentTimeline.step, currentTimeline.days);
+  const emittedNatural = appendEventsInPlace(next.events, merged.eventDrafts, next.tick, next.years, nextTimeline.step, nextTimeline.days);
   const emittedEvents = [...emittedExternal, ...emittedNatural];
   recordAppendedEvents(next.eventArchive, emittedEvents);
+  if (wholeYearsCrossed(0, input.elapsedYears, currentTimeline.days) > 0) recordHistorySample(next);
   compactEventLedger(next);
   compactEventArchiveIndexes(next);
   return { state: next, events: emittedEvents, digest: options.computeDigest === false ? "" : worldDigest(next) };

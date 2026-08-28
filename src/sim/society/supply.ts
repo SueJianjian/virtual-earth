@@ -2,6 +2,7 @@ import type { DiplomaticStance, FacilityState, OrganizationState, OrganizationTy
 import { facilityEffectProfilesForState } from "./facilities.ts";
 import { diplomacyForOrganization } from "./organization.ts";
 import { neighboringRegionIds } from "./territory.ts";
+import { simulationStepForWorld } from "../time.ts";
 
 export type SupplyResourceId = "food" | "materials" | "energy";
 
@@ -144,7 +145,7 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
 
   const balances = projectedBalances(state, priorTransactions);
   const facilityEffects = facilityEffectProfilesForState(state);
-  const currentOrganizations = new Map(organizations.map((organization) => [organization.id, structuredClone(organization)]));
+  const currentOrganizations = new Map(organizations.map((organization) => [organization.id, organization]));
   const routeCandidates = routeCandidatesFor(state, organizations);
   const facilitiesByOwner = new Map<OrganizationState["id"], FacilityState[]>();
   for (const facility of state.facilities) {
@@ -184,13 +185,15 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
         const sourceTarget = targets.get(source.id) ?? 0;
         const destinationTarget = targets.get(destination.id) ?? 0;
         const surplus = Math.max(0, sourceBalance - sourceTarget * 1.1);
+        const routeStance = relationBetween(source, destination);
+        if (routeStance === "rival") continue;
         const navigation = ((facilityEffects.get(source.regionId)?.navigation ?? 0) + (facilityEffects.get(destination.regionId)?.navigation ?? 0)) / 2;
-        const routeCapacity = 1 + navigation * 0.7 + (sourceEntry.route.stance === "allied" ? 0.25 : sourceEntry.route.stance === "trade" ? 0.15 : 0);
+        const routeCapacity = 1 + navigation * 0.7 + (routeStance === "allied" ? 0.25 : routeStance === "trade" ? 0.15 : 0);
         const amount = Math.min(sourceBalance, rounded(Math.min(surplus, shortage, resource.shipmentCapacity * routeCapacity)));
         if (amount <= 0.001) continue;
 
         delta.resourceTransactions.push({
-          id: `resource:${resource.id}:interregional:${state.tick}:${source.id}:${destination.id}`,
+          id: `resource:${resource.id}:interregional:${simulationStepForWorld(state)}:${source.id}:${destination.id}`,
           resourceId: resource.id,
           regionId: source.regionId,
           destinationRegionId: destination.regionId,
@@ -221,7 +224,7 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
             destinationBalance,
             destinationTarget,
             directRoute: sourceEntry.route.direct,
-            routeStance: sourceEntry.route.stance,
+            routeStance,
           },
           payload: {
             resourceId: resource.id,
@@ -235,7 +238,7 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
           source: "natural",
         });
 
-        if (sourceEntry.route.stance === "neutral") {
+        if (routeStance === "neutral") {
           const relationKey = [source.id, destination.id].sort().join("|");
           if (!relationsRecorded.has(relationKey)) {
             const updatedSource = withRelation(source, destination, "trade");
@@ -257,7 +260,7 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
     const amount = Math.min(available, rounded(target * 0.18));
     if (amount <= 0.001) continue;
     delta.resourceTransactions.push({
-      id: `resource:energy:operations:${state.tick}:${organization.id}`,
+      id: `resource:energy:operations:${simulationStepForWorld(state)}:${organization.id}`,
       resourceId: "energy",
       regionId: organization.regionId,
       amount,

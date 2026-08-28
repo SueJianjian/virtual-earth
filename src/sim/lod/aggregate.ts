@@ -2,6 +2,7 @@ import { forkRandom, hashString, randomFloat } from "../random.ts";
 import { MAX_KNOWLEDGE_PER_CULTURE } from "../culture/archive.ts";
 import { createCultureIdentity } from "../culture/identity.ts";
 import { defaultGovernanceFor, minimumMembersFor } from "../society/organization.ts";
+import { MAX_ORGANIZATIONS_PER_SUMMARY } from "../society/archive.ts";
 import type {
   AggregateKnowledgeSummary,
   CultureIdentity,
@@ -17,6 +18,7 @@ import type {
   WorldEventDraft,
   WorldState,
 } from "../types.ts";
+import { nextSimulationTick, projectedYearsAfterStep, simulationStepForWorld } from "../time.ts";
 
 export const MAX_AGGREGATE_ORGANIZATIONS = 4_096;
 export const MAX_AGGREGATE_COUNTER = 1_000_000_000;
@@ -107,7 +109,7 @@ const identityFor = (
   previous?: CultureIdentity,
 ): CultureIdentity => {
   const environment = environmentFor(state, regionId);
-  const base = previous ?? createCultureIdentity(`aggregate:${state.seed}:${regionId}`, regionId, state.tick, state.years, [], environment);
+  const base = previous ?? createCultureIdentity(`aggregate:${state.seed}:${regionId}`, regionId, state.tick, state.years, [], environment, undefined, simulationStepForWorld(state));
   return { ...base, values: cultureValuesFor(environment, socialPopulation, cohesion) };
 };
 
@@ -126,6 +128,7 @@ const boundedKnowledge = (knowledge: readonly AggregateKnowledgeSummary[]): Aggr
       transmissionCost: clamp(finite(item.transmissionCost, 0.5)),
       forgettingRate: clamp(finite(item.forgettingRate, 0.02)),
       originTick: Math.max(0, Math.floor(finite(item.originTick))),
+      ...(item.originTimelineStep === undefined ? {} : { originTimelineStep: item.originTimelineStep }),
       originYears: Math.max(0, finite(item.originYears)),
       parentIds: [...new Set((Array.isArray(item.parentIds) ? item.parentIds : []).filter((id) => typeof id === "string"))],
     });
@@ -239,6 +242,7 @@ export const evolveAggregateRegion = (
   recentEvents: readonly WorldEvent[] = [],
 ): AggregateEvolution => {
   const regionId = previous.regionId;
+  const simulationStep = simulationStepForWorld(state);
   const environment = environmentFor(state, regionId);
   const priorSociety = previous.societySummary ?? initialAggregateSociety(previous);
   const priorCulture = previous.cultureSummary ?? initialAggregateCulture(state, regionId, previous.socialPopulation ?? previous.population);
@@ -297,13 +301,13 @@ export const evolveAggregateRegion = (
     const field = key as keyof CultureValues;
     return [field, rounded(beforeIdentity.values[field] * 0.965 + targetValues[field] * 0.035)];
   })) as CultureValues;
-  const [languageRoll] = randomFloat(forkRandom(state.random, `aggregate-language:${regionId}:${state.tick}`));
-  const [styleRoll] = randomFloat(forkRandom(state.random, `aggregate-style:${regionId}:${state.tick}`));
+  const [languageRoll] = randomFloat(forkRandom(state.random, `aggregate-language:${regionId}:${simulationStep}`));
+  const [styleRoll] = randomFloat(forkRandom(state.random, `aggregate-style:${regionId}:${simulationStep}`));
   const language = languageRoll < 0.0025 + culture.identity.values.curiosity * 0.004
-    ? languageFamilies[hashString(`${state.seed}:${regionId}:${state.tick}:language`) % languageFamilies.length]!
+    ? languageFamilies[hashString(`${state.seed}:${regionId}:${simulationStep}:language`) % languageFamilies.length]!
     : beforeIdentity.languageFamily;
   const communicationStyle = styleRoll < 0.0025 + culture.identity.values.curiosity * 0.004
-    ? communicationStyles[hashString(`${state.seed}:${regionId}:${state.tick}:style`) % communicationStyles.length]!
+    ? communicationStyles[hashString(`${state.seed}:${regionId}:${simulationStep}:style`) % communicationStyles.length]!
     : beforeIdentity.communicationStyle;
   const valuesChanged = Object.keys(identityValues).some((key) => Math.abs(beforeIdentity.values[key as keyof CultureValues] - identityValues[key as keyof CultureValues]) > 0.018);
   const identityChanged = valuesChanged || language !== beforeIdentity.languageFamily || communicationStyle !== beforeIdentity.communicationStyle;
@@ -314,7 +318,7 @@ export const evolveAggregateRegion = (
     communicationStyle,
     generation: identityChanged ? Math.min(MAX_AGGREGATE_COUNTER, beforeIdentity.generation + 1) : beforeIdentity.generation,
     noveltySignature: identityChanged
-      ? hashString(`aggregate-culture:${beforeIdentity.noveltySignature}:${state.tick}:${language}:${communicationStyle}`).toString(16).padStart(8, "0")
+      ? hashString(`aggregate-culture:${beforeIdentity.noveltySignature}:${simulationStep}:${language}:${communicationStyle}`).toString(16).padStart(8, "0")
       : beforeIdentity.noveltySignature,
   };
   culture.transmissionRate = blend(culture.transmissionRate, clamp(0.06 + socialFactor * 0.28 + society.cohesion * 0.28 + foodSecurity * 0.18));
@@ -326,10 +330,10 @@ export const evolveAggregateRegion = (
   const innovationProbability = candidate && socialPopulation >= 3 && culture.memoryStrength >= 0.16 && domainCount < 6
     ? clamp(0.006 + culture.identity.values.curiosity * 0.018 + socialPotential * 0.016 + foodSecurity * 0.012 + candidate.score * 0.02, 0, 0.085)
     : 0;
-  const [innovationRoll] = randomFloat(forkRandom(state.random, `aggregate-innovation:${regionId}:${state.tick}`));
+  const [innovationRoll] = randomFloat(forkRandom(state.random, `aggregate-innovation:${regionId}:${simulationStep}`));
   if (candidate && innovationProbability > 0 && innovationRoll < innovationProbability) {
     const parentIds = culture.knowledge.slice().sort(knowledgeSort).slice(0, 3).map((item) => item.id);
-    const id = `aggregate-knowledge:${hashString(`${state.seed}:${regionId}:${candidate.domain}:${domainCount + 1}:${state.tick}`).toString(16)}`;
+    const id = `aggregate-knowledge:${hashString(`${state.seed}:${regionId}:${candidate.domain}:${domainCount + 1}:${simulationStep}`).toString(16)}`;
     const innovation: AggregateKnowledgeSummary = {
       id,
       kind: `aggregate-innovation:${candidate.domain}`,
@@ -339,8 +343,8 @@ export const evolveAggregateRegion = (
       transmissionCost: clamp(0.5 - culture.transmissionRate * 0.24),
       forgettingRate: clamp(0.035 - culture.memoryStrength * 0.02, 0.001, 0.04),
       originRegionId: regionId,
-      originTick: state.tick + 1,
-      originYears: state.years + 1,
+      originTick: nextSimulationTick(state),
+      originYears: projectedYearsAfterStep(state, 1),
       parentIds,
     };
     culture.knowledge = boundedKnowledge([...culture.knowledge, innovation]);
@@ -349,7 +353,7 @@ export const evolveAggregateRegion = (
     events.push(event("aggregate-culture-innovation", "lod:aggregate-cultural-innovation", regionId, culture.id, innovationProbability, innovationRoll, { domain: candidate.domain, score: candidate.score, socialPopulation, socialPotential, parentCount: parentIds.length }, { cultureId: culture.id, knowledgeId: innovation.id, domain: candidate.domain, name: innovation.name, parentIds }));
   }
 
-  const [beliefRoll] = randomFloat(forkRandom(state.random, `aggregate-belief:${regionId}:${state.tick}`));
+  const [beliefRoll] = randomFloat(forkRandom(state.random, `aggregate-belief:${regionId}:${simulationStep}`));
   const beliefProbability = culture.knowledge.length >= 2 && socialPopulation >= 4
     ? clamp(0.003 + culture.identity.values.tradition * 0.012 + culture.identity.values.curiosity * 0.008 + society.cohesion * 0.008)
     : 0;
@@ -383,7 +387,7 @@ export const evolveAggregateRegion = (
     if (!eligibleFor(type) || current >= targetFor(type)) continue;
     const gap = targetFor(type) - current;
     const probability = clamp(0.012 + Math.min(0.06, gap * 0.004) + foodSecurity * 0.035 + society.cohesion * 0.025, 0.005, 0.18);
-    const [roll] = randomFloat(forkRandom(state.random, `aggregate-organization:${regionId}:${type}:${state.tick}`));
+    const [roll] = randomFloat(forkRandom(state.random, `aggregate-organization:${regionId}:${type}:${simulationStep}`));
     if (roll >= probability) continue;
     society.organizationCounts[type] = Math.min(MAX_AGGREGATE_ORGANIZATIONS, current + 1);
     society.lastChangeTick = state.tick;
@@ -397,7 +401,7 @@ export const evolveAggregateRegion = (
     const type = candidates[0];
     if (type) {
       const probability = clamp(stress * 0.065, 0, 0.12);
-      const [roll] = randomFloat(forkRandom(state.random, `aggregate-dissolution:${regionId}:${type}:${state.tick}`));
+      const [roll] = randomFloat(forkRandom(state.random, `aggregate-dissolution:${regionId}:${type}:${simulationStep}`));
       if (roll < probability && society.organizationCounts[type] > 0) {
         const previousCount = society.organizationCounts[type];
         society.organizationCounts[type] -= 1;
@@ -465,8 +469,14 @@ export const organizationSummariesForAggregate = (
       });
     }
   }
-  const validIds = new Set(result.map((organization) => organization.id));
-  return result
+  const ordered = result.sort((left, right) => organizationTypes.indexOf(left.type) - organizationTypes.indexOf(right.type) || left.id.localeCompare(right.id));
+  const representative = organizationTypes
+    .map((type) => ordered.find((organization) => organization.type === type))
+    .filter((organization): organization is OrganizationSummary => Boolean(organization));
+  const retained = [...representative, ...ordered.filter((organization) => !representative.includes(organization))]
+    .slice(0, MAX_ORGANIZATIONS_PER_SUMMARY);
+  const validIds = new Set(retained.map((organization) => organization.id));
+  return retained
     .map((organization) => ({
       ...organization,
       childIds: organization.childIds.filter((id) => validIds.has(id) && id !== organization.id).slice(0, 64),

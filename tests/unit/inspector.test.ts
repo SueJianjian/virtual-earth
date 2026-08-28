@@ -5,10 +5,14 @@ import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 import { projectMicroRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
+import { archiveOrganizationRecords } from "../../src/sim/society/archive.ts";
 import { createWorld } from "../../src/sim/world.ts";
 import { lineageForSnapshot, renderInspector } from "../../src/ui/inspector.ts";
-import type { RegionCultureSummary, RegionId, RegionSocietySummary } from "../../src/sim/types.ts";
+import { createEventArchive } from "../../src/sim/events/ledger.ts";
+import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
+import type { ArchivedSpeciesSummary, RegionCultureSummary, RegionId, RegionSocietySummary } from "../../src/sim/types.ts";
 import type { WorldSnapshot } from "../../src/worker/protocol.ts";
+import { derivePathogen } from "../../src/sim/health/disease.ts";
 
 const region = "region:0:0" as RegionId;
 
@@ -246,6 +250,46 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("代谢方式");
   });
 
+  it("renders a historical report for an archived extinct species", () => {
+    const snapshot = lineageSnapshot();
+    const parent = snapshot.species?.[0];
+    if (!parent) throw new Error("Expected a parent species");
+    const extinct = createSpecies("archived-inspector", "producer", parent.id, {
+      regionId: region,
+      tick: 12,
+      years: 12 / 365,
+      timelineStep: "12",
+    });
+    const archived: ArchivedSpeciesSummary = {
+      id: extinct.id,
+      name: extinct.name!,
+      role: extinct.role,
+      traits: { ...extinct.traits },
+      parentId: extinct.parentId!,
+      originRegionId: extinct.originRegionId!,
+      originTick: extinct.originTick!,
+      originTimelineStep: extinct.originTimelineStep!,
+      originYears: extinct.originYears!,
+      blueprint: speciesBlueprintFor(extinct),
+      lastKnownPopulation: 7,
+      lastKnownRegionIds: [region],
+      archivedTick: 48,
+      archivedTimelineStep: "48",
+      archivedTimelineDays: "48",
+      archivedYears: 48 / 365,
+    };
+    snapshot.eventArchive = { ...createEventArchive(), archivedSpeciesSummaries: [archived] };
+    const element = { innerHTML: "" } as HTMLElement;
+
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "species", id: archived.id });
+
+    expect(element.innerHTML).toContain("已灭绝 · 历史摘要");
+    expect(element.innerHTML).toContain("最后记录数量");
+    expect(element.innerHTML).toContain("原创生命蓝图");
+    expect(element.innerHTML).toContain("后代分支");
+    expect(element.innerHTML).toContain("species:");
+  });
+
   it("renders regional emergent matter and a complete substance provenance report", () => {
     const snapshot = lineageSnapshot();
     snapshot.substances = [{
@@ -260,6 +304,9 @@ describe("region lineage inspector", () => {
       parentIds: ["substance:parent"],
       composition: { carbon: 0.3, nitrogen: 0.1, phosphorus: 0.2, organics: 0.2, oxygen: 0.2 },
       properties: { hardness: 0.9, density: 0.7, reactivity: 0.15, conductivity: 0.82, energyPotential: 0.76, biologicalAffinity: 0.34, stability: 0.91 },
+      reserveCapacity: 0,
+      remainingReserve: 0,
+      extractedTotal: 0,
       discoveredByIds: [snapshot.projection!.agents[0]!.id],
       discoveryTick: 21,
       discoveryYears: 21 / 365,
@@ -275,6 +322,9 @@ describe("region lineage inspector", () => {
       parentIds: [],
       composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.3, organics: 0.1, oxygen: 0.2 },
       properties: { hardness: 0.8, density: 0.6, reactivity: 0.2, conductivity: 0.65, energyPotential: 0.6, biologicalAffinity: 0.25, stability: 0.85 },
+      reserveCapacity: 240,
+      remainingReserve: 180,
+      extractedTotal: 60,
       discoveredByIds: [],
     }];
     const element = { innerHTML: "" } as HTMLElement;
@@ -290,6 +340,12 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("澜脉晶");
     expect(element.innerHTML).toContain("导电性");
     expect(element.innerHTML).toContain("发现者");
+    expect(element.innerHTML).toContain("人工制造，不属于天然矿藏");
+
+    renderInspector(element, snapshot, selection, { level: "substance", id: "substance:parent" });
+    expect(element.innerHTML).toContain("剩余储量");
+    expect(element.innerHTML).toContain("累计开采");
+    expect(element.innerHTML).toContain("75%");
   });
 
   it("shows a selected individual's facility occupation through its source identity", () => {
@@ -440,6 +496,59 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("10 条");
   });
 
+  it("provides stable navigation across organization levels and projected members", () => {
+    const snapshot = lineageSnapshot();
+    const family = createOrganization("family", region, snapshot.projection!.agents.slice(0, 2).map((agent) => agent.id));
+    const city = createOrganization("city", region, snapshot.projection!.agents.map((agent) => agent.id), [family.id]);
+    const state = createOrganization("state", region, snapshot.projection!.agents.map((agent) => agent.id), [city.id]);
+    snapshot.projection = { ...snapshot.projection!, organizations: [family, city, state] };
+    snapshot.organizationDirectory = [{
+      id: "organization:state:aggregate" as never,
+      type: "state",
+      regionId: region,
+      memberCount: 120,
+      memberIds: [],
+      childIds: [],
+      resourceIds: [],
+      historyCount: 0,
+      archivedHistoryCount: 0,
+      relationshipCount: 0,
+      territoryRegionIds: [region],
+    }];
+    const element = { innerHTML: "" } as HTMLElement;
+
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "city", id: city.id });
+
+    expect(element.innerHTML).toContain(`data-detail-level="state" data-detail-id="${state.id}"`);
+    expect(element.innerHTML).toContain(`data-detail-level="family" data-detail-id="${family.id}"`);
+    expect((element.innerHTML.match(/data-detail-link data-detail-level="agent"/g) ?? [])).toHaveLength(4);
+    expect(element.innerHTML).toContain("关系导航");
+
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "state", id: "organization:state:aggregate" });
+
+    expect(element.innerHTML).toContain("另有 120 名成员仅保留聚合记录");
+    expect(element.innerHTML).not.toContain('data-detail-link data-detail-level="agent"');
+  });
+
+  it("renders an archived organization summary as a selectable historical report", () => {
+    const snapshot = lineageSnapshot();
+    const organization = createOrganization("city", region, snapshot.projection!.agents.map((agent) => agent.id));
+    organization.status = "collapsed";
+    organization.resources = { food: 8, energy: 2 };
+    const state = createWorld(141, { width: 8, height: 8, formation: "formed" });
+    archiveOrganizationRecords(state, [organization], "lifecycle");
+    snapshot.eventArchive = state.eventArchive;
+    const element = { innerHTML: "" } as HTMLElement;
+
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "city", id: organization.id });
+
+    expect(element.innerHTML).toContain("organization-archive");
+    expect(element.innerHTML).toContain("历史组织摘要");
+    expect(element.innerHTML).toContain("生命周期结束归档");
+    expect(element.innerHTML).toContain("已解体");
+    expect(element.innerHTML).toContain("8 食物单位");
+  });
+
   it("renders a culture report with its origin, values, and inherited traditions", () => {
     const snapshot = lineageSnapshot();
     const identity = createCultureIdentity("inspector:culture", region, 12, 3, [], { water: 0.7, nutrients: 0.6, biomass: 0.5 });
@@ -525,5 +634,193 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("传承成本");
     expect(element.innerHTML).toContain("知识创新");
     expect(element.innerHTML).toContain("信念记录");
+  });
+
+  it("renders regional, personal, and pathogen health reports", () => {
+    const snapshot = lineageSnapshot();
+    const projected = snapshot.projection!.agents[0]!;
+    const species = snapshot.species![0]!;
+    const state = createWorld(9_002, { width: 8, height: 8, formation: "formed" });
+    const pathogen = {
+      ...derivePathogen(state, region, species.id),
+      name: "雾环疫",
+      status: "outbreak" as const,
+      prevalence: 0.5,
+      cumulativeCases: 12,
+      cumulativeRecoveries: 4,
+      cumulativeDeaths: 1,
+      regionalOutbreaks: [
+        { regionId: region, status: "outbreak" as const, prevalence: 0.5, firstDetectedTick: 1, lastActiveTick: 8 },
+        { regionId: "region:1:0" as never, status: "endemic" as const, prevalence: 0.08, firstDetectedTick: 6, lastActiveTick: 8 },
+      ],
+    };
+    projected.health = { vitality: 0.62, infections: [{ pathogenId: pathogen.id, infectedTick: 8, severity: 0.44 }], immunityIds: [] };
+    snapshot.pathogens = [pathogen];
+    snapshot.selectedRegion = {
+      ...snapshot.selectedRegion!,
+      healthSummary: { activePathogenIds: [pathogen.id], infectedCount: 1, immuneCount: 0, prevalence: 0.25, meanVitality: 0.86 },
+    };
+    const element = { innerHTML: "" } as HTMLElement;
+    const selection = { x: 0, y: 0, index: 0, regionId: region };
+
+    renderInspector(element, snapshot, selection);
+    expect(element.innerHTML).toContain("公共健康");
+    expect(element.innerHTML).toContain("雾环疫");
+
+    const { selectedRegion: _selectedRegion, ...regionalSnapshotBase } = snapshot;
+    const regionalSnapshot: WorldSnapshot = {
+      ...regionalSnapshotBase,
+      focusRegionId: "region:1:0" as never,
+      projection: { ...snapshot.projection!, agents: [], relationships: [], organizations: [] },
+    };
+    renderInspector(element, regionalSnapshot, { x: 1, y: 0, index: 1, regionId: "region:1:0" as never });
+    expect(element.innerHTML).toContain("地方流行 · 8%");
+    expect(element.innerHTML).not.toContain("区域暴发 · 50%");
+
+    renderInspector(element, snapshot, selection, { level: "agent", id: projected.id });
+    expect(element.innerHTML).toContain("个人健康");
+    expect(element.innerHTML).toContain("病程强度");
+    expect(element.innerHTML).toContain("遗传与适应");
+    expect(element.innerHTML).toContain("当地适应度");
+    expect(element.innerHTML).toContain(projected.genetics!.lineageSignature);
+
+    renderInspector(element, snapshot, selection, { level: "pathogen", id: pathogen.id });
+    expect(element.innerHTML).toContain("病原体报告");
+    expect(element.innerHTML).toContain("累计病例");
+    expect(element.innerHTML).toContain("医疗能力");
+    expect(element.innerHTML).toContain("跨区域疫情");
+    expect(element.innerHTML).toContain("region:1:0");
+  });
+
+  it("shows bounded object timelines across detail levels with exact simulation time", () => {
+    const snapshot = lineageSnapshot();
+    const agent = snapshot.projection!.agents[0]!;
+    const family = snapshot.projection!.organizations.find((organization) => organization.type === "family");
+    const species = snapshot.species![0]!;
+    const population = snapshot.populations![0]!;
+    if (!family) throw new Error("Expected a family in the fixture");
+
+    const identity = createCultureIdentity("history-culture", region, 2, 2, [], { water: 0.5, nutrients: 0.5, biomass: 0.5 });
+    snapshot.cultures = [{ id: "culture:history" as never, regionId: region, knowledgeIds: [], beliefIds: [], transmissionRate: 0.8, identity }];
+    snapshot.cultureIdentityByRegion = { [region]: identity };
+    snapshot.substances = [{
+      id: "substance:history",
+      name: "星髓晶",
+      kind: "crystal",
+      formation: "hydrothermal",
+      status: "known",
+      regionId: region,
+      originTick: 2,
+      originYears: 2,
+      parentIds: [],
+      composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.2, organics: 0.1, oxygen: 0.3 },
+      properties: { hardness: 0.8, density: 0.6, reactivity: 0.2, conductivity: 0.7, energyPotential: 0.5, biologicalAffinity: 0.3, stability: 0.9 },
+      reserveCapacity: 100,
+      remainingReserve: 100,
+      extractedTotal: 0,
+      discoveredByIds: [],
+    }];
+    snapshot.facilities = [{
+      id: "facility:history",
+      type: "construction",
+      regionId: region,
+      ownerOrganizationId: family.id,
+      level: 1,
+      condition: 1,
+      status: "active",
+      workforceIds: [agent.id],
+      workforceRequired: 1,
+      workforceEfficiency: 1,
+      materialInvested: 4,
+      plannedTick: 1,
+      builtTick: 2,
+      lastMaintainedTick: 3,
+      lastIncidentTick: 3,
+    }];
+    const pathogen = { ...derivePathogen(createWorld(9_003, { width: 8, height: 8, formation: "formed" }), region, species.id), id: "pathogen:history" };
+    snapshot.pathogens = [pathogen];
+    snapshot.worldviewEntities = [{
+      id: "worldview:history" as never,
+      packId: "emergence.original-worldview",
+      kind: "sect",
+      name: "星髓研习会",
+      regionId: region,
+      influence: 0.4,
+      resourceBalances: {},
+      originTick: 2,
+      founderId: agent.id,
+      memberIds: [agent.id],
+      status: "active",
+      supporterCount: 2,
+      activePractitionerCount: 1,
+      sponsorOrganizationId: family.id,
+    }];
+
+    const relatedEvent = (id: string, kind: string, relatedIds: string[], timelineDays = "9007199254740993") => ({
+      id,
+      tick: 8,
+      timelineStep: "9007199254740993",
+      timelineDays,
+      kind,
+      ruleId: `test:${kind}`,
+      source: "natural" as const,
+      sourceIds: [],
+      relatedIds,
+      regionIds: [region],
+      organizationIds: relatedIds.filter((relatedId) => relatedId.startsWith("organization:")),
+      probability: 1,
+      name: "对象发生变化",
+    });
+    snapshot.recentRegionEvents = [
+      relatedEvent("event:agent-history", "agent-birth", [agent.id]),
+      relatedEvent("event:family-history", "family-formation", [family.id]),
+      relatedEvent("event:species-history", "species-emergence", [species.id]),
+      relatedEvent("event:population-history", "population-migration", [population.id]),
+      relatedEvent("event:culture-history", "culture-emergence", ["culture:history"]),
+      relatedEvent("event:substance-history", "substance-discovery", ["substance:history"]),
+      relatedEvent("event:facility-history", "facility-built", ["facility:history"]),
+      relatedEvent("event:pathogen-history", "pathogen-emergence", [pathogen.id]),
+      relatedEvent("event:worldview-history", "worldview-entity-revived", ["worldview:history"]),
+    ];
+    snapshot.eventArchive = createEventArchive();
+    snapshot.eventArchive.milestones = [{
+      id: "event:archived-substance-history",
+      tick: 4,
+      timelineStep: "4",
+      timelineDays: "9007199254740993",
+      years: 4,
+      kind: "substance-formation",
+      ruleId: "test:archived-substance",
+      source: "natural",
+      sourceIds: [],
+      regionIds: [region],
+      organizationIds: [],
+      probability: 1,
+      roll: 0,
+      details: { substanceId: "substance:history", name: "星髓晶形成" },
+    }];
+
+    const element = { innerHTML: "" } as HTMLElement;
+    const selection = { x: 0, y: 0, index: 0, regionId: region };
+    const details = [
+      ["agent", agent.id],
+      ["family", family.id],
+      ["species", species.id],
+      ["population", population.id],
+      ["culture", "culture:history"],
+      ["substance", "substance:history"],
+      ["facility", "facility:history"],
+      ["pathogen", pathogen.id],
+      ["worldview", "worldview:history"],
+    ] as const;
+    for (const [level, id] of details) {
+      renderInspector(element, snapshot, selection, { level, id });
+      expect(element.innerHTML).toContain(`data-history-level="${level}"`);
+      expect(element.innerHTML).toContain(`data-history-id="${id}"`);
+    }
+    renderInspector(element, snapshot, selection, { level: "substance", id: "substance:history" });
+    expect(element.innerHTML).toContain("历史档案");
+    expect(element.innerHTML).toContain("24,677,258,232,167 年 38 天");
+    expect(element.innerHTML).toContain("对象发生变化");
   });
 });

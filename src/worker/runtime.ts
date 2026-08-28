@@ -6,9 +6,12 @@ import { foodSecurityFromBalance } from "../sim/agents/food.ts";
 import type { EventMilestone, RegionId, WorldEvent, WorldEventInput, WorldState } from "../sim/types.ts";
 import type { OrganizationDirectoryEntry, RuntimeDiagnostics, SceneEntity, SceneLink, SupplyRoute, WorkerCommand, WorkerMessage, WorldSnapshot } from "./protocol.ts";
 import { DEFAULT_WORLDVIEW_PACK_IDS } from "../sim/worldview/index.ts";
-import { SIMULATED_YEARS_PER_DAY } from "../sim/time.ts";
+import { compareSimulationSteps, SIMULATED_YEARS_PER_DAY, timelineForWorld } from "../sim/time.ts";
 import { cultureIdentityFor } from "../sim/culture/identity.ts";
 import { eventOrganizationIds, eventRegionIds } from "../sim/events/ledger.ts";
+import { diseasePrevalenceForRegion } from "../sim/health/disease.ts";
+import { addPersistentTotal } from "../sim/numeric.ts";
+import { substanceReserveRatio } from "../sim/environment/substances.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
 const cloneChemistry = (chemistry: WorldState["chemistry"]): WorldState["chemistry"] => structuredClone(chemistry);
@@ -18,7 +21,8 @@ const substanceRichnessByRegion = (state: WorldState): Record<string, number> =>
     const properties = Object.values(substance.properties);
     const utility = properties.reduce((sum, value) => sum + value, 0) / Math.max(1, properties.length);
     const visibility = substance.status === "known" ? 1 : 0.58;
-    result[substance.regionId] = Math.max(result[substance.regionId] ?? 0, Math.min(1, utility * visibility));
+    const reserveVisibility = substance.formation === "engineered" ? 1 : substanceReserveRatio(substance);
+    result[substance.regionId] = Math.max(result[substance.regionId] ?? 0, Math.min(1, utility * visibility * reserveVisibility));
   }
   return result;
 };
@@ -50,6 +54,23 @@ const foodSecurityGrid = (state: WorldState): WorldState["fields"]["water"] => {
   }
   return { width, height, values };
 };
+const diseasePrevalenceGrid = (state: WorldState): WorldState["fields"]["water"] => {
+  const { width, height } = state.fields.elevation;
+  const values = new Float32Array(width * height);
+  const regions = new Set([
+    ...state.agents.map((agent) => agent.regionId),
+    ...state.pathogens.flatMap((pathogen) => pathogen.regionalOutbreaks.map((outbreak) => outbreak.regionId)),
+  ]);
+  for (const regionId of regions) {
+    const match = /^region:(\d+):(\d+)$/.exec(regionId);
+    if (!match) continue;
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    if (x < 0 || x >= width || y < 0 || y >= height) continue;
+    values[y * width + x] = diseasePrevalenceForRegion(state, regionId);
+  }
+  return { width, height, values };
+};
 
 const organizationRank: Record<SceneEntity["kind"], number> = {
   agent: 0,
@@ -69,6 +90,10 @@ const organizationRank: Record<SceneEntity["kind"], number> = {
 };
 
 export const RECENT_REGION_EVENT_LIMIT = 16;
+export const AUTOSAVE_INTERVAL_STEPS = 120;
+export const MAX_SCENE_DIPLOMATIC_LINKS = 96;
+export const MAX_SCENE_EVENT_LINKS = 256;
+export const MAX_SCENE_STRATEGIC_LINKS = 128;
 
 type EventHistorySource = WorldEvent | EventMilestone;
 type EventHistoryCandidate = { event: EventHistorySource; archived: boolean };
@@ -85,6 +110,42 @@ const eventScalar = (event: EventHistorySource, key: string): string | number | 
 };
 const eventRegions = (event: EventHistorySource): RegionId[] => "regionIds" in event ? [...event.regionIds] : eventRegionIds(event) as RegionId[];
 const eventOrganizations = (event: EventHistorySource): string[] => "organizationIds" in event ? [...event.organizationIds] : eventOrganizationIds(event);
+const MAX_RELATED_EVENT_IDS = 32;
+const ENTITY_ID_PREFIXES = [
+  "agent:", "population:", "species:", "culture:", "facility:", "substance:", "pathogen:", "organization:",
+  "worldview:", "phenomenon:", "practice:", "knowledge:", "belief:", "relationship:",
+];
+const isEntityId = (value: string): boolean => ENTITY_ID_PREFIXES.some((prefix) => value.startsWith(prefix));
+const collectEntityIds = (value: unknown, ids: Set<string>, depth = 0): void => {
+  if (ids.size >= MAX_RELATED_EVENT_IDS || depth > 4) return;
+  if (typeof value === "string") {
+    if (isEntityId(value)) ids.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectEntityIds(item, ids, depth + 1);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const item of Object.values(value)) collectEntityIds(item, ids, depth + 1);
+};
+const eventRelatedIds = (event: EventHistorySource): string[] => {
+  const ids = new Set<string>();
+  if ("details" in event) collectEntityIds(event.details, ids);
+  else {
+    collectEntityIds(event.payload, ids);
+    collectEntityIds(event.evidence, ids);
+  }
+  for (const id of eventOrganizations(event)) {
+    if (ids.size >= MAX_RELATED_EVENT_IDS) break;
+    ids.add(id);
+  }
+  for (const id of event.sourceIds) {
+    if (ids.size >= MAX_RELATED_EVENT_IDS) break;
+    if (isEntityId(id)) ids.add(id);
+  }
+  return [...ids].filter(isEntityId).sort().slice(0, MAX_RELATED_EVENT_IDS);
+};
 
 const recentRegionEventsFor = (state: WorldState, regionId: RegionId) => {
   const localOrganizationIds = new Set<string>();
@@ -105,7 +166,7 @@ const recentRegionEventsFor = (state: WorldState, regionId: RegionId) => {
     if (regionIds.includes(regionId) || eventOrganizations(event).some((id) => localOrganizationIds.has(id))) candidates.set(event.id, { event, archived: false });
   }
   return [...candidates.values()]
-    .sort((left, right) => (right.event.years ?? right.event.tick) - (left.event.years ?? left.event.tick) || right.event.tick - left.event.tick || right.event.id.localeCompare(left.event.id))
+    .sort((left, right) => compareSimulationSteps(right.event.timelineStep ?? String(right.event.tick), left.event.timelineStep ?? String(left.event.tick)) || (right.event.years ?? right.event.tick) - (left.event.years ?? left.event.tick) || right.event.id.localeCompare(left.event.id))
     .slice(0, RECENT_REGION_EVENT_LIMIT)
     .map(({ event, archived }) => {
       const intensity = Number(eventScalar(event, "intensity"));
@@ -118,11 +179,14 @@ const recentRegionEventsFor = (state: WorldState, regionId: RegionId) => {
       return {
         id: event.id,
         tick: event.tick,
+        ...(event.timelineStep === undefined ? {} : { timelineStep: event.timelineStep }),
+        ...(event.timelineDays === undefined ? {} : { timelineDays: event.timelineDays }),
         ...(event.years === undefined ? {} : { years: event.years }),
         kind: event.kind,
         ruleId: event.ruleId,
         source: event.source,
         sourceIds: [...event.sourceIds],
+        relatedIds: eventRelatedIds(event),
         regionIds: eventRegions(event),
         organizationIds: eventOrganizations(event),
         probability: event.probability,
@@ -317,23 +381,106 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
       add({ id: agent.id, kind: "agent", regionId: agent.regionId, count: 1, rank: organizationRank.agent, ...lifeFieldsFor(populationById.get(agent.populationId)?.speciesId), ...cultureFieldsFor(agent.regionId) });
     }
   }
-  const links = projection?.relationships.slice(0, 256).map((relationship): SceneLink => ({
-    fromId: relationship.fromId,
-    toId: relationship.toId,
-    kind: relationship.kind,
-    strength: relationship.strength,
-  })) ?? [];
-  const interregionalLinks = state.events
-    .filter((event) => event.kind === "interregional-trade" || event.kind === "border-conflict" || event.kind === "organization-war" || event.kind === "diplomatic-alliance")
-    .slice(-128)
-    .map((event): SceneLink | undefined => {
-      const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.sourceIds[0] ?? "");
-      const toId = String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.sourceIds[1] ?? "");
-      if (!entities.has(fromId) || !entities.has(toId)) return undefined;
-      return { fromId, toId, kind: event.kind === "border-conflict" || event.kind === "organization-war" ? "border-conflict" : "trade", strength: Number(event.payload.amount ?? event.evidence.intensity ?? 0.7) };
-    })
-    .filter((link): link is SceneLink => Boolean(link));
-  return { entities: [...entities.values()].slice(0, 800), links: [...links, ...interregionalLinks].slice(-384) };
+  const personalLinks = projection?.relationships.slice(0, 256).map((relationship): SceneLink | undefined => {
+    const from = entities.get(relationship.fromId);
+    const to = entities.get(relationship.toId);
+    if (!from || !to) return undefined;
+    return {
+      fromId: relationship.fromId,
+      toId: relationship.toId,
+      fromRegion: from.regionId,
+      toRegion: to.regionId,
+      kind: relationship.kind,
+      scope: "personal",
+      strength: relationship.strength,
+    };
+  }).filter((link): link is SceneLink => Boolean(link)) ?? [];
+  const ecologicalLinks = (state.ecologicalRelationships ?? []).slice(0, 256).map((relationship): SceneLink | undefined => {
+    const fromId = typeof relationship.details.fromPopulationId === "string" ? relationship.details.fromPopulationId : relationship.fromSpeciesId;
+    const toId = typeof relationship.details.toPopulationId === "string" ? relationship.details.toPopulationId : relationship.toSpeciesId;
+    if (!entities.has(fromId) || !entities.has(toId)) return undefined;
+    return {
+      fromId,
+      toId,
+      fromRegion: relationship.regionId,
+      toRegion: relationship.regionId,
+      kind: relationship.kind,
+      scope: "personal",
+      strength: relationship.strength,
+    };
+  }).filter((link): link is SceneLink => Boolean(link));
+
+  const organizationLocations = new Map<string, { id: string; regionId: RegionId; diplomacy: Record<string, string> }>();
+  for (const summary of state.lod.summaries) {
+    for (const organization of summary.organizations) {
+      organizationLocations.set(organization.id, { id: organization.id, regionId: summary.regionId, diplomacy: organization.diplomacy ?? {} });
+    }
+  }
+  for (const organization of state.organizations) {
+    organizationLocations.set(organization.id, { id: organization.id, regionId: organization.regionId, diplomacy: organization.diplomacy ?? {} });
+  }
+  const strategicLinks = new Map<string, SceneLink>();
+  const addStrategicLink = (link: SceneLink): void => {
+    if (link.fromRegion === link.toRegion) return;
+    const key = `${link.kind}|${link.fromId}|${link.toId}|${link.fromRegion}|${link.toRegion}`;
+    const existing = strategicLinks.get(key);
+    if (existing && existing.strength >= link.strength) return;
+    if (existing) strategicLinks.delete(key);
+    strategicLinks.set(key, link);
+  };
+  diplomaticLinks: for (const organization of [...organizationLocations.values()].sort((left, right) => left.id.localeCompare(right.id))) {
+    for (const [peerId, stance] of Object.entries(organization.diplomacy).sort(([left], [right]) => left.localeCompare(right))) {
+      if (organization.id >= peerId) continue;
+      const peer = organizationLocations.get(peerId);
+      if (!peer || stance === "neutral") continue;
+      const kind = stance === "allied" ? "alliance" : stance === "rival" ? "border-conflict" : "trade";
+      addStrategicLink({
+        fromId: organization.id,
+        toId: peer.id,
+        fromRegion: organization.regionId,
+        toRegion: peer.regionId,
+        kind,
+        scope: "strategic",
+        strength: stance === "allied" ? 0.82 : stance === "rival" ? 0.74 : 0.62,
+      });
+      if (strategicLinks.size >= MAX_SCENE_DIPLOMATIC_LINKS) break diplomaticLinks;
+    }
+  }
+  const strategicEventKinds = new Set([
+    "interregional-trade", "diplomatic-alliance", "border-conflict", "organization-war", "territory-transfer",
+    "population-migration", "population-dispersal", "war-displacement",
+  ]);
+  const asRegionId = (value: unknown): RegionId | undefined => typeof value === "string" && value.startsWith("region:") ? value as RegionId : undefined;
+  for (const event of state.events.filter((candidate) => strategicEventKinds.has(candidate.kind)).slice(-MAX_SCENE_EVENT_LINKS)) {
+    const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.payload.populationId ?? event.sourceIds[0] ?? "");
+    const toId = String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId);
+    const fromRegion = asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion)
+      ?? entities.get(fromId)?.regionId
+      ?? organizationLocations.get(fromId)?.regionId;
+    const toRegion = asRegionId(event.payload.toRegion ?? event.evidence.toRegion ?? event.evidence.rightRegion)
+      ?? entities.get(toId)?.regionId
+      ?? organizationLocations.get(toId)?.regionId;
+    if (!fromId || !toId || !fromRegion || !toRegion) continue;
+    const kind = event.kind === "interregional-trade" ? "trade"
+      : event.kind === "diplomatic-alliance" ? "alliance"
+        : event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "war-displacement" ? "migration"
+          : "border-conflict";
+    const strength = Number(event.payload.amount ?? event.evidence.amount ?? event.evidence.intensity
+      ?? event.evidence.displaced ?? event.evidence.branchCount ?? 0.7);
+    addStrategicLink({
+      fromId,
+      toId,
+      fromRegion,
+      toRegion,
+      kind,
+      scope: "strategic",
+      strength: Number.isFinite(strength) ? Math.max(0.05, strength) : 0.7,
+    });
+  }
+  return {
+    entities: [...entities.values()].slice(0, 800),
+    links: [...personalLinks, ...ecologicalLinks, ...[...strategicLinks.values()].slice(-MAX_SCENE_STRATEGIC_LINKS)].slice(-(256 + MAX_SCENE_STRATEGIC_LINKS)),
+  };
 };
 const eventFromInput = (state: WorldState, input: WorldEventInput): WorldEvent => ({
   id: input.id,
@@ -367,9 +514,10 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
   let lastStepMs = 0;
   let averageStepMs = 0;
   let peakStepMs = 0;
+  let stepsSinceAutosave = 0;
   const recordStepDuration = (durationMs: number): void => {
     const duration = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
-    measuredSteps += 1;
+    measuredSteps = addPersistentTotal(measuredSteps, 1);
     lastStepMs = duration;
     averageStepMs = measuredSteps === 1 ? duration : averageStepMs * 0.98 + duration * 0.02;
     peakStepMs = Math.max(peakStepMs, duration);
@@ -424,8 +572,12 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       seed: state.seed,
       tick: state.tick,
       years: state.years,
+      ...(state.timeline === undefined ? {} : { timeline: structuredClone(state.timeline) }),
+      orbital: structuredClone(state.orbital),
+      climateCycle: structuredClone(state.climateCycle),
       formation: structuredClone(state.formation),
       eventArchive: structuredClone(state.eventArchive),
+      historySamples: structuredClone(state.eventArchive.historySamples ?? []),
       runtime: runtimeDiagnostics(),
       digest,
       ...(observation.focusRegionId ? { focusRegionId: observation.focusRegionId } : {}),
@@ -433,13 +585,16 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       chemistry: cloneChemistry(state.chemistry),
       metrics: metricsFor(state),
       foodSecurity: foodSecurityGrid(state),
+      diseasePrevalence: diseasePrevalenceGrid(state),
       species: structuredClone(state.species),
       populations: structuredClone(state.populations),
       knowledge: structuredClone(state.knowledge),
+      ecologicalRelationships: structuredClone(state.ecologicalRelationships ?? []),
       cultures: structuredClone(state.cultures),
       cultureIdentityByRegion: Object.fromEntries(state.cultures.map((culture) => [culture.regionId, cultureIdentityFor(culture)])),
       facilities: structuredClone(state.facilities),
       substances: structuredClone(state.substances),
+      pathogens: structuredClone(state.pathogens),
       resources: structuredClone(state.resources),
       substanceRichnessByRegion: substanceRichnessByRegion(state),
       organizationDirectory: organizationDirectoryFor(state),
@@ -454,6 +609,12 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       ...(projection ? { projection: structuredClone(projection) } : {}),
     };
   };
+  const autosave = (): WorkerMessage => ({
+    type: "autosaved",
+    payload: serializeWorld(state),
+    digest,
+    timelineDays: timelineForWorld(state).days,
+  });
   const messages = (): WorkerMessage[] => [{ type: "snapshot", snapshot: snapshot(), paused, speed }];
   const runSteps = (count: number, events: WorldEvent[] = []): WorldEvent[] => {
     let emitted: WorldEvent[] = [];
@@ -462,6 +623,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       const result = stepWorld(state, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: index === 0 ? events : [] }, { computeDigest: false, mutateState: true });
       recordStepDuration(now() - started);
       state = result.state;
+      stepsSinceAutosave += 1;
       for (const event of result.events) emitted.push(event);
     }
     digest = worldDigest(state);
@@ -475,24 +637,39 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
         state = structuredClone(initialState);
         digest = worldDigest(state);
         resetStepDiagnostics();
+        stepsSinceAutosave = 0;
         paused = true;
         return messages();
       }
       if (command.type === "setSpeed") { speed = command.multiplier; return messages(); }
       if (command.type === "step") {
-        const count = Math.max(1, Math.min(10_000, Math.trunc(command.count)));
+        const requestedCount = Math.trunc(command.count);
+        const count = Number.isFinite(requestedCount)
+          ? Math.max(1, Math.min(10_000, requestedCount))
+          : 1;
         const events = runSteps(count);
-        return [...messages(), { type: "events", events }];
+        const response: WorkerMessage[] = [...messages(), { type: "events", events }];
+        if (stepsSinceAutosave >= AUTOSAVE_INTERVAL_STEPS) {
+          stepsSinceAutosave = 0;
+          response.push(autosave());
+        }
+        return response;
       }
       if (command.type === "applyEvent") {
         if (state.events.some((event) => event.id === command.event.id)) return [{ type: "error", code: "duplicate", message: `Event already applied: ${command.event.id}` }];
         const events = runSteps(1, [eventFromInput(state, command.event)]);
-        return [...messages(), { type: "events", events }];
+        const response: WorkerMessage[] = [...messages(), { type: "events", events }];
+        if (stepsSinceAutosave >= AUTOSAVE_INTERVAL_STEPS) {
+          stepsSinceAutosave = 0;
+          response.push(autosave());
+        }
+        return response;
       }
       if (command.type === "focusRegion") {
         state.observation = focusRegion(state, command.regionId);
         return messages();
       }
+      if (command.type === "checkpoint") return [autosave()];
       if (command.type === "save") {
         const payload = serializeWorld(state);
         return [{ type: "saved", payload, digest }];
@@ -502,6 +679,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       state = candidate;
       digest = worldDigest(state);
       resetStepDiagnostics();
+      stepsSinceAutosave = 0;
       paused = true;
       return messages();
     } catch (error) {

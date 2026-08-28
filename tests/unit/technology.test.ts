@@ -113,4 +113,20 @@ describe("technology feedback", () => {
     expect(delta.chemistryChanges).toContainEqual(expect.objectContaining({ field: "organics", operation: "add", causeRuleId: "culture:energy-conversion" }));
     expect(delta.chemistryChanges).toContainEqual(expect.objectContaining({ field: "oxygen", operation: "add", causeRuleId: "culture:energy-conversion" }));
   });
+
+  it("applies energy conversion only to known regions in stable spatial order", () => {
+    const state = createWorld(405, { width: 8, height: 8, formation: "formed" });
+    const records = [knowledge("knowledge:energy:late", "energy"), knowledge("knowledge:energy:early", "energy")];
+    state.knowledge = records;
+    state.cultures = [
+      { id: "culture:late" as never, regionId: "region:7:7" as never, knowledgeIds: [records[0]!.id], beliefIds: [], transmissionRate: 0.9 },
+      { id: "culture:early" as never, regionId: "region:0:0" as never, knowledgeIds: [records[1]!.id], beliefIds: [], transmissionRate: 0.9 },
+    ];
+    state.chemistry.organics.values.fill(0.8);
+
+    const changes = stepEnvironment(state, { solarFlux: 1, externalEvents: [], elapsedYears: 1 }).chemistryChanges
+      .filter((change) => change.causeRuleId === "culture:energy-conversion");
+
+    expect(changes.map((change) => change.index)).toEqual([0, 0, 0, 63, 63, 63]);
+  });
 });

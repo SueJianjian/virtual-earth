@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { createAgent, stepAgents } from "../../src/sim/agents/index.ts";
+import { createAgent, MAX_DETAILED_AGENTS, stepAgents } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { focusRegion, projectRegion, promoteRegion, stepLod, summarizeRegion, summarizeRegionState } from "../../src/sim/lod/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
@@ -59,6 +59,8 @@ describe("conserved multi-scale state", () => {
     expect(summary.summary.relationshipCount).toBe(state.relationships.length);
     expect(summary.summary.agentIds).toHaveLength(state.agents.length);
     expect(summary.summary.agentRecords).toHaveLength(state.agents.length);
+    expect(summary.summary.agentRecords[0]?.traits).toEqual(state.agents[0]?.traits);
+    expect(summary.summary.agentRecords[0]?.genetics).toEqual(state.agents[0]?.genetics);
     expect(summary.summary.relationshipRecords.map((relationship) => relationship.id)).toEqual(state.relationships.map((relationship) => relationship.id));
     expect(summary.summary.lineage).toMatchObject({ descendantCount: 1, generationDepth: 2, knowledgeCarrierCount: 1, knowledgeInheritanceCount: 1, beliefCarrierCount: 1 });
     expect(summary.summary.lineage.relationshipCounts).toMatchObject({ partner: 1, parent: 1 });
@@ -113,6 +115,26 @@ describe("conserved multi-scale state", () => {
     if (delta.lodEffects?.[0]?.operation === "upsert-summary") {
       expect(delta.lodEffects[0].summary.organizations.map((organization) => organization.type)).toContain("family");
     }
+  });
+
+  it("keeps natural region promotion within the global detailed-agent budget", () => {
+    const state = populatedWorld();
+    const summary = summarizeRegionState(state, region, "aggregate");
+    const population = state.populations[0]!;
+    const species = state.species[0]!;
+    state.lod.summaries = [summary];
+    state.agents = Array.from(
+      { length: MAX_DETAILED_AGENTS - 2 },
+      (_, index) => ({
+        ...createAgent(population, species, index + 100, "lod-capacity"),
+        regionId: "region:1:0" as RegionId,
+      }),
+    );
+
+    const delta = promoteRegion(state, region, "rapid-change");
+
+    expect(delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "create")).toHaveLength(2);
+    expect(state.agents.length + 2).toBe(MAX_DETAILED_AGENTS);
   });
 
   it("naturally summarizes a quiet micro region", () => {
@@ -229,9 +251,13 @@ describe("conserved multi-scale state", () => {
     expect(promotedAgents).toHaveLength(aggregate.population);
     expect(promotedRelationships).toHaveLength(aggregate.relationshipCount);
 
-    expect(projectRegion(aggregate, aggregate.version).agents).toHaveLength(aggregate.population);
-    expect(projectRegion(aggregate, aggregate.version).relationships).toHaveLength(aggregate.relationshipCount);
     const promotedProjection = projectRegion(aggregate, aggregate.version);
+    expect(promotedProjection.agents).toHaveLength(aggregate.population);
+    const firstProjected = promotedProjection.agents[0];
+    const firstSource = aggregate.agentRecords.find((record) => record.id === firstProjected?.sourceId);
+    expect(firstProjected?.traits).toEqual(firstSource?.traits);
+    expect(firstProjected?.genetics).toEqual(firstSource?.genetics);
+    expect(promotedProjection.relationships).toHaveLength(aggregate.relationshipCount);
     expect(promotedProjection.agents.find((agent) => agent.knowledgeIds.includes("knowledge:fire"))?.parentIds).toHaveLength(2);
     expect(promotedProjection.organizations[0]?.memberIds).toHaveLength(2);
   });

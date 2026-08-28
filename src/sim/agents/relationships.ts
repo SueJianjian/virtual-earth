@@ -39,6 +39,7 @@ export const createRelationship = (
   toId: EntityId,
   createdTick: number,
   strength: number,
+  createdTimelineStep?: string,
 ): RelationshipState => ({
   id: relationshipIdFor(kind, fromId, toId),
   fromId,
@@ -46,7 +47,8 @@ export const createRelationship = (
   kind,
   strength: Math.max(0, Math.min(1, strength)),
   createdTick,
-  sourceEventId: `relationship-cause:${hashString(`${kind}:${fromId}:${toId}:${createdTick}`).toString(16)}`,
+  ...(createdTimelineStep === undefined ? {} : { createdTimelineStep }),
+  sourceEventId: `relationship-cause:${hashString(`${kind}:${fromId}:${toId}:${createdTimelineStep ?? createdTick}`).toString(16)}`,
 });
 
 export const familyIdFor = (memberIds: EntityId[]): OrganizationState["id"] =>

@@ -1,16 +1,19 @@
 import { hashString } from "../random.ts";
 import type { ObservationState, RegionId, RegionProjection, WorldState } from "../types.ts";
 import { projectRegion } from "./expand.ts";
+import { simulationStepForWorld } from "../time.ts";
 
 const copy = <T>(value: T): T => structuredClone(value);
 
 export const projectMicroRegion = (state: WorldState, regionId: RegionId): RegionProjection => ({
   regionId,
   sourceRevision: state.tick,
+  sourceRevisionStep: simulationStepForWorld(state),
   readOnly: true,
-  generatedFromDigest: hashString(JSON.stringify({ tick: state.tick, regionId, agents: state.agents.filter((agent) => agent.regionId === regionId).map((agent) => agent.id) })).toString(16),
+  generatedFromDigest: hashString(JSON.stringify({ tick: simulationStepForWorld(state), regionId, agents: state.agents.filter((agent) => agent.regionId === regionId).map((agent) => agent.id) })).toString(16),
   agents: copy(state.agents.filter((agent) => agent.regionId === regionId)),
   relationships: copy(state.relationships.filter((relationship) => state.agents.some((agent) => agent.id === relationship.fromId && agent.regionId === regionId) && state.agents.some((agent) => agent.id === relationship.toId && agent.regionId === regionId))),
+  ecologicalRelationships: copy((state.ecologicalRelationships ?? []).filter((relationship) => relationship.regionId === regionId)),
   organizations: copy(state.organizations.filter((organization) => organization.regionId === regionId)),
 });
 
@@ -18,6 +21,6 @@ export const focusRegion = (state: WorldState, regionId: RegionId): ObservationS
   const summary = state.lod.summaries.find((candidate) => candidate.regionId === regionId);
   return {
     focusRegionId: regionId,
-    projection: summary && summary.mode === "aggregate" ? projectRegion(summary, state.tick) : projectMicroRegion(state, regionId),
+    projection: summary && summary.mode === "aggregate" ? projectRegion(summary, state.tick, 128, summary.versionStep) : projectMicroRegion(state, regionId),
   };
 };

@@ -1,6 +1,6 @@
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
-export type MapLayer = "natural" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity";
+export type MapLayer = "natural" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
 
 export const layerLabels: Record<MapLayer, string> = {
   natural: "自然",
@@ -14,6 +14,7 @@ export const layerLabels: Record<MapLayer, string> = {
   species: "物种",
   culture: "文化",
   foodSecurity: "食物保障",
+  health: "疫情",
 };
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -36,6 +37,7 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const width = fields.elevation.width;
   const regionId = `region:${index % width}:${Math.floor(index / width)}`;
   const foodSecurity = clamp(snapshot.foodSecurity?.values[index] ?? snapshot.foodSecurityByRegion?.[regionId] ?? 0);
+  const diseasePrevalence = clamp(snapshot.diseasePrevalence?.values[index] ?? 0);
   const substanceRichness = clamp(snapshot.substanceRichnessByRegion?.[regionId] ?? 0);
   const culture = snapshot.cultureIdentityByRegion?.[regionId];
   if (layer === "temperature") return mix([43, 93, 145], [221, 72, 40], temperature);
@@ -58,6 +60,9 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
     return mix([38, 45, 48], hue, intensity);
   }
   if (layer === "foodSecurity") return mix([131, 61, 49], [64, 157, 104], foodSecurity);
+  if (layer === "health") return diseasePrevalence > 0
+    ? mix([64, 128, 105], [199, 65, 55], Math.min(1, diseasePrevalence * 1.6 + 0.15))
+    : [55, 104, 91];
   if (snapshot.formation.phase !== "stable-crust") {
     const formation = snapshot.formation;
     const density = clamp(elevation * 5 + formation.planetaryMass * 0.35);

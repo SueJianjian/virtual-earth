@@ -11,6 +11,7 @@ import type {
   SpeciesState,
   WorldDelta,
 } from "../types.ts";
+import type { PopulationGeneticSample } from "../agents/genetics.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [],
@@ -52,7 +53,7 @@ export const createSpecies = (
   seed: string,
   role: SpeciesRole,
   parentId?: EntityId,
-  origin?: { regionId: RegionId; tick: number; years: number },
+  origin?: { regionId: RegionId; tick: number; years: number; timelineStep?: string },
 ): SpeciesState => ({
   id: asEntityId(`species:${hashString(seed).toString(16)}`),
   name: speciesNameFor(seed, role),
@@ -66,7 +67,12 @@ export const createSpecies = (
     cognitivePotential: role === "consumer" ? (hashString(`${seed}:mind`) % 70) / 100 : 0,
   },
   ...(parentId ? { parentId } : {}),
-  ...(origin ? { originRegionId: origin.regionId, originTick: origin.tick, originYears: origin.years } : {}),
+  ...(origin ? {
+    originRegionId: origin.regionId,
+    originTick: origin.tick,
+    ...(origin.timelineStep === undefined ? {} : { originTimelineStep: origin.timelineStep }),
+    originYears: origin.years,
+  } : {}),
   blueprint: createSpeciesBlueprint(seed, role),
 });
 
@@ -111,6 +117,7 @@ export const attemptAbiogenesis = (
     regionId: originRegionId,
     tick: context.tick ?? 0,
     years: context.years ?? 0,
+    timelineStep: context.state.timeline?.step ?? String(context.tick ?? 0),
   });
   const population: PopulationState = {
     id: asEntityId(`population:${hashString(`${species.id}:origin`).toString(16)}`),
@@ -169,6 +176,7 @@ export const attemptTrophicSpecies = (
     regionId: parentPopulation!.regionId,
     tick: context.tick ?? 0,
     years: context.years ?? 0,
+    timelineStep: context.state.timeline?.step ?? String(context.tick ?? 0),
   });
   if (parentPopulation) {
     const match = /^region:(\d+):(\d+)$/.exec(parentPopulation.regionId);
@@ -217,7 +225,7 @@ export const attemptTrophicSpecies = (
   return { status: "applied", value: species, delta };
 };
 
-const adaptiveSpeciesLimit: Record<SpeciesRole, number> = {
+export const ACTIVE_ADAPTIVE_SPECIES_LIMITS: Readonly<Record<SpeciesRole, number>> = {
   producer: 3,
   consumer: 5,
   decomposer: 3,
@@ -232,9 +240,10 @@ export const attemptAdaptiveSpeciation = (
   habitatSuitability: number,
   currentRoleSpeciesCount: number,
   knownRegionalDescendant?: boolean,
+  selectedGenetics?: PopulationGeneticSample,
 ): RuleOutcome<SpeciesState> => {
   const delta = emptyDelta();
-  if (parentPopulation.count < 250 || currentRoleSpeciesCount >= adaptiveSpeciesLimit[parent.role] || knownRegionalDescendant === true) {
+  if (parentPopulation.count < 250 || currentRoleSpeciesCount >= ACTIVE_ADAPTIVE_SPECIES_LIMITS[parent.role] || knownRegionalDescendant === true) {
     return { status: "skipped", delta };
   }
   const hasRegionalDescendant = knownRegionalDescendant ?? context.state.species
@@ -257,6 +266,7 @@ export const attemptAdaptiveSpeciation = (
     regionId: parentPopulation.regionId,
     tick: context.tick ?? 0,
     years: context.years ?? 0,
+    timelineStep: context.state.timeline?.step ?? String(context.tick ?? 0),
   });
   species.traits = {
     ...parent.traits,
@@ -270,10 +280,21 @@ export const attemptAdaptiveSpeciation = (
       : 0,
   };
   if (parent) {
-    species.blueprint = mutateSpeciesBlueprint(speciesBlueprintFor(parent), seed, parent.role, {
+    const mutatedBlueprint = mutateSpeciesBlueprint(speciesBlueprintFor(parent), seed, parent.role, {
       temperature: localTemperature,
       humidity: localHumidity,
     });
+    species.blueprint = selectedGenetics ? {
+      ...mutatedBlueprint,
+      metabolicEfficiency: clamp01(mutatedBlueprint.metabolicEfficiency * 0.72 + selectedGenetics.means.metabolicEfficiency * 0.28),
+      fecundity: clamp01(mutatedBlueprint.fecundity * 0.72 + selectedGenetics.means.fertility * 0.28),
+      thermalTolerance: clamp01(mutatedBlueprint.thermalTolerance * 0.72 + selectedGenetics.means.thermalTolerance * 0.28),
+      hydrationRetention: clamp01(mutatedBlueprint.hydrationRetention * 0.72 + selectedGenetics.means.hydrationRetention * 0.28),
+    } : mutatedBlueprint;
+    if (selectedGenetics) {
+      species.traits.cognitivePotential = clamp01((species.traits.cognitivePotential ?? 0) * 0.72 + selectedGenetics.means.cognitivePotential * 0.28);
+      species.traits.reproduction = clamp01((species.traits.reproduction ?? 0) * 0.72 + selectedGenetics.means.fertility * 0.28);
+    }
   }
   const branchCount = Math.max(4, Math.min(500, parentPopulation.count * 0.04));
   const population: PopulationState = {
@@ -303,6 +324,10 @@ export const attemptAdaptiveSpeciation = (
       geneticCarrier: species.blueprint?.geneticCarrier ?? "unknown",
       metabolism: species.blueprint?.metabolism ?? "unknown",
       noveltySignature: species.blueprint?.noveltySignature ?? "unknown",
+      selectedSampleSize: selectedGenetics?.sampleSize ?? 0,
+      selectedMetabolicEfficiency: selectedGenetics?.means.metabolicEfficiency ?? 0,
+      selectedThermalTolerance: selectedGenetics?.means.thermalTolerance ?? 0,
+      selectedHydrationRetention: selectedGenetics?.means.hydrationRetention ?? 0,
     },
     payload: { parentSpeciesId: parent.id, speciesId: species.id, name: species.name ?? species.id, populationId: population.id, role: species.role, regionId: population.regionId, branchCount },
     source: "natural",

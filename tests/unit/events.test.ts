@@ -5,22 +5,28 @@ import {
   MAX_ACTIVE_USER_EVENTS,
   MAX_ARCHIVE_COUNTER_KEYS,
   MAX_EVENT_MILESTONES,
+  MAX_HISTORY_SAMPLES,
   appendEvents,
   appendExternalEvents,
   compactEventLedger,
   compactEventArchiveIndexes,
   createEventArchive,
+  isWorldEventActive,
   lifetimeTradeVolume,
   materializeEvent,
+  recordAppendedEvents,
+  retainHistorySamples,
 } from "../../src/sim/events/ledger.ts";
 import { derivePhase } from "../../src/sim/events/phase.ts";
 import { clearSimulationStages, listSimulationStages, registerSimulationStage, stepWorld } from "../../src/sim/engine.ts";
+import { MAX_SIMULATION_DAYS, SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
 import { createWorld } from "../../src/sim/world.ts";
-import type { RegionId, ResourceTransaction, WorldDelta, WorldEventDraft } from "../../src/sim/types.ts";
+import type { RegionId, ResourceTransaction, WorldDelta, WorldEvent, WorldEventDraft, WorldHistorySample } from "../../src/sim/types.ts";
 import { worldDigest } from "../../src/sim/world.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { technologyProfileForRegion } from "../../src/sim/culture/technology.ts";
 import { EXTINCT_SPECIES_RETAIN_COUNT } from "../../src/sim/ecology/archive.ts";
+import { derivePathogen } from "../../src/sim/health/disease.ts";
 
 const draft: WorldEventDraft = {
   kind: "test-event",
@@ -33,12 +39,56 @@ const draft: WorldEventDraft = {
   source: "natural",
 };
 
+const historySample = (year: number): WorldHistorySample => ({
+  tick: year * 365,
+  years: year,
+  timelineStep: String(year * 365),
+  timelineDays: String(year * 365),
+  meanTemperature: 0.5,
+  oceanCoverage: 0.4,
+  biomass: year / 1_000,
+  oxygen: 0.2,
+  organics: 0.1,
+  populationCount: year,
+  speciesCount: 1,
+  organizationCount: 1,
+  facilityCount: 1,
+  knowledgeCount: 1,
+  foodSecurity: 0.7,
+  diseasePrevalence: 0,
+});
+
 describe("rule engine and event ledger", () => {
   beforeEach(() => clearSimulationStages());
 
   it("deduplicates stable event IDs", () => {
     const first = materializeEvent(draft, 4, 0);
     expect(appendEvents([first], [draft], 4)).toHaveLength(1);
+  });
+
+  it("keeps the hot trade metric current after in-place event growth", () => {
+    const world = createWorld(8, { width: 8, height: 8 });
+    const trade = (id: string, tick: number, amount: number): WorldEvent => ({
+      id,
+      tick,
+      years: tick,
+      kind: "organization-trade",
+      ruleId: "test:trade",
+      source: "natural",
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: {},
+      payload: { amount },
+    });
+    world.events = [trade("event:trade:1", 1, 2)];
+    expect(lifetimeTradeVolume(world)).toBe(2);
+    world.events.push(trade("event:trade:2", 2, 3));
+    expect(lifetimeTradeVolume(world)).toBe(5);
+    world.events.splice(0, 1);
+    expect(lifetimeTradeVolume(world)).toBe(3);
+    world.events[0] = trade("event:trade:replacement", 3, 7);
+    expect(lifetimeTradeVolume(world)).toBe(7);
   });
 
   it("does not change a natural event ID when evidence key order changes", () => {
@@ -67,6 +117,66 @@ describe("rule engine and event ledger", () => {
     expect(result.state.worldview.entities).toHaveLength(0);
   });
 
+  it("rejects invalid time input before changing the authoritative world", () => {
+    const world = createWorld(12, { width: 8, height: 8 });
+    const before = worldDigest(world);
+
+    expect(() => stepWorld(world, { elapsedYears: Number.NaN, externalEvents: [] }, { computeDigest: false, mutateState: true })).toThrow("Simulation step");
+    expect(worldDigest(world)).toBe(before);
+
+    world.tick = -1;
+    expect(() => stepWorld(world, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true })).toThrow("World tick");
+
+    world.tick = Number.MAX_SAFE_INTEGER;
+    stepWorld(world, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true });
+    expect(world.timeline).toEqual({
+      step: String(BigInt(Number.MAX_SAFE_INTEGER) + 1n),
+      days: "365",
+    });
+    expect(world.tick).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("advances from the exact persisted day clock without losing a day", () => {
+    const world = createWorld(121, { width: 8, height: 8, formation: "formed" });
+    world.simulationDays = MAX_SIMULATION_DAYS - 2;
+    world.years = world.simulationDays / 365;
+
+    stepWorld(world, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true });
+
+    expect(world.simulationDays).toBe(MAX_SIMULATION_DAYS - 1);
+    stepWorld(world, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true });
+
+    expect(world.simulationDays).toBe(MAX_SIMULATION_DAYS);
+    expect(() => stepWorld(world, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true })).not.toThrow();
+    expect(world.simulationDays).toBe(MAX_SIMULATION_DAYS);
+    expect(world.timeline?.days).toBe(String(MAX_SIMULATION_DAYS + 1));
+  });
+
+  it("continues across the numeric clock boundary with an exact timeline", () => {
+    const world = createWorld(122, { width: 8, height: 8, formation: "formed" });
+    world.timeline = { step: String(Number.MAX_SAFE_INTEGER), days: String(MAX_SIMULATION_DAYS) };
+    world.tick = Number.MAX_SAFE_INTEGER;
+    world.simulationDays = MAX_SIMULATION_DAYS;
+    world.years = MAX_SIMULATION_DAYS / 365;
+
+    stepWorld(world, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true });
+
+    expect(world.timeline).toEqual({
+      step: String(BigInt(Number.MAX_SAFE_INTEGER) + 1n),
+      days: String(BigInt(MAX_SIMULATION_DAYS) + 1n),
+    });
+    expect(world.tick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(world.simulationDays).toBe(MAX_SIMULATION_DAYS);
+  });
+
+  it("keeps event identity and duration exact beyond safe integer steps", () => {
+    const first = materializeEvent(draft, Number.MAX_SAFE_INTEGER, 0, MAX_SIMULATION_DAYS / 365, "9007199254740992", "9007199254740992");
+    const second = materializeEvent(draft, Number.MAX_SAFE_INTEGER, 0, MAX_SIMULATION_DAYS / 365, "9007199254740993", "9007199254740993");
+    expect(first.id).not.toBe(second.id);
+    expect(isWorldEventActive({ ...first, source: "user", payload: { duration: 2 } }, "9007199254740993")).toBe(true);
+    expect(isWorldEventActive({ ...first, source: "user", payload: { duration: 2 } }, "9007199254740994")).toBe(false);
+  });
+
   it("uses an opt-in mutable path without changing the default immutable contract", () => {
     const immutableInput = createWorld(15, { width: 8, height: 8 });
     const immutableDigest = worldDigest(immutableInput);
@@ -82,9 +192,9 @@ describe("rule engine and event ledger", () => {
 
   it("keeps the canonical digest stable while streaming typed grids", () => {
     const state = createWorld(1, { width: 256, height: 256, formation: "formed" });
-    expect(worldDigest(state)).toBe("294256f1");
+    expect(worldDigest(state)).toBe("6f8b8cc1");
     state.observation.focusRegionId = "region:1:1" as RegionId;
-    expect(worldDigest(state)).toBe("294256f1");
+    expect(worldDigest(state)).toBe("6f8b8cc1");
   });
 
   it("applies dense patches and sparse changes in simulation-stage order", () => {
@@ -204,6 +314,37 @@ describe("rule engine and event ledger", () => {
     expect(world.eventArchive.kindCounts.__other__).toBeGreaterThan(0);
   });
 
+  it("saturates archive totals instead of overflowing during continuous operation", () => {
+    const world = createWorld(170, { width: 8, height: 8, formation: "formed" });
+    world.tick = 20_000;
+    world.years = 20_000;
+    world.events = Array.from({ length: EVENT_LOG_COMPACT_THRESHOLD + 1 }, (_, index) => ({
+      id: `event:saturation:${index}`,
+      tick: index,
+      years: index,
+      kind: "test-event",
+      ruleId: "test:saturation",
+      source: "natural" as const,
+      sourceIds: [],
+      probability: 1,
+      roll: 0,
+      evidence: {},
+      payload: {},
+    }));
+    world.eventArchive = createEventArchive();
+    world.eventArchive.totalEventCount = Number.MAX_SAFE_INTEGER - 1;
+    world.eventArchive.archivedEventCount = Number.MAX_SAFE_INTEGER - 1;
+    world.eventArchive.kindCounts["test-event"] = Number.MAX_SAFE_INTEGER - 1;
+
+    recordAppendedEvents(world.eventArchive, [world.events[0]!]);
+    compactEventLedger(world);
+
+    expect(world.eventArchive.totalEventCount).toBe(Number.MAX_SAFE_INTEGER);
+    expect(world.eventArchive.archivedEventCount).toBe(Number.MAX_SAFE_INTEGER);
+    expect(world.eventArchive.kindCounts["test-event"]).toBe(Number.MAX_SAFE_INTEGER);
+    expect(Object.values(world.eventArchive).flat().every((value) => typeof value !== "number" || Number.isFinite(value))).toBe(true);
+  });
+
   it("keeps a bounded causal milestone archive with early anchors", () => {
     const world = createWorld(171, { width: 8, height: 8, formation: "formed" });
     const region = "region:1:1" as RegionId;
@@ -240,6 +381,15 @@ describe("rule engine and event ledger", () => {
     expect(world.eventArchive.milestones.every((milestone) => milestone.sourceIds.length <= 12 && milestone.regionIds.length <= 12)).toBe(true);
   });
 
+  it("keeps long-term observations bounded with the first and newest annual samples", () => {
+    const retained = retainHistorySamples(Array.from({ length: MAX_HISTORY_SAMPLES + 80 }, (_, index) => historySample(index + 1)));
+
+    expect(retained).toHaveLength(MAX_HISTORY_SAMPLES);
+    expect(retained[0]?.timelineStep).toBe("365");
+    expect(retained.at(-1)?.timelineStep).toBe(String((MAX_HISTORY_SAMPLES + 80) * 365));
+    expect(retained.every((sample, index) => index === 0 || BigInt(sample.timelineStep) > BigInt(retained[index - 1]!.timelineStep))).toBe(true);
+  });
+
   it("drops per-organization archive indexes after an organization disappears", () => {
     const world = createWorld(18, { width: 8, height: 8, formation: "formed" });
     const retained = createOrganization("city", "region:1:1" as RegionId, []);
@@ -269,7 +419,27 @@ describe("rule engine and event ledger", () => {
       })),
       { id: livingSpeciesId, role: "decomposer", traits: {} },
     ];
-    world.populations = [{ id: "population:living" as never, speciesId: livingSpeciesId, regionId: "region:1:1" as never, count: 10, energy: 1 }];
+    const archivedSpeciesId = world.species[0]!.id;
+    world.populations = [
+      { id: "population:living" as never, speciesId: livingSpeciesId, regionId: "region:1:1" as never, count: 10, energy: 1 },
+      { id: "population:archived" as never, speciesId: archivedSpeciesId, regionId: "region:1:1" as never, count: 0, energy: 0 },
+    ];
+    world.pathogens = [derivePathogen(world, "region:1:1" as never, archivedSpeciesId)];
+    world.ecologicalRelationships = [{
+      id: "ecology-relationship:archived",
+      kind: "predation",
+      fromSpeciesId: archivedSpeciesId,
+      toSpeciesId: livingSpeciesId,
+      regionId: "region:1:1" as never,
+      strength: 0.4,
+      firstTick: 0,
+      lastTick: 0,
+      interactionCount: 1,
+      cumulativeImpact: 0.2,
+      lastImpact: 0.2,
+      status: "active",
+      details: {},
+    }];
 
     stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false, mutateState: true });
 
@@ -277,6 +447,9 @@ describe("rule engine and event ledger", () => {
     expect(world.species.some((species) => species.id === livingSpeciesId)).toBe(true);
     expect(world.eventArchive.archivedSpeciesCount).toBe(200 - EXTINCT_SPECIES_RETAIN_COUNT);
     expect(Object.values(world.eventArchive.archivedSpeciesRoleCounts).reduce((sum, count) => sum + (count ?? 0), 0)).toBe(200 - EXTINCT_SPECIES_RETAIN_COUNT);
+    expect(world.populations.every((population) => world.species.some((species) => species.id === population.speciesId))).toBe(true);
+    expect(world.pathogens).toEqual([]);
+    expect(world.ecologicalRelationships).toEqual([]);
   });
 
   it("applies each external event once and digests the full authoritative state", () => {

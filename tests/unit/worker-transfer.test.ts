@@ -16,20 +16,23 @@ describe("worker snapshot transfer", () => {
       chemistry: structuredClone(world.chemistry),
       metrics: {},
       foodSecurity: { width: 8, height: 8, values: new Float32Array(64) },
+      diseasePrevalence: { width: 8, height: 8, values: new Float32Array(64) },
     };
 
     const buffers = snapshotTransferables(snapshot);
 
-    expect(buffers).toHaveLength(12);
+    expect(buffers).toHaveLength(13);
     expect(new Set(buffers).size).toBe(buffers.length);
     expect(buffers).toContain(snapshot.fields.water.values.buffer);
     expect(buffers).toContain(snapshot.chemistry.oxygen.values.buffer);
     expect(buffers).toContain(snapshot.foodSecurity!.values.buffer);
+    expect(buffers).toContain(snapshot.diseasePrevalence!.values.buffer);
     expect(messageTransferables({ type: "events", events: [] })).toEqual([]);
 
     const received = structuredClone(snapshot, { transfer: buffers });
     expect(snapshot.fields.water.values.byteLength).toBe(0);
     expect(received.fields.water.values).toHaveLength(64);
     expect(received.foodSecurity?.values).toHaveLength(64);
+    expect(received.diseasePrevalence?.values).toHaveLength(64);
   });
 });

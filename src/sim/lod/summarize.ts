@@ -5,6 +5,8 @@ import { foodSecurityFromBalance, meanFoodSecurity } from "../agents/food.ts";
 import { cultureIdentityFor } from "../culture/identity.ts";
 import { evolveAggregateRegion, initialAggregateCulture, initialAggregateSociety, organizationSummariesForAggregate, socialPotentialForRegion, socialPopulationForRegion } from "./aggregate.ts";
 import { governanceForOrganization } from "../society/organization.ts";
+import { healthSummaryForRegion } from "../health/disease.ts";
+import { simulationStepForWorld } from "../time.ts";
 
 const emptyDelta = (): WorldDelta => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], worldviewEffects: [], eventDrafts: [] });
 const distribution = (values: number[]): Distribution => ({ bins: values.reduce<Record<string, number>>((bins, value) => { const key = String(Math.max(0, Math.min(9, Math.floor(value * 10)))); bins[key] = (bins[key] ?? 0) + 1; return bins; }, {}) });
@@ -13,6 +15,132 @@ const MAX_SUMMARY_HISTORY_IDS = 128;
 const boundedIds = (ids: readonly string[]): string[] => [...new Set(ids)].sort().slice(-MAX_SUMMARY_HISTORY_IDS);
 
 const organizationTypes: OrganizationType[] = ["family", "clan", "tribe", "settlement", "city", "state", "federation", "empire"];
+
+export type RegionSummaryIndex = {
+  agentsByRegion: Map<RegionId, WorldState["agents"]>;
+  organizationsByRegion: Map<RegionId, WorldState["organizations"]>;
+  relationshipsByRegion: Map<RegionId, WorldState["relationships"]>;
+  ecologicalRelationshipsByRegion: Map<RegionId, NonNullable<WorldState["ecologicalRelationships"]>>;
+  resourcesByRegion: Map<RegionId, WorldState["resources"]>;
+  facilitiesByRegion: Map<RegionId, WorldState["facilities"]>;
+  culturesByRegion: Map<RegionId, CultureState>;
+  eventsByRegion: Map<RegionId, WorldState["events"]>;
+  populationByRegion: Map<RegionId, PopulationState[]>;
+  organizationRegionById: Map<string, RegionId>;
+};
+
+const appendToRegion = <T>(index: Map<RegionId, T[]>, regionId: RegionId, value: T): void => {
+  const values = index.get(regionId) ?? [];
+  values.push(value);
+  index.set(regionId, values);
+};
+
+export const populationIndexByRegion = (
+  populations: readonly PopulationState[],
+  regionIds?: ReadonlySet<RegionId>,
+): Map<RegionId, PopulationState[]> => {
+  const byRegion = new Map<RegionId, PopulationState[]>();
+  for (const population of populations) {
+    if (regionIds && !regionIds.has(population.regionId)) continue;
+    appendToRegion(byRegion, population.regionId, population);
+  }
+  return byRegion;
+};
+
+export const createRegionSummaryIndex = (
+  state: WorldState,
+  regionIds?: ReadonlySet<RegionId>,
+): RegionSummaryIndex => {
+  const agentsByRegion = new Map<RegionId, WorldState["agents"]>();
+  const organizationsByRegion = new Map<RegionId, WorldState["organizations"]>();
+  const relationshipsByRegion = new Map<RegionId, WorldState["relationships"]>();
+  const ecologicalRelationshipsByRegion = new Map<RegionId, NonNullable<WorldState["ecologicalRelationships"]>>();
+  const resourcesByRegion = new Map<RegionId, WorldState["resources"]>();
+  const facilitiesByRegion = new Map<RegionId, WorldState["facilities"]>();
+  const culturesByRegion = new Map<RegionId, CultureState>();
+  const eventsByRegion = new Map<RegionId, WorldState["events"]>();
+  const organizationRegionById = new Map<string, RegionId>();
+  const agentRegions = new Map<string, RegionId>();
+  const organizationIds = new Set<string>();
+
+  for (const agent of state.agents) {
+    if (regionIds && !regionIds.has(agent.regionId)) continue;
+    appendToRegion(agentsByRegion, agent.regionId, agent);
+    agentRegions.set(agent.id, agent.regionId);
+  }
+  for (const organization of state.organizations) {
+    if (regionIds && !regionIds.has(organization.regionId)) continue;
+    appendToRegion(organizationsByRegion, organization.regionId, organization);
+    organizationRegionById.set(organization.id, organization.regionId);
+    organizationIds.add(organization.id);
+  }
+  for (const summary of state.lod.summaries) {
+    if (regionIds && !regionIds.has(summary.regionId)) continue;
+    for (const organization of summary.organizations) {
+      if (organizationRegionById.has(organization.id)) continue;
+      organizationRegionById.set(organization.id, summary.regionId);
+      organizationIds.add(organization.id);
+    }
+  }
+  for (const relationship of state.relationships) {
+    const fromRegion = agentRegions.get(relationship.fromId);
+    if (fromRegion && fromRegion === agentRegions.get(relationship.toId)) {
+      appendToRegion(relationshipsByRegion, fromRegion, relationship);
+    }
+  }
+  for (const relationship of state.ecologicalRelationships ?? []) {
+    if (regionIds && !regionIds.has(relationship.regionId)) continue;
+    appendToRegion(ecologicalRelationshipsByRegion, relationship.regionId, relationship);
+  }
+  for (const resource of state.resources) {
+    if (regionIds && !regionIds.has(resource.regionId)) continue;
+    appendToRegion(resourcesByRegion, resource.regionId, resource);
+  }
+  for (const facility of state.facilities) {
+    if (regionIds && !regionIds.has(facility.regionId)) continue;
+    appendToRegion(facilitiesByRegion, facility.regionId, facility);
+  }
+  for (const culture of state.cultures) {
+    if (regionIds && !regionIds.has(culture.regionId)) continue;
+    if (!culturesByRegion.has(culture.regionId)) culturesByRegion.set(culture.regionId, culture);
+  }
+  for (const event of state.events) {
+    const regions = new Set<RegionId>();
+    for (const value of [
+      event.payload.regionId,
+      event.payload.fromRegion,
+      event.payload.toRegion,
+      event.evidence.regionId,
+      event.evidence.fromRegion,
+      event.evidence.toRegion,
+    ]) {
+      if (typeof value === "string" && (!regionIds || regionIds.has(value as RegionId))) regions.add(value as RegionId);
+    }
+    for (const sourceId of event.sourceIds) {
+      if (!organizationIds.has(sourceId)) continue;
+      const regionId = organizationRegionById.get(sourceId);
+      if (regionId) regions.add(regionId);
+    }
+    const organizationId = event.payload.organizationId;
+    if (typeof organizationId === "string" && organizationIds.has(organizationId)) {
+      const regionId = organizationRegionById.get(organizationId);
+      if (regionId) regions.add(regionId);
+    }
+    for (const regionId of regions) appendToRegion(eventsByRegion, regionId, event);
+  }
+  return {
+    agentsByRegion,
+    organizationsByRegion,
+    relationshipsByRegion,
+    ecologicalRelationshipsByRegion,
+    resourcesByRegion,
+    facilitiesByRegion,
+    culturesByRegion,
+    eventsByRegion,
+    populationByRegion: populationIndexByRegion(state.populations, regionIds),
+    organizationRegionById,
+  };
+};
 
 const aggregateKnowledgeFor = (state: WorldState, culture: CultureState): AggregateKnowledgeSummary[] => {
   const knownIds = new Set(culture.knowledgeIds);
@@ -28,6 +156,7 @@ const aggregateKnowledgeFor = (state: WorldState, culture: CultureState): Aggreg
       forgettingRate: knowledge.forgettingRate,
       originRegionId: knowledge.originRegionId ?? culture.regionId,
       originTick: knowledge.originTick ?? 0,
+      ...(knowledge.originTimelineStep === undefined ? {} : { originTimelineStep: knowledge.originTimelineStep }),
       originYears: knowledge.originYears ?? 0,
       parentIds: [...(knowledge.parentIds ?? [])],
     }));
@@ -49,13 +178,18 @@ const cultureSummaryFor = (state: WorldState, regionId: RegionId, culture: Cultu
   };
 };
 
-const societySummaryFor = (state: WorldState, regionId: RegionId, organizations: readonly WorldState["organizations"][number][], facilities: readonly WorldState["facilities"][number][]): RegionSocietySummary => {
+const societySummaryFor = (
+  state: WorldState,
+  regionId: RegionId,
+  organizations: readonly WorldState["organizations"][number][],
+  facilities: readonly WorldState["facilities"][number][],
+  regionalEvents = regionEventsFor(state, regionId, organizations.map((organization) => organization.id)),
+): RegionSocietySummary => {
   const organizationCounts = Object.fromEntries(organizationTypes.map((type) => [type, organizations.filter((organization) => organization.type === type && organization.status !== "collapsed").length])) as Record<OrganizationType, number>;
   const governed = organizations
     .filter((organization) => organization.status !== "collapsed")
     .map((organization) => governanceForOrganization(organization));
   const mean = (key: "cohesion" | "stability" | "legitimacy" | "military" | "publicGoods"): number => governed.length === 0 ? 0.45 : governed.reduce((sum, governance) => sum + governance[key], 0) / governed.length;
-  const regionalEvents = regionEventsFor(state, regionId, organizations.map((organization) => organization.id));
   const tradeVolume = regionalEvents
     .filter((event) => event.kind === "organization-trade" || event.kind === "interregional-trade")
     .reduce((sum, event) => sum + Math.max(0, Number(event.payload.amount ?? event.evidence.amount ?? 0)), 0);
@@ -89,7 +223,13 @@ const eventTouchesRegion = (event: WorldState["events"][number], regionId: Regio
     || event.sourceIds.some((sourceId) => organizationIds.has(sourceId));
 };
 
-const regionEventsFor = (state: WorldState, regionId: RegionId, organizationIds: readonly string[] = []): WorldState["events"] => {
+const regionEventsFor = (
+  state: WorldState,
+  regionId: RegionId,
+  organizationIds: readonly string[] = [],
+  index?: RegionSummaryIndex,
+): WorldState["events"] => {
+  if (index) return index.eventsByRegion.get(regionId) ?? [];
   const organizations = new Set(organizationIds);
   return state.events.filter((event) => eventTouchesRegion(event, regionId, organizations));
 };
@@ -99,8 +239,9 @@ export const aggregatePopulationForRegion = (
   regionId: RegionId,
   fallback = 0,
   populations: readonly PopulationState[] = state.populations,
+  populationByRegion?: ReadonlyMap<RegionId, readonly PopulationState[]>,
 ): number => {
-  const local = populations.filter((population) => population.regionId === regionId);
+  const local = populationByRegion?.get(regionId) ?? populations.filter((population) => population.regionId === regionId);
   if (local.length === 0) return Math.max(0, fallback);
   return local.reduce((sum, population) => sum + Math.max(0, Number.isFinite(population.count) ? population.count : 0), 0);
 };
@@ -117,18 +258,27 @@ const canonicalDigestFor = (summary: RegionSummary): string => hashString(JSON.s
   organizations: summary.organizations,
   agentRecords: [...summary.agentRecords].sort((left, right) => left.id.localeCompare(right.id)),
   relationships: [...summary.relationshipRecords].sort((left, right) => left.id.localeCompare(right.id)),
+  ecologicalRelationships: [...(summary.ecologicalRelationships ?? [])].sort((left, right) => left.id.localeCompare(right.id)),
   lineage: summary.lineage,
   familyLineages: summary.familyLineages,
   cultureSummary: summary.cultureSummary,
   societySummary: summary.societySummary,
+  healthSummary: summary.healthSummary,
   resources: summary.resources,
 })).toString(16);
 
-export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode: "aggregate" | "micro" = "aggregate"): RegionSummary => {
-  const agents = state.agents.filter((agent) => agent.regionId === regionId);
+export const summarizeRegionState = (
+  state: WorldState,
+  regionId: RegionId,
+  mode: "aggregate" | "micro" = "aggregate",
+  index?: RegionSummaryIndex,
+  computeCanonicalDigest = true,
+): RegionSummary => {
+  const agents = index?.agentsByRegion.get(regionId) ?? state.agents.filter((agent) => agent.regionId === regionId);
   const agentIds = agents.map((agent) => agent.id).sort();
-  const organizations = state.organizations.filter((organization) => organization.regionId === regionId);
-  const regionEvents = regionEventsFor(state, regionId, organizations.map((organization) => organization.id));
+  const agentIdSet = new Set(agentIds);
+  const organizations = index?.organizationsByRegion.get(regionId) ?? state.organizations.filter((organization) => organization.regionId === regionId);
+  const regionEvents = regionEventsFor(state, regionId, organizations.map((organization) => organization.id), index);
   const historyIds = boundedIds(regionEvents.map((event) => event.id));
   const organizationSummaries: OrganizationSummary[] = organizations.map((organization) => ({
     id: organization.id,
@@ -143,8 +293,15 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     ...(organization.governance ? { governance: { ...organization.governance } } : {}),
     ...(organization.diplomacy ? { diplomacy: { ...organization.diplomacy } } : {}),
   }));
-  const agentRecords: RegionAgentRecord[] = agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: [...agent.parentIds], skills: { ...agent.skills }, knowledgeIds: [...agent.knowledgeIds], beliefIds: [...agent.beliefIds] }));
-  const relationshipRecords: RelationshipState[] = state.relationships.filter((relationship) => agentIds.includes(relationship.fromId) && agentIds.includes(relationship.toId)).map((relationship) => structuredClone(relationship));
+  const agentRecords: RegionAgentRecord[] = agents.map((agent) => ({ id: agent.id, age: agent.age, parentIds: [...agent.parentIds], traits: { ...agent.traits }, skills: { ...agent.skills }, knowledgeIds: [...agent.knowledgeIds], beliefIds: [...agent.beliefIds], ...(agent.genetics ? { genetics: { ...agent.genetics } } : {}), ...(agent.health ? { health: structuredClone(agent.health) } : {}) }));
+  const relationshipRecords: RelationshipState[] = (index?.relationshipsByRegion.get(regionId)
+    ?? state.relationships.filter((relationship) => agentIdSet.has(relationship.fromId) && agentIdSet.has(relationship.toId)))
+    .map((relationship) => structuredClone(relationship));
+  const ecologicalRelationships = (index?.ecologicalRelationshipsByRegion.get(regionId)
+    ?? (state.ecologicalRelationships ?? []).filter((relationship) => relationship.regionId === regionId))
+    .sort((left, right) => Number(right.status === "active") - Number(left.status === "active") || right.strength - left.strength || left.id.localeCompare(right.id))
+    .slice(0, 64)
+    .map((relationship) => structuredClone(relationship));
   const relationshipIds = relationshipRecords.map((relationship) => relationship.id).sort();
   const lineage = summarizeLineage(agents, relationshipRecords);
   const familyLineages: FamilyLineageSummary[] = organizations
@@ -160,20 +317,22 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
         ...summarizeLineage(familyAgents, familyRelationships),
       };
     });
-  const foodBalance = state.resources.filter((resource) => resource.resourceId === "food" && resource.regionId === regionId).reduce((sum, resource) => sum + resource.amount, 0);
+  const regionalResources = index?.resourcesByRegion.get(regionId) ?? state.resources.filter((resource) => resource.regionId === regionId);
+  const foodBalance = regionalResources.filter((resource) => resource.resourceId === "food").reduce((sum, resource) => sum + resource.amount, 0);
   const population = agents.length;
   const foodPerAgent = foodBalance / Math.max(1, population);
   const foodSecurity = meanFoodSecurity({ resources: state.resources, organizations, agents });
   const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal");
-  const culture = state.cultures.find((candidate) => candidate.regionId === regionId);
+  const culture = index?.culturesByRegion.get(regionId) ?? state.cultures.find((candidate) => candidate.regionId === regionId);
   const cultureSummary = cultureSummaryFor(state, regionId, culture, agents);
-  const societySummary = societySummaryFor(state, regionId, organizations, state.facilities);
+  const societySummary = societySummaryFor(state, regionId, organizations, index?.facilitiesByRegion.get(regionId) ?? state.facilities, regionEvents);
   const socialPopulation = agents.length > 0
     ? agents.length
-    : mode === "aggregate" ? socialPopulationForRegion(state, regionId) : 0;
+    : mode === "aggregate" ? socialPopulationForRegion(state, regionId, index?.populationByRegion.get(regionId) ?? state.populations) : 0;
   const summary: RegionSummary = {
     regionId,
     version: state.tick,
+    versionStep: simulationStepForWorld(state),
     mode,
     population,
     socialPopulation,
@@ -187,21 +346,24 @@ export const summarizeRegionState = (state: WorldState, regionId: RegionId, mode
     relationshipCount: relationshipIds.length,
     relationshipDigest: hashString(JSON.stringify(relationshipIds)).toString(16),
     relationshipRecords,
+    ecologicalRelationshipCount: ecologicalRelationships.length,
+    ecologicalRelationships,
     lineage,
     familyLineages,
     ...(cultureSummary ? { cultureSummary } : {}),
     societySummary,
+    healthSummary: healthSummaryForRegion(state, regionId),
     foodBalance,
     foodPerAgent,
     foodSecurity,
-    resources: structuredClone(state.resources.filter((resource) => resource.regionId === regionId)),
+    resources: structuredClone(regionalResources),
     migrationRate: Math.min(1, migrationEvents.length / Math.max(1, agents.length)),
     historyIds,
     archivedHistoryCount: state.eventArchive.regionCounts[regionId] ?? 0,
     random: { ...state.random },
     canonicalDigest: "",
   };
-  summary.canonicalDigest = canonicalDigestFor(summary);
+  if (computeCanonicalDigest) summary.canonicalDigest = canonicalDigestFor(summary);
   return summary;
 };
 
@@ -209,18 +371,20 @@ export const refreshAggregateSummaryWithEvents = (
   state: WorldState,
   previous: RegionSummary,
   populations: readonly PopulationState[] = state.populations,
+  index?: RegionSummaryIndex,
+  populationByRegion?: ReadonlyMap<RegionId, readonly PopulationState[]>,
 ): { summary: RegionSummary; events: WorldDelta["eventDrafts"] } => {
-  const current = summarizeRegionState(state, previous.regionId, "aggregate");
-  const hadRegionalPopulation = state.populations.some((candidate) => candidate.regionId === previous.regionId);
-  const hasRegionalPopulation = populations.some((candidate) => candidate.regionId === previous.regionId);
+  const current = summarizeRegionState(state, previous.regionId, "aggregate", index, false);
+  const hadRegionalPopulation = (index?.populationByRegion.get(previous.regionId) ?? state.populations.filter((candidate) => candidate.regionId === previous.regionId)).length > 0;
+  const hasRegionalPopulation = (populationByRegion?.get(previous.regionId) ?? populations.filter((candidate) => candidate.regionId === previous.regionId)).length > 0;
   const population = hasRegionalPopulation
-    ? aggregatePopulationForRegion(state, previous.regionId, 0, populations)
+    ? aggregatePopulationForRegion(state, previous.regionId, 0, populations, populationByRegion)
     : hadRegionalPopulation ? 0 : previous.population;
-  const regionEvents = regionEventsFor(state, previous.regionId, previous.organizations.map((organization) => organization.id));
+  const regionEvents = regionEventsFor(state, previous.regionId, previous.organizations.map((organization) => organization.id), index);
   const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal").length;
-  const culture = state.cultures.find((candidate) => candidate.regionId === previous.regionId);
+  const culture = index?.culturesByRegion.get(previous.regionId) ?? state.cultures.find((candidate) => candidate.regionId === previous.regionId);
   const existingCultureSummary = previous.cultureSummary
-    ?? cultureSummaryFor(state, previous.regionId, culture, state.agents.filter((agent) => agent.regionId === previous.regionId))
+    ?? cultureSummaryFor(state, previous.regionId, culture, index?.agentsByRegion.get(previous.regionId) ?? state.agents.filter((agent) => agent.regionId === previous.regionId))
     ?? initialAggregateCulture(state, previous.regionId, previous.socialPopulation ?? previous.population);
   const existingSocietySummary = previous.societySummary ?? initialAggregateSociety(previous);
   const socialPopulationEstimate = previous.socialPopulation ?? previous.population;
@@ -229,7 +393,7 @@ export const refreshAggregateSummaryWithEvents = (
     state,
     { ...previous, cultureSummary: existingCultureSummary, societySummary: existingSocietySummary },
     population,
-    socialPotentialForRegion(state, previous.regionId, populations),
+    socialPotentialForRegion(state, previous.regionId, populationByRegion?.get(previous.regionId) ?? populations),
     current.foodBalance,
     socialFoodSecurity,
     regionEvents,
@@ -238,6 +402,7 @@ export const refreshAggregateSummaryWithEvents = (
   const summary: RegionSummary = {
     ...current,
     version: state.tick,
+    versionStep: simulationStepForWorld(state),
     mode: "aggregate",
     population,
     socialPopulation: evolution.socialPopulation,
@@ -251,6 +416,8 @@ export const refreshAggregateSummaryWithEvents = (
     relationshipCount: previous.relationshipCount,
     relationshipDigest: previous.relationshipDigest,
     relationshipRecords: structuredClone(previous.relationshipRecords),
+    ecologicalRelationshipCount: current.ecologicalRelationshipCount ?? 0,
+    ecologicalRelationships: structuredClone(current.ecologicalRelationships ?? []),
     lineage: structuredClone(previous.lineage),
     familyLineages: structuredClone(previous.familyLineages),
     cultureSummary: evolution.culture,

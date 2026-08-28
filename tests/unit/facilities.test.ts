@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { facilityEffectProfileForRegion, facilityOperationalEffect, stepFacilities } from "../../src/sim/society/facilities.ts";
+import { compactFacilityRecords, facilityEffectProfileForRegion, facilityOperationalEffect, stepFacilities } from "../../src/sim/society/facilities.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import type { EntityId, FacilityState, KnowledgeDomain, RegionId, WorldEvent, WorldState } from "../../src/sim/types.ts";
 import { createWorld } from "../../src/sim/world.ts";
@@ -26,6 +26,10 @@ const worldWithTechnology = (domains: KnowledgeDomain[], seed = 501): WorldState
     beliefIds: [],
     transmissionRate: 0.8,
   }];
+  const localIndex = 2 * state.fields.elevation.width + 2;
+  state.fields.nutrients.values[localIndex] = 1;
+  state.chemistry.organics.values[localIndex] = 1;
+  state.chemistry.oxygen.values[localIndex] = 1;
   return state;
 };
 
@@ -100,6 +104,29 @@ describe("facility lifecycle", () => {
     expect(new Set(assigned).size).toBe(assigned.length);
   });
 
+  it("rebuilds workforce scores after skills change between simulation steps", () => {
+    const state = worldWithTechnology(["construction"]);
+    state.organizations[0]!.memberIds = members.slice(0, 4);
+    state.agents = members.slice(0, 4).map((id, index) => ({
+      id, populationId: "population:workers" as never, regionId, age: 24, lifespan: 70, parentIds: [],
+      traits: { cooperation: 0, curiosity: 0 },
+      skills: { toolUse: index === 0 ? 1 : index === 3 ? 0 : 0.5, observation: 0 },
+      needs: {}, memoryIds: [], knowledgeIds: [], beliefIds: [], relationshipIds: [],
+    }));
+    const facility = facilityFor(state, { id: "facility:construction:score-refresh", type: "construction", workforceIds: [] });
+    state.facilities = [facility];
+
+    const first = updatedFacility(stepFacilities(state), facility.id)!;
+    expect(first.workforceIds).toContain(members[0]);
+    expect(first.workforceIds).not.toContain(members[3]);
+
+    state.agents[0]!.skills.toolUse = 0;
+    state.agents[3]!.skills.toolUse = 1;
+    const second = updatedFacility(stepFacilities(state), facility.id)!;
+    expect(second.workforceIds).not.toContain(members[0]);
+    expect(second.workforceIds).toContain(members[3]);
+  });
+
   it("removes migrated workers, fills vacancies, and scales effects under persistent shortages", () => {
     const state = worldWithTechnology(["construction", "subsistence"]);
     const facility = facilityFor(state, { level: 3, workforceIds: [members[0]!, members[1]!], workforceRequired: 2, workforceEfficiency: 1 });
@@ -151,6 +178,12 @@ describe("facility lifecycle", () => {
 
     expect(baseProduction).toBeGreaterThan(0);
     expect(supportedProduction).toBeCloseTo(baseProduction * 1.7, 5);
+    expect(stepFacilities(base).fieldChanges).toContainEqual(expect.objectContaining({
+      field: "nutrients",
+      operation: "add",
+      causeRuleId: "society:mineral-extraction",
+      value: expect.any(Number),
+    }));
     expect(stepFacilities(supported).resourceTransactions).toContainEqual(expect.objectContaining({
       resourceId: "energy",
       operation: "mint",
@@ -170,6 +203,9 @@ describe("facility lifecycle", () => {
       parentIds: [],
       composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.2, organics: 0.2, oxygen: 0.2 },
       properties: { hardness: 1, density: 0.7, reactivity: 0.1, conductivity: 1, energyPotential: 1, biologicalAffinity: 0.2, stability: 1 },
+      reserveCapacity: 0,
+      remainingReserve: 0,
+      extractedTotal: 0,
       discoveredByIds: members.slice(0, 2),
       discoveryTick: 1,
       discoveryYears: 1,
@@ -180,6 +216,58 @@ describe("facility lifecycle", () => {
 
     expect(materialProduction).toBeGreaterThan(supportedProduction);
     expect(materialEnergy).toBeGreaterThan(supportedEnergy);
+  });
+
+  it("depletes a small natural deposit and stops its later material output", () => {
+    const state = worldWithTechnology(["construction"]);
+    const index = 2 * state.fields.elevation.width + 2;
+    state.fields.nutrients.values[index] = 0;
+    state.substances = [{
+      id: "substance:finite-deposit",
+      name: "微量棱矿",
+      kind: "mineral",
+      formation: "geological",
+      status: "known",
+      regionId,
+      originTick: 1,
+      originYears: 1,
+      parentIds: [],
+      composition: { carbon: 0.2, nitrogen: 0.2, phosphorus: 0.2, organics: 0.2, oxygen: 0.2 },
+      properties: { hardness: 1, density: 0.8, reactivity: 0.1, conductivity: 0.4, energyPotential: 0.3, biologicalAffinity: 0.2, stability: 1 },
+      reserveCapacity: 0.05,
+      remainingReserve: 0.05,
+      extractedTotal: 0,
+      discoveredByIds: members.slice(0, 2),
+    }];
+
+    const delta = stepFacilities(state);
+    const depleted = delta.entityEffects.find((effect) => effect.collection === "substances" && effect.id === state.substances[0]!.id)?.value as WorldState["substances"][number];
+    expect(delta.resourceTransactions).toContainEqual(expect.objectContaining({ resourceId: "materials", operation: "mint", amount: 0.05 }));
+    expect(depleted).toMatchObject({ remainingReserve: 0, extractedTotal: 0.05 });
+    expect(delta.eventDrafts.filter((event) => event.kind === "substance-depletion")).toHaveLength(1);
+
+    state.substances = [depleted];
+    const afterDepletion = stepFacilities(state);
+    expect(afterDepletion.resourceTransactions.some((transaction) => transaction.causeRuleId === "society:material-production")).toBe(false);
+    expect(afterDepletion.eventDrafts.some((event) => event.kind === "substance-depletion")).toBe(false);
+  });
+
+  it("converts finite organic feedstock into energy with local chemistry feedback", () => {
+    const state = worldWithTechnology(["energy"]);
+    const index = 2 * state.fields.elevation.width + 2;
+    state.chemistry.organics.values[index] = 0.000001;
+    state.facilities = [facilityFor(state, { id: "facility:energy:feedstock", type: "energy", level: 2, workforceIds: members.slice(0, 4) })];
+
+    const delta = stepFacilities(state);
+    expect(delta.resourceTransactions).toContainEqual(expect.objectContaining({ resourceId: "energy", operation: "mint", amount: expect.any(Number) }));
+    expect(delta.chemistryChanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "organics", value: expect.any(Number), causeRuleId: "society:energy-feedstock-conversion" }),
+      expect.objectContaining({ field: "oxygen", value: expect.any(Number), causeRuleId: "society:energy-feedstock-conversion" }),
+      expect.objectContaining({ field: "carbon", value: expect.any(Number), causeRuleId: "society:energy-feedstock-conversion" }),
+    ]));
+    expect(delta.chemistryChanges.find((change) => change.field === "organics")?.value).toBeLessThan(0);
+    expect(delta.chemistryChanges.find((change) => change.field === "oxygen")?.value).toBeLessThan(0);
+    expect(delta.chemistryChanges.find((change) => change.field === "carbon")?.value).toBeGreaterThan(0);
   });
 
   it("plans facilities from technology but does not construct without existing materials", () => {
@@ -267,6 +355,22 @@ describe("facility lifecycle", () => {
 
     expect(delta.entityEffects).toContainEqual(expect.objectContaining({ collection: "facilities", operation: "remove", id: state.facilities[0]!.id }));
     expect(delta.eventDrafts).toContainEqual(expect.objectContaining({ kind: "facility-retired" }));
+  });
+
+  it("keeps one strongest facility record per region and domain", () => {
+    const state = worldWithTechnology(["construction"]);
+    const active = facilityFor(state, { id: "facility:construction:active", type: "construction", level: 2, condition: 0.8 });
+    const damaged = facilityFor(state, { id: "facility:construction:damaged", type: "construction", status: "damaged", condition: 1 });
+    const otherDomain = facilityFor(state, { id: "facility:subsistence:other", type: "subsistence" });
+    state.facilities = [damaged, otherDomain, active];
+
+    const removed = compactFacilityRecords(state);
+
+    expect(removed).toBe(1);
+    expect(state.facilities.map((facility) => facility.id)).toEqual([
+      "facility:construction:active",
+      "facility:subsistence:other",
+    ]);
   });
 
   it("is deterministic for the same authoritative state", () => {

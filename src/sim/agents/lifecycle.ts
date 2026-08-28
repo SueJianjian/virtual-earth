@@ -14,8 +14,13 @@ import type {
 import { createFamily, createRelationship, relationshipIdFor } from "./relationships.ts";
 import { createFoodBalanceIndex, foodSecurityForAgent } from "./food.ts";
 import { populationCellIndex } from "../ecology/populations.ts";
-import { technologyProfileForRegion } from "../culture/technology.ts";
+import { technologyProfilesForState } from "../culture/technology.ts";
 import { facilityEffectProfilesForState } from "../society/facilities.ts";
+import { finalizeAgentHealth, healthyAgentState, stepAgentHealth } from "../health/disease.ts";
+import { addPersistentTotal } from "../numeric.ts";
+import { founderGenetics, founderHeritableTraits, geneticEnvironmentFitness, inheritAgentGenetics, normalizeAgentGenetics } from "./genetics.ts";
+import { compareSimulationSteps, nextSimulationTick, simulationStepForWorld } from "../time.ts";
+import { annualClimateForLocal } from "../environment/cycle.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [],
@@ -47,9 +52,35 @@ const relationshipPriority: Record<RelationshipState["kind"], number> = {
 
 const compareRelationshipsForRetention = (left: RelationshipState, right: RelationshipState): number =>
   relationshipPriority[right.kind] - relationshipPriority[left.kind]
-  || right.createdTick - left.createdTick
+  || compareSimulationSteps(right.createdTimelineStep ?? String(right.createdTick), left.createdTimelineStep ?? String(left.createdTick))
   || right.strength - left.strength
   || left.id.localeCompare(right.id);
+
+const isSortedUnique = (values: readonly string[]): boolean => {
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index - 1]! >= values[index]!) return false;
+  }
+  return true;
+};
+
+const hasCanonicalMemoryLayout = (
+  memoryIds: readonly string[],
+  knowledgeIds: readonly string[],
+  activeMemories: readonly string[],
+): boolean => {
+  if (memoryIds.length > MAX_AGENT_MEMORY_IDS) return false;
+  const core = [...knowledgeIds, ...activeMemories].slice(0, MAX_AGENT_MEMORY_IDS);
+  if (memoryIds.length < core.length) return false;
+  for (let index = 0; index < core.length; index += 1) {
+    if (memoryIds[index] !== core[index]) return false;
+  }
+  const coreIds = new Set(core);
+  for (let index = core.length; index < memoryIds.length; index += 1) {
+    const id = memoryIds[index]!;
+    if (coreIds.has(id) || (index > core.length && memoryIds[index - 1]! <= id)) return false;
+  }
+  return true;
+};
 
 export const compactRelationshipRecords = (state: WorldState): number => {
   const agentIds = new Set(state.agents.map((agent) => agent.id));
@@ -74,7 +105,7 @@ export const compactRelationshipRecords = (state: WorldState): number => {
   const removed = state.relationships.length - retained.length;
   if (removed <= 0) return 0;
   state.relationships = retained;
-  state.eventArchive.archivedRelationshipCount += removed;
+  state.eventArchive.archivedRelationshipCount = addPersistentTotal(state.eventArchive.archivedRelationshipCount, removed);
   return removed;
 };
 
@@ -92,11 +123,23 @@ export const compactAgentMemoryRecords = (state: WorldState): number => {
 
   let removed = 0;
   for (const agent of state.agents) {
+    const activeMemorySet = activeMemoriesByAgent.get(agent.id);
+    const knowledgeIsCanonical = agent.knowledgeIds.length <= MAX_AGENT_MEMORY_IDS && isSortedUnique(agent.knowledgeIds);
+    const activeMemories = activeMemorySet
+      ? [...activeMemorySet].sort()
+      : [];
+    if (knowledgeIsCanonical) {
+      const knowledgeSet = activeMemories.length > 0 ? new Set(agent.knowledgeIds) : undefined;
+      const filteredActiveMemories = knowledgeSet
+        ? activeMemories.filter((id) => !knowledgeSet.has(id))
+        : activeMemories;
+      if (hasCanonicalMemoryLayout(agent.memoryIds, agent.knowledgeIds, filteredActiveMemories)) continue;
+    }
     const knowledgeIds = [...new Set(agent.knowledgeIds)].sort().slice(0, MAX_AGENT_MEMORY_IDS);
-    const activeMemories = [...(activeMemoriesByAgent.get(agent.id) ?? [])]
-      .filter((id) => !knowledgeIds.includes(id))
-      .sort();
-    const retained = [...knowledgeIds, ...activeMemories].slice(0, MAX_AGENT_MEMORY_IDS);
+    const knowledgeSet = new Set(knowledgeIds);
+    const normalizedActiveMemories = activeMemories.filter((id) => !knowledgeSet.has(id));
+    const retainedActiveMemories = normalizedActiveMemories;
+    const retained = [...knowledgeIds, ...retainedActiveMemories].slice(0, MAX_AGENT_MEMORY_IDS);
     const remembered = new Set(retained);
     const remaining = [...new Set(agent.memoryIds)]
       .filter((id) => !remembered.has(id))
@@ -114,7 +157,7 @@ export const compactAgentMemoryRecords = (state: WorldState): number => {
   return removed;
 };
 
-const inheritFromParents = (
+const inheritCultureFromParents = (
   child: AgentState,
   first: AgentState,
   second: AgentState,
@@ -153,22 +196,16 @@ export const createAgent = (
     // keep enough adulthood for relationships, family, and knowledge transfer.
     ? Math.max(45, Math.round(blueprint.lifespanYears * lifespanVariation))
     : 45 + (base % 55);
-  return {
-    id: asEntityId(`agent:${hashString(`${population.id}:${ordinal}:${base}`).toString(16)}`),
+  const id = asEntityId(`agent:${hashString(`${population.id}:${ordinal}:${base}`).toString(16)}`);
+  const traits = founderHeritableTraits(species, `${seed}:${id}`);
+  const agent: AgentState = {
+    id,
     populationId: population.id,
     regionId: population.regionId,
     age: 0,
     lifespan,
     parentIds: [...parentIds],
-    traits: {
-      cognitivePotential: clamp(species.traits.cognitivePotential ?? 0),
-      sociality: trait("sociality"),
-      cooperation: trait("cooperation"),
-      curiosity: trait("curiosity"),
-      fertility: blueprint
-        ? clamp(trait("fertility") * 0.62 + blueprint.fecundity * 0.38)
-        : trait("fertility"),
-    },
+    traits,
     skills: {
       observation: trait("observation") * 0.4,
       communication: trait("communication") * 0.3,
@@ -179,7 +216,10 @@ export const createAgent = (
     knowledgeIds: [],
     beliefIds: [],
     relationshipIds: [],
+    health: healthyAgentState(),
   };
+  agent.genetics = founderGenetics(species, traits, `${seed}:${id}`);
+  return agent;
 };
 
 export const eligibleAgentCount = (
@@ -216,9 +256,15 @@ export const stepAgents = (
     needs: { ...agent.needs },
     memoryIds: [...agent.memoryIds],
     relationshipIds: [...agent.relationshipIds],
+    ...(agent.genetics ? { genetics: { ...agent.genetics } } : {}),
+    ...(agent.health ? { health: { ...agent.health, infections: agent.health.infections.map((infection) => ({ ...infection })), immunityIds: [...agent.health.immunityIds] } } : {}),
   }]));
   const populationsById = new Map(state.populations.map((population) => [population.id, population]));
   const speciesById = new Map(state.species.map((species) => [species.id, species]));
+  const removedPopulationIds = new Set(_ecology.entityEffects
+    .filter((effect) => effect.collection === "populations" && effect.operation === "remove")
+    .map((effect) => (effect as { id: EntityId }).id));
+  const deadIds = new Set<EntityId>(state.agents.filter((agent) => removedPopulationIds.has(agent.populationId)).map((agent) => agent.id));
   const agentsByPopulation = new Map<string, AgentState[]>();
   const agentCountsByPopulation = new Map<string, number>();
   for (const agent of agents.values()) {
@@ -228,14 +274,39 @@ export const stepAgents = (
     agentsByPopulation.set(populationId, members);
     agentCountsByPopulation.set(populationId, members.length);
   }
-  const deadIds = new Set<EntityId>();
   const foodIndex = createFoodBalanceIndex(state);
+  const technologyProfiles = technologyProfilesForState(state);
   const facilityEffects = facilityEffectProfilesForState(state);
+  const meanTemperature = state.fields.temperature.values.length === 0
+    ? 0
+    : state.fields.temperature.values.reduce((sum, value) => sum + value, 0) / state.fields.temperature.values.length;
+  const meanHumidity = state.fields.humidity.values.length === 0
+    ? 0
+    : state.fields.humidity.values.reduce((sum, value) => sum + value, 0) / state.fields.humidity.values.length;
+  const foodSecurityByAgent = new Map<EntityId, number>();
+  const foodSecurityFor = (agent: AgentState): number => {
+    const cached = foodSecurityByAgent.get(agent.id);
+    if (cached !== undefined) return cached;
+    const value = foodSecurityForAgent(state, agent, foodIndex);
+    foodSecurityByAgent.set(agent.id, value);
+    return value;
+  };
+  const cellIndexByRegion = new Map<string, number>();
+  const cellIndexForRegion = (regionId: AgentState["regionId"]): number => {
+    const cached = cellIndexByRegion.get(regionId);
+    if (cached !== undefined) return cached;
+    const regionMatch = /^region:(\d+):(\d+)$/.exec(regionId);
+    const x = Math.max(0, Math.min(state.fields.elevation.width - 1, Number(regionMatch?.[1] ?? 0)));
+    const y = Math.max(0, Math.min(state.fields.elevation.height - 1, Number(regionMatch?.[2] ?? 0)));
+    const index = y * state.fields.elevation.width + x;
+    cellIndexByRegion.set(regionId, index);
+    return index;
+  };
   const aggregateRegions = new Set(state.lod.summaries
     .filter((summary) => summary.mode === "aggregate")
     .map((summary) => summary.regionId));
   const deathRolls: number[] = [];
-  const deathContexts: Array<{ foodSecurity: number; hungerRisk: number; oldAgeRisk: number }> = [];
+  const deathContexts: Array<{ foodSecurity: number; hungerRisk: number; oldAgeRisk: number; diseaseRisk: number; environmentalRisk: number }> = [];
   const movedPopulations = new Map<string, string>();
   const professionsByAgent = new Map<EntityId, Array<{ type: WorldState["facilities"][number]["type"]; facilityId: string }>>();
   for (const facility of state.facilities) {
@@ -253,21 +324,50 @@ export const stepAgents = (
     }
   }
   for (const agent of agents.values()) {
+    if (deadIds.has(agent.id)) continue;
+    const population = populationsById.get(agent.populationId);
+    const species = population ? speciesById.get(population.speciesId) : undefined;
+    agent.genetics = normalizeAgentGenetics(agent, species);
+  }
+  const healthStep = stepAgentHealth(state, agents, years);
+  delta.eventDrafts.push(...healthStep.events);
+  for (const agent of agents.values()) {
     const nextAge = agent.age + years;
-    const medicineLevel = technologyProfileForRegion(state, agent.regionId).medicine;
+    const population = populationsById.get(agent.populationId);
+    const species = population ? speciesById.get(population.speciesId) : undefined;
+    const medicineLevel = technologyProfiles.get(agent.regionId)?.medicine ?? 0;
     const medicineFacility = facilityEffects.get(agent.regionId)?.medicine ?? 0;
     const medicineProtection = Math.min(0.55, medicineLevel * 0.28 + medicineFacility * 0.22);
     const oldAgeRisk = nextAge >= agent.lifespan
       ? Math.max(0.08, 1 - medicineProtection)
       : Math.max(0, (nextAge / agent.lifespan - 0.82) * 0.12) * (1 - medicineProtection);
-    const foodSecurity = foodSecurityForAgent(state, agent, foodIndex);
+    const foodSecurity = foodSecurityFor(agent);
     const hungerRisk = Math.max(0, 0.5 - (agent.needs.food ?? 0)) * 0.02;
-    const needRisk = hungerRisk * (1 - foodSecurity * 0.2) * (1 - Math.min(0.5, medicineLevel * 0.22 + medicineFacility * 0.2));
+    const metabolicEfficiency = clamp(agent.traits.metabolicEfficiency ?? 0.5);
+    const needRisk = hungerRisk
+      * (1 - foodSecurity * 0.2)
+      * (1 - metabolicEfficiency * 0.32)
+      * (1 - Math.min(0.5, medicineLevel * 0.22 + medicineFacility * 0.2));
+    const diseaseRisk = healthStep.mortalityRiskByAgent.get(agent.id) ?? 0;
+    let environmentalRisk = 0;
+    if (species) {
+      const cellIndex = cellIndexForRegion(agent.regionId);
+      const climate = annualClimateForLocal(
+        state.fields.temperature.values[cellIndex] ?? 0.5,
+        state.fields.humidity.values[cellIndex] ?? 0.5,
+        meanTemperature,
+        meanHumidity,
+        state.climateCycle,
+      );
+      const environment = geneticEnvironmentFitness(agent, species, climate.temperature, climate.humidity);
+      const annualEnvironmentalRisk = (environment.thermalStress * 0.055 + environment.hydrationStress * 0.04) * (1 - medicineProtection * 0.25);
+      environmentalRisk = 1 - Math.pow(1 - clamp(annualEnvironmentalRisk, 0, 0.35), years);
+    }
     const [mortalityRoll] = randomFloat(forkRandom(state.random, `mortality:${agent.id}:${nextAge}`));
-    if (mortalityRoll < oldAgeRisk + needRisk) {
+    if (mortalityRoll < oldAgeRisk + needRisk + diseaseRisk + environmentalRisk) {
       deadIds.add(agent.id);
       deathRolls.push(mortalityRoll);
-      deathContexts.push({ foodSecurity, hungerRisk, oldAgeRisk });
+      deathContexts.push({ foodSecurity, hungerRisk, oldAgeRisk, diseaseRisk, environmentalRisk });
       continue;
     }
     const migratedRegion = movedPopulations.get(String(agent.populationId));
@@ -299,27 +399,30 @@ export const stepAgents = (
     }
   }
 
-  for (const population of state.populations) {
-    if (aggregateRegions.has(population.regionId)) continue;
-    const species = speciesById.get(population.speciesId);
-    if (!species) continue;
-    const index = state.fields.elevation.values.length === 0
-      ? 0
-      : Math.max(0, Math.min(state.fields.elevation.values.length - 1, Number(population.regionId.split(":").at(-1) ?? 0) * state.fields.elevation.width + Number(population.regionId.split(":")[1] ?? 0)));
-    const target = eligibleAgentCount(population, species, state.chemistry.oxygen.values[index] ?? 0, state.fields.biomass.values[index] ?? 0);
-    const emergenceTarget = Math.max(0, target - 2);
-    const existing = (agentsByPopulation.get(String(population.id)) ?? []).filter((agent) => !deadIds.has(agent.id));
-    for (let ordinal = existing.length; ordinal < emergenceTarget && agents.size - deadIds.size < MAX_DETAILED_AGENTS; ordinal += 1) {
-      const candidate = createAgent(population, species, ordinal, `${state.seed}:${state.tick}`);
-      const probability = clamp(0.12 + (species.traits.cognitivePotential ?? 0) * 0.5);
-      const [roll] = randomFloat(forkRandom(state.random, `emergence:${candidate.id}`));
-      if (roll < probability && !agents.has(candidate.id)) {
-        agents.set(candidate.id, candidate);
-        existing.push(candidate);
-        const populationMembers = agentsByPopulation.get(String(population.id)) ?? existing;
-        if (populationMembers !== existing) populationMembers.push(candidate);
-        agentsByPopulation.set(String(population.id), populationMembers);
-        agentCountsByPopulation.set(String(population.id), populationMembers.length);
+  if (agents.size - deadIds.size < MAX_DETAILED_AGENTS) {
+    for (const population of state.populations) {
+      if (agents.size - deadIds.size >= MAX_DETAILED_AGENTS) break;
+      if (removedPopulationIds.has(population.id) || aggregateRegions.has(population.regionId) || population.count < 4) continue;
+      const species = speciesById.get(population.speciesId);
+      if (!species || (species.traits.cognitivePotential ?? 0) < 0.3) continue;
+      const index = cellIndexForRegion(population.regionId);
+      const target = eligibleAgentCount(population, species, state.chemistry.oxygen.values[index] ?? 0, state.fields.biomass.values[index] ?? 0);
+      const emergenceTarget = Math.max(0, target - 2);
+      const populationId = String(population.id);
+      if ((agentCountsByPopulation.get(populationId) ?? 0) >= emergenceTarget) continue;
+      const existing = (agentsByPopulation.get(populationId) ?? []).filter((agent) => !deadIds.has(agent.id));
+      for (let ordinal = existing.length; ordinal < emergenceTarget && agents.size - deadIds.size < MAX_DETAILED_AGENTS; ordinal += 1) {
+        const candidate = createAgent(population, species, ordinal, `${state.seed}:${simulationStepForWorld(state)}`);
+        const probability = clamp(0.12 + (species.traits.cognitivePotential ?? 0) * 0.5);
+        const [roll] = randomFloat(forkRandom(state.random, `emergence:${candidate.id}`));
+        if (roll < probability && !agents.has(candidate.id)) {
+          agents.set(candidate.id, candidate);
+          existing.push(candidate);
+          const populationMembers = agentsByPopulation.get(populationId) ?? existing;
+          if (populationMembers !== existing) populationMembers.push(candidate);
+          agentsByPopulation.set(populationId, populationMembers);
+          agentCountsByPopulation.set(populationId, populationMembers.length);
+        }
       }
     }
   }
@@ -328,12 +431,9 @@ export const stepAgents = (
   const stateAgentIds = new Set(state.agents.map((agent) => agent.id));
   const stateRelationshipIds = new Set(state.relationships.map((relationship) => relationship.id));
   const familyForPair = new Map<string, OrganizationState>();
-  const familyMembers = new Map(
-    state.organizations
-      .filter((organization) => organization.type === "family")
-      .map((organization) => [organization.id, [...organization.memberIds]]),
-  );
-  for (const family of state.organizations.filter((organization) => organization.type === "family")) {
+  const families = state.organizations.filter((organization) => organization.type === "family");
+  const familyMembers = new Map(families.map((organization) => [organization.id, [...organization.memberIds]]));
+  for (const family of families) {
     const members = family.memberIds;
     for (let index = 0; index < members.length; index += 1) {
       for (let next = index + 1; next < members.length; next += 1) {
@@ -363,11 +463,17 @@ export const stepAgents = (
   for (const first of currentAgents) {
     if (pairedAgents.has(first.id) || first.age < 16) continue;
     const existingPartner = partnerByAgent.get(first.id);
-    const candidates = existingPartner
-      ? [existingPartner]
-      : (availableByRegion.get(first.regionId) ?? []).filter((candidate) => candidate.id !== first.id && candidate.age >= 16 && !pairedAgents.has(candidate.id));
-    for (const second of candidates) {
-      if (pairedAgents.has(second.id) || first.regionId !== second.regionId || first.age < 16 || second.age < 16) continue;
+    const regionalCandidates = availableByRegion.get(first.regionId) ?? [];
+    const candidateCount = existingPartner ? 1 : regionalCandidates.length;
+    for (let candidateIndex = 0; candidateIndex < candidateCount; candidateIndex += 1) {
+      const second = existingPartner ?? regionalCandidates[candidateIndex];
+      if (!second
+        || second.id === first.id
+        || pairedAgents.has(second.id)
+        || (!existingPartner && partnerByAgent.has(second.id))
+        || first.regionId !== second.regionId
+        || first.age < 16
+        || second.age < 16) continue;
       const relationId = relationshipIdFor("partner", first.id, second.id);
       if (relationshipMap.has(relationId)) {
         pairedAgents.add(first.id);
@@ -375,11 +481,11 @@ export const stepAgents = (
         break;
       }
       const affinity = ((first.traits.sociality ?? 0) + (second.traits.sociality ?? 0) + (first.traits.cooperation ?? 0) + (second.traits.cooperation ?? 0)) / 4;
-      const foodSecurity = (foodSecurityForAgent(state, first, foodIndex) + foodSecurityForAgent(state, second, foodIndex)) / 2;
+      const foodSecurity = (foodSecurityFor(first) + foodSecurityFor(second)) / 2;
       const probability = clamp(affinity * (0.43 + foodSecurity * 0.02));
       const [roll] = randomFloat(forkRandom(state.random, `partner:${first.id}:${second.id}`));
       if (roll >= probability) continue;
-      addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, state.tick + 1, affinity));
+      addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, nextSimulationTick(state), affinity, simulationStepForWorld(state)));
       pairedAgents.add(first.id);
       pairedAgents.add(second.id);
       const pairKey = [first.id, second.id].sort().join(":");
@@ -406,23 +512,38 @@ export const stepAgents = (
   const partnerPairs = [...relationshipMap.values()]
     .filter((relationship) => relationship.kind === "partner")
     .map((relationship) => [agents.get(relationship.fromId), agents.get(relationship.toId)] as const)
-    .filter((pair): pair is [AgentState, AgentState] => Boolean(pair[0] && pair[1]))
+    .filter((pair): pair is [AgentState, AgentState] => Boolean(pair[0]
+      && pair[1]
+      && !deadIds.has(pair[0].id)
+      && !deadIds.has(pair[1].id)))
     .sort(([left], [right]) => left.id.localeCompare(right.id));
   for (const [first, second] of partnerPairs) {
     if (first.age < 18 || second.age < 18 || first.age >= first.lifespan || second.age >= second.lifespan) continue;
+    if (first.populationId !== second.populationId) continue;
     const family = familyForPair.get([first.id, second.id].sort().join(":"));
     if (!family) continue;
-    const fertility = ((first.traits.fertility ?? 0) + (second.traits.fertility ?? 0)) / 2;
-    const foodSecurity = ((first.needs.food ?? 0) + (second.needs.food ?? 0)) / 2;
-    const ageFactor = Math.max(0.08, 1 - Math.max(first.age / first.lifespan, second.age / second.lifespan) * 0.8);
-    const probability = clamp((fertility * 0.16 + foodSecurity * 0.08) * ageFactor);
-    const [roll] = randomFloat(forkRandom(state.random, `birth:${family.id}:${state.tick}`));
-    if (roll >= probability) continue;
     const population = populationsById.get(first.populationId);
     const species = population ? speciesById.get(population.speciesId) : undefined;
     if (!population || !species) continue;
-    let populationAgentCount = agentCountsByPopulation.get(String(population.id)) ?? 0;
+    const fertility = ((first.traits.fertility ?? 0) + (second.traits.fertility ?? 0)) / 2;
+    const foodSecurity = ((first.needs.food ?? 0) + (second.needs.food ?? 0)) / 2;
+    const ageFactor = Math.max(0.08, 1 - Math.max(first.age / first.lifespan, second.age / second.lifespan) * 0.8);
     const populationIndex = populationCellIndex(population, state.fields.elevation.width, state.fields.elevation.height);
+    const parentClimate = annualClimateForLocal(
+      state.fields.temperature.values[populationIndex] ?? 0.5,
+      state.fields.humidity.values[populationIndex] ?? 0.5,
+      meanTemperature,
+      meanHumidity,
+      state.climateCycle,
+    );
+    const parentFitness = (
+      geneticEnvironmentFitness(first, species, parentClimate.temperature, parentClimate.humidity).fitness
+      + geneticEnvironmentFitness(second, species, parentClimate.temperature, parentClimate.humidity).fitness
+    ) / 2;
+    const probability = clamp((fertility * 0.16 + foodSecurity * 0.08) * ageFactor * (0.35 + parentFitness * 0.65));
+    const [roll] = randomFloat(forkRandom(state.random, `birth:${family.id}:${simulationStepForWorld(state)}`));
+    if (roll >= probability) continue;
+    let populationAgentCount = agentCountsByPopulation.get(String(population.id)) ?? 0;
     const ecologicalSampleLimit = Math.min(
       64,
       Math.max(
@@ -443,12 +564,14 @@ export const stepAgents = (
       populationAgentCount = Math.max(0, populationAgentCount - 1);
       agentCountsByPopulation.set(String(population.id), populationAgentCount);
     }
-    const child = inheritFromParents(
-      createAgent(population, species, agents.size, `birth:${family.id}:${state.tick}`, [first.id, second.id]),
+    const geneticInheritance = inheritAgentGenetics(
+      createAgent(population, species, agents.size, `birth:${family.id}:${simulationStepForWorld(state)}`, [first.id, second.id]),
       first,
       second,
-      state.random,
+      species,
+      `${state.seed}:${state.random.value}:${family.id}:${simulationStepForWorld(state)}`,
     );
+    const child = inheritCultureFromParents(geneticInheritance.agent, first, second, state.random);
     if (agents.has(child.id)) continue;
     agents.set(child.id, child);
     const populationMembers = agentsByPopulation.get(String(population.id)) ?? [];
@@ -460,11 +583,11 @@ export const stepAgents = (
       .filter((member): member is AgentState => Boolean(member && member.id !== first.id && member.id !== second.id && member.parentIds.includes(first.id) && member.parentIds.includes(second.id)))
       .sort((left, right) => left.id.localeCompare(right.id));
     const childRelationships = [
-      createRelationship("parent", first.id, child.id, state.tick + 1, 0.9),
-      createRelationship("parent", second.id, child.id, state.tick + 1, 0.9),
-      createRelationship("caregiver", first.id, child.id, state.tick + 1, 0.8),
-      createRelationship("caregiver", second.id, child.id, state.tick + 1, 0.8),
-      ...siblings.map((sibling) => createRelationship("sibling", sibling.id, child.id, state.tick + 1, 0.85)),
+      createRelationship("parent", first.id, child.id, nextSimulationTick(state), 0.9, simulationStepForWorld(state)),
+      createRelationship("parent", second.id, child.id, nextSimulationTick(state), 0.9, simulationStepForWorld(state)),
+      createRelationship("caregiver", first.id, child.id, nextSimulationTick(state), 0.8, simulationStepForWorld(state)),
+      createRelationship("caregiver", second.id, child.id, nextSimulationTick(state), 0.8, simulationStepForWorld(state)),
+      ...siblings.map((sibling) => createRelationship("sibling", sibling.id, child.id, nextSimulationTick(state), 0.85, simulationStepForWorld(state))),
     ];
     for (const relationship of childRelationships) {
       relationshipMap.set(relationship.id, relationship);
@@ -482,13 +605,44 @@ export const stepAgents = (
       sourceIds: [first.id, second.id, family.id],
       probability,
       roll,
-      evidence: { fertility, foodSecurity, familyMembers: family.memberIds.length, inheritedKnowledge: child.knowledgeIds.length, inheritedBeliefs: child.beliefIds.length, siblings: siblings.length },
-      payload: { agentId: child.id, familyId: family.id, parentIds: child.parentIds },
+      evidence: {
+        fertility,
+        foodSecurity,
+        parentFitness,
+        familyMembers: family.memberIds.length,
+        inheritedKnowledge: child.knowledgeIds.length,
+        inheritedBeliefs: child.beliefIds.length,
+        generation: child.genetics?.generation ?? 0,
+        mutationCount: geneticInheritance.mutationCount,
+        parentDivergence: geneticInheritance.parentDivergence,
+        lineageSignature: child.genetics?.lineageSignature ?? "unknown",
+        siblings: siblings.length,
+      },
+      payload: { agentId: child.id, familyId: family.id, parentIds: child.parentIds, speciesId: species.id, regionId: child.regionId },
       source: "natural",
     });
+    if (geneticInheritance.mutationCount > 0) {
+      delta.eventDrafts.push({
+        kind: "genetic-mutation",
+        ruleId: "genetics:birth-mutation",
+        sourceIds: [child.id, first.id, second.id],
+        probability: geneticInheritance.mutationProbability,
+        roll: geneticInheritance.mutationRoll,
+        evidence: {
+          regionId: child.regionId,
+          speciesId: species.id,
+          generation: child.genetics?.generation ?? 0,
+          mutationCount: geneticInheritance.mutationCount,
+          parentDivergence: geneticInheritance.parentDivergence,
+          lineageSignature: child.genetics?.lineageSignature ?? "unknown",
+        },
+        payload: { agentId: child.id, parentIds: child.parentIds, speciesId: species.id, regionId: child.regionId },
+        source: "natural",
+      });
+    }
   }
 
-  for (const family of state.organizations.filter((organization) => organization.type === "family")) {
+  for (const family of families) {
     const members = (familyMembers.get(family.id) ?? family.memberIds).filter((id) => !deadIds.has(id) && agents.has(id));
     delta.entityEffects.push({
       collection: "organizations",
@@ -532,6 +686,9 @@ export const stepAgents = (
       value: { ...agent, relationshipIds: [...new Set(relationshipIds.get(agent.id) ?? [])].sort() },
     });
   }
+  const finalizedHealth = finalizeAgentHealth(state, healthStep, agents, deadIds);
+  delta.entityEffects.push(...finalizedHealth.effects);
+  delta.eventDrafts.push(...finalizedHealth.events);
   if (deadIds.size > 0) {
     delta.eventDrafts.push({
       kind: "agent-death",
@@ -541,7 +698,9 @@ export const stepAgents = (
       roll: deathRolls.reduce((sum, value) => sum + value, 0) / Math.max(1, deathRolls.length),
       evidence: {
         deaths: deadIds.size,
-        hungerDeaths: deathContexts.filter((context) => context.hungerRisk > context.oldAgeRisk).length,
+        hungerDeaths: deathContexts.filter((context) => context.hungerRisk > Math.max(context.oldAgeRisk, context.diseaseRisk, context.environmentalRisk)).length,
+        diseaseDeaths: deathContexts.filter((context) => context.diseaseRisk > Math.max(context.hungerRisk, context.oldAgeRisk, context.environmentalRisk)).length,
+        environmentalDeaths: deathContexts.filter((context) => context.environmentalRisk > Math.max(context.hungerRisk, context.oldAgeRisk, context.diseaseRisk)).length,
         meanFoodSecurity: deathContexts.reduce((sum, context) => sum + context.foodSecurity, 0) / Math.max(1, deathContexts.length),
       },
       payload: { agentIds: [...deadIds] },

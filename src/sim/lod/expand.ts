@@ -4,8 +4,8 @@ import type { AgentState, EntityId, OrganizationState, RegionProjection, RegionS
 const asEntityId = (value: string): EntityId => value as EntityId;
 const asOrganizationId = (value: string): OrganizationState["id"] => value as OrganizationState["id"];
 
-export const projectRegion = (summary: RegionSummary, version: number): RegionProjection => {
-  const count = Math.max(0, Math.min(128, Math.floor(summary.socialPopulation ?? summary.population)));
+export const projectRegion = (summary: RegionSummary, version: number, maximumAgents = 128, versionStep = summary.versionStep ?? String(version), populationId = `population:${summary.regionId}` as EntityId): RegionProjection => {
+  const count = Math.max(0, Math.min(128, Math.floor(maximumAgents), Math.floor(summary.socialPopulation ?? summary.population)));
   const sourceAgentIds = [...summary.agentIds].sort();
   const sourceRecords = new Map((summary.agentRecords ?? []).map((record) => [record.id, record]));
   const agents: AgentState[] = [];
@@ -13,21 +13,36 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
     const sourceId = sourceAgentIds[index];
     const source = sourceId ? sourceRecords.get(sourceId) : undefined;
     const id = asEntityId(`agent:${hashString(`${summary.canonicalDigest}:${version}:${index}`).toString(16)}`);
+    const baseTraits: Record<string, number> = source?.traits ? { ...source.traits } : { cognitivePotential: 0.2 + (index % 7) * 0.05, sociality: 0.3 + (index % 5) * 0.1, cooperation: 0.3 + (index % 4) * 0.1 };
+    const traits = {
+      ...baseTraits,
+      cognitivePotential: baseTraits.cognitivePotential ?? 0.5,
+      sociality: baseTraits.sociality ?? 0.5,
+      cooperation: baseTraits.cooperation ?? 0.5,
+      curiosity: baseTraits.curiosity ?? 0.5,
+      fertility: baseTraits.fertility ?? 0.5,
+      metabolicEfficiency: baseTraits.metabolicEfficiency ?? 0.5,
+      thermalTolerance: baseTraits.thermalTolerance ?? 0.5,
+      hydrationRetention: baseTraits.hydrationRetention ?? 0.5,
+      diseaseResistance: baseTraits.diseaseResistance ?? 0.5,
+    };
     agents.push({
       id,
       ...(sourceId ? { sourceId } : {}),
-      populationId: asEntityId(`population:${summary.regionId}`),
+      populationId,
       regionId: summary.regionId,
       age: source?.age ?? hashString(`${summary.canonicalDigest}:age:${index}`) % 60,
       lifespan: 45 + hashString(`${summary.canonicalDigest}:lifespan:${index}`) % 50,
       parentIds: [],
-      traits: { cognitivePotential: 0.2 + (index % 7) * 0.05, sociality: 0.3 + (index % 5) * 0.1, cooperation: 0.3 + (index % 4) * 0.1 },
+      traits,
       skills: source?.skills ? { ...source.skills } : { observation: 0.1 + (index % 6) * 0.04, communication: 0.1 + (index % 5) * 0.05 },
       needs: { food: 0.5, safety: 0.5, belonging: 0.2 },
       memoryIds: [],
       knowledgeIds: source?.knowledgeIds ? [...source.knowledgeIds] : [],
       beliefIds: source?.beliefIds ? [...source.beliefIds] : [],
       relationshipIds: [],
+      ...(source?.genetics ? { genetics: { ...source.genetics } } : {}),
+      ...(source?.health ? { health: structuredClone(source.health) } : {}),
     });
   }
   const relationships: RelationshipState[] = [];
@@ -65,6 +80,7 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
         kind: index < summary.householdCount ? "partner" : "friend",
         strength: 0.4,
         createdTick: version,
+        createdTimelineStep: versionStep,
         sourceEventId: `projection:${summary.canonicalDigest}`,
       };
       relationships.push(relation);
@@ -90,5 +106,15 @@ export const projectRegion = (summary: RegionSummary, version: number): RegionPr
       ...(summaryOrganization.diplomacy ? { diplomacy: { ...summaryOrganization.diplomacy } } : {}),
     });
   }
-  return { regionId: summary.regionId, sourceRevision: version, readOnly: true, generatedFromDigest: summary.canonicalDigest, agents, relationships, organizations };
+  return {
+    regionId: summary.regionId,
+    sourceRevision: version,
+    sourceRevisionStep: versionStep,
+    readOnly: true,
+    generatedFromDigest: summary.canonicalDigest,
+    agents,
+    relationships,
+    ecologicalRelationships: structuredClone(summary.ecologicalRelationships ?? []),
+    organizations,
+  };
 };

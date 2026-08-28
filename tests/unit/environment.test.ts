@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyEnvironmentDelta, applyNaturalHazardWaterEffects, calculateClimate, initializeEnvironment, MAX_NATURAL_HAZARDS_PER_STEP, naturalHazardDelta, stepEnvironment } from "../../src/sim/environment/index.ts";
+import { projectChemistry } from "../../src/sim/environment/chemistry.ts";
 import { totalWater } from "../../src/sim/environment/hydrology.ts";
-import { createWorld } from "../../src/sim/world.ts";
+import { createWorld, worldDigest } from "../../src/sim/world.ts";
 
 const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
@@ -66,6 +67,36 @@ describe("environment simulation", () => {
     expect(Object.values(next.chemistry).every((grid) => grid.values.every(Number.isFinite))).toBe(true);
   });
 
+  it("projects dense chemistry once without mutating its source world", () => {
+    const state = makeEnvironment();
+    const sourceDigest = worldDigest(state);
+    const carbonPatch = new Float64Array(state.chemistry.carbon.values.length);
+    carbonPatch[0] = 0.1;
+    const projected = projectChemistry(state, [{
+      field: "carbon",
+      operation: "add",
+      values: carbonPatch,
+      causeRuleId: "test:carbon-patch",
+    }], [{
+      field: "carbon",
+      index: 0,
+      operation: "add",
+      value: 0.2,
+      causeRuleId: "test:carbon-change",
+    }]);
+
+    expect(projected).not.toBe(state.chemistry);
+    expect(projected.carbon.values[0]).toBeCloseTo((state.chemistry.carbon.values[0] ?? 0) + 0.3, 6);
+    expect(worldDigest(state)).toBe(sourceDigest);
+  });
+
+  it("does not copy water when a step contains no water-changing hazard", () => {
+    const state = makeEnvironment();
+    const water = new Float32Array(state.fields.water.values);
+
+    expect(applyNaturalHazardWaterEffects(state, water, [])).toBe(water);
+  });
+
   it("changes water only through an explicit event", () => {
     const state = makeEnvironment();
     const before = totalWater(state.fields.water);
@@ -113,6 +144,16 @@ describe("environment simulation", () => {
     const second = stepEnvironment(after, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
 
     expect(second.eventDrafts.some((event) => event.kind === "ocean-formation")).toBe(false);
+  });
+
+  it("does not recalculate a recorded environmental milestone after a later recrossing", () => {
+    const state = createWorld(13, { width: 16, height: 8, formation: "formed" });
+    state.fields.water.values.fill(0);
+    state.eventArchive.kindCounts["ocean-formation"] = 1;
+
+    const delta = stepEnvironment(state, { solarFlux: 1, externalEvents: [], elapsedYears: 1 });
+
+    expect(delta.eventDrafts.some((event) => event.kind === "ocean-formation")).toBe(false);
   });
 
   it("warms under a stronger atmospheric carbon greenhouse forcing", () => {
@@ -169,5 +210,24 @@ describe("environment simulation", () => {
     expect(floodResult.hazards.every((hazard) => hazard.kind === "flood")).toBe(true);
     expect(totalWater({ ...flood.fields.water, values: floodWater })).toBeCloseTo(totalWater(flood.fields.water), 6);
     expect(floodWater.every((value) => value >= 0 && value <= 1)).toBe(true);
+  });
+
+  it("keeps accumulating hazard probability beyond the old duration cap", () => {
+    const state = createWorld(991, { width: 32, height: 8, formation: "formed" });
+    state.fields.elevation.values.fill(0.05);
+    state.fields.temperature.values.fill(0.95);
+    state.fields.humidity.values.fill(0.04);
+    state.fields.water.values.fill(0.04);
+    state.fields.nutrients.values.fill(0.4);
+
+    const atTwentyThousandYears = naturalHazardDelta(state, 20_000);
+    const beyondTwentyThousandYears = naturalHazardDelta(state, 40_000);
+    const firstProbability = Math.max(...atTwentyThousandYears.hazards.map((hazard) => hazard.probability));
+    const secondProbability = Math.max(...beyondTwentyThousandYears.hazards.map((hazard) => hazard.probability));
+
+    expect(atTwentyThousandYears.hazards.length).toBeGreaterThan(0);
+    expect(beyondTwentyThousandYears.hazards.length).toBeGreaterThan(0);
+    expect(secondProbability).toBeGreaterThan(firstProbability);
+    expect(secondProbability).toBeLessThanOrEqual(1);
   });
 });

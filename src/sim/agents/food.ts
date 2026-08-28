@@ -4,9 +4,17 @@ const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.mi
 
 const entryKey = (regionId: string, holderId?: string): string => `${regionId}|${holderId ?? "world"}`;
 
+type FoodBalanceSource = Pick<WorldState, "resources" | "organizations">;
+const foodBalanceCache = new WeakMap<WorldState["organizations"], {
+  resources: WorldState["resources"];
+  index: FoodBalanceIndex;
+}>();
+
 export const createFoodBalanceIndex = (
-  state: Pick<WorldState, "resources" | "organizations">,
+  state: FoodBalanceSource,
 ): FoodBalanceIndex => {
+  const cached = foodBalanceCache.get(state.organizations);
+  if (cached?.resources === state.resources) return cached.index;
   const byEntry = new Map<string, number>();
   const byRegion = new Map<string, number>();
   for (const resource of state.resources) {
@@ -25,7 +33,9 @@ export const createFoodBalanceIndex = (
       byAgent.set(memberId, Math.max(byAgent.get(memberId) ?? 0, perCapita));
     }
   }
-  return { byEntry, byRegion, byAgent };
+  const index = { byEntry, byRegion, byAgent };
+  foodBalanceCache.set(state.organizations, { resources: state.resources, index });
+  return index;
 };
 
 export const foodSecurityFromBalance = (balance: number, populationCount: number): number =>
