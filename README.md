@@ -66,9 +66,10 @@ camera enters a regional LOD.
 
 Autonomous timing uses absolute deadlines. Simulation work therefore does not
 silently extend the configured one-real-minute-per-simulated-day interval. If
-a busy or backgrounded tab falls behind, the Worker catches up in bounded
-batches of at most eight days, keeping pause and inspection commands
-responsive. State digests are streamed directly over canonical state values,
+a busy or backgrounded tab falls behind, the Worker catches up by at most
+eight days, discards older wall-clock debt, and then resumes its normal
+deadline. A long browser or computer suspension therefore cannot trigger an
+unbounded catch-up loop. State digests are streamed directly over canonical state values,
 preserving the previous deterministic digest while avoiding a full JSON copy
 of every grid.
 

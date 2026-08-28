@@ -17,6 +17,8 @@ export const scheduledStepBatch = (
     return { count: 0, nextStepAtMs };
   }
   const due = Math.floor((nowMs - nextStepAtMs) / interval) + 1;
-  const count = Math.max(1, Math.min(Math.max(1, Math.trunc(maxBatch)), due));
-  return { count, nextStepAtMs: nextStepAtMs + count * interval };
+  const batchLimit = Math.max(1, Math.trunc(maxBatch));
+  const count = Math.max(1, Math.min(batchLimit, due));
+  const nextDeadline = due > batchLimit ? nowMs + interval : nextStepAtMs + count * interval;
+  return { count, nextStepAtMs: nextDeadline };
 };

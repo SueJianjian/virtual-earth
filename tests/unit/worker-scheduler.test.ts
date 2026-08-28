@@ -14,13 +14,17 @@ describe("worker simulation scheduler", () => {
     expect(scheduled).toEqual({ count: 1, nextStepAtMs: 61_000 });
   });
 
-  it("batches overdue days while keeping each worker task bounded", () => {
+  it("batches overdue days and drops unbounded wall-clock debt", () => {
     const interval = simulationStepIntervalMs(64);
     expect(scheduledStepBatch(1_000 + interval * 3.4, 1_000, 64)).toEqual({
       count: 4,
       nextStepAtMs: 1_000 + interval * 4,
     });
-    expect(scheduledStepBatch(1_000 + interval * 100, 1_000, 64).count).toBe(MAX_SCHEDULED_STEP_BATCH);
+    const resumedAt = 1_000 + interval * 100;
+    expect(scheduledStepBatch(resumedAt, 1_000, 64)).toEqual({
+      count: MAX_SCHEDULED_STEP_BATCH,
+      nextStepAtMs: resumedAt + interval,
+    });
     expect(scheduledStepBatch(999, 1_000, 64)).toEqual({ count: 0, nextStepAtMs: 1_000 });
   });
 });
