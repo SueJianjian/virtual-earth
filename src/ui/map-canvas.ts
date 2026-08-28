@@ -203,8 +203,29 @@ export const createMapCanvas = (
     return focus;
   };
 
+  const clampSurfacePan = (): void => {
+    if (!snapshot || surfaceMode() !== "local-surface") {
+      panWorldX = 0;
+      panWorldZ = 0;
+      return;
+    }
+    const dimensions = dimensionsFor();
+    const aspect = dimensions.width / dimensions.height;
+    const grid = snapshot.fields.elevation;
+    const baseSpan = Math.max(10, Math.max(grid.width, grid.height) * 0.94);
+    const visibleHeight = baseSpan / zoom;
+    const visibleWidth = visibleHeight * aspect;
+    // Keep the camera inside the finite local surface. The slightly smaller
+    // usable bounds leave a stable terrain margin at steep camera pitches.
+    const horizontalMargin = Math.max(0, (grid.width - 1 - visibleWidth) / 2) * 0.9;
+    const depthMargin = Math.max(0, (grid.height - 1 - visibleHeight) / 2) * 0.9;
+    panWorldX = clamp(panWorldX, -horizontalMargin, horizontalMargin);
+    panWorldZ = clamp(panWorldZ, -depthMargin, depthMargin);
+  };
+
   const updateCamera = (): void => {
     if (!snapshot) return;
+    clampSurfacePan();
     const dimensions = dimensionsFor();
     const aspect = dimensions.width / dimensions.height;
     const grid = snapshot.fields.elevation;
@@ -247,6 +268,8 @@ export const createMapCanvas = (
     canvas.dataset.globePitch = String(Math.round(degrees(globePitch)));
     canvas.dataset.routeYaw = String(Math.round(degrees(linkRoot.rotation.y)));
     canvas.dataset.routePitch = String(Math.round(degrees(linkRoot.rotation.x)));
+    canvas.dataset.cameraPanX = panWorldX.toFixed(2);
+    canvas.dataset.cameraPanZ = panWorldZ.toFixed(2);
   };
 
   const scheduleRender = (): void => {
@@ -1169,9 +1192,11 @@ export const createMapCanvas = (
     const unitsPerPixel = span / Math.max(1, canvas.clientHeight);
     panWorldX = pointerStart.panX + (-deltaX * Math.cos(cameraYaw) - deltaY * Math.sin(cameraYaw) * 0.72) * unitsPerPixel * 0.72;
     panWorldZ = pointerStart.panZ + (deltaX * Math.sin(cameraYaw) - deltaY * Math.cos(cameraYaw) * 0.72) * unitsPerPixel * 0.72;
+    clampSurfacePan();
     scheduleRender();
   });
   const endPointer = (event?: PointerEvent): void => {
+    clampSurfacePan();
     if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     pointerStart = undefined;
     if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);

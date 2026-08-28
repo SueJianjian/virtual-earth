@@ -359,6 +359,8 @@ const applyMessage = (message: WorkerMessage): void => {
   }
   if (message.type !== "snapshot") return;
   snapshot = message.snapshot;
+  canvas.dataset.timelineStep = snapshot.timeline?.step ?? String(snapshot.tick);
+  canvas.dataset.timelineDays = snapshot.timeline?.days ?? String(Math.round(snapshot.years * 365));
   const shouldStartAfterRestore = awaitingAutoRestore;
   awaitingAutoRestore = false;
   if (shouldStartAfterRestore) {

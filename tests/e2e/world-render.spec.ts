@@ -351,6 +351,23 @@ test("renders a formed crust as a global map with expandable local detail", asyn
   await expect(canvas).toHaveAttribute("data-visible-region-span", "1.50x0.75");
   await expect(page.locator("#zoom-level")).toHaveText("6400%");
   await expect(page.locator("#map-scale-level")).toHaveText("个人观察");
+
+  const localBox = await canvas.boundingBox();
+  if (!localBox) throw new Error("Local surface is not measurable");
+  const initialPanX = await canvas.getAttribute("data-camera-pan-x");
+  await page.mouse.move(localBox.x + localBox.width / 2, localBox.y + localBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(localBox.x + localBox.width / 2 + 80, localBox.y + localBox.height / 2 + 35);
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute("data-camera-pan-x", initialPanX ?? "0.00");
+  const boundedPan = await canvas.evaluate((element: HTMLCanvasElement) => ({
+    x: Math.abs(Number(element.dataset.cameraPanX ?? 0)),
+    z: Math.abs(Number(element.dataset.cameraPanZ ?? 0)),
+  }));
+  expect(boundedPan.x).toBeGreaterThan(0);
+  expect(boundedPan.z).toBeGreaterThan(0);
+  expect(boundedPan.x).toBeLessThan(48);
+  expect(boundedPan.z).toBeLessThan(24);
 });
 
 test("renders global civilization routes and separates them from personal links", async ({ page }) => {
