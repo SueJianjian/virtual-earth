@@ -56,6 +56,22 @@ The runtime status panel also reports measured step cost, hot events and
 archived history. A failed simulation step pauses the worker and preserves the
 last valid authoritative state for inspection.
 
+Runtime snapshots keep dense overlays in typed grids and transfer their
+buffers from the Worker instead of cloning multi-megabyte arrays a second
+time. The food-security layer uses the same representation, so inactive map
+cells do not create tens of thousands of string-keyed records. Stable global
+views reuse their existing globe geometry and update its position and color
+buffers in place; hidden local props and entities are rebuilt only after the
+camera enters a regional LOD.
+
+Autonomous timing uses absolute deadlines. Simulation work therefore does not
+silently extend the configured one-real-minute-per-simulated-day interval. If
+a busy or backgrounded tab falls behind, the Worker catches up in bounded
+batches of at most eight days, keeping pause and inspection commands
+responsive. State digests are streamed directly over canonical state values,
+preserving the previous deterministic digest while avoiding a full JSON copy
+of every grid.
+
 ## Simulation rules
 
 - A new world contains no species, populations, agents, families, cultures,

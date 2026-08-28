@@ -156,19 +156,20 @@ describe("long-running worlds", () => {
     }
   };
 
-  it("continues beyond year 3479 and remains restorable", () => {
+  it("continues from an arbitrary high year and remains restorable", () => {
+    const startingYear = 1_000_000;
     let state = createWorld(3480, { width: 8, height: 8, formation: "formed", enabledPackIds: ["emergence.original-worldview"] });
-    state.years = 3_470;
+    state.years = startingYear;
     for (let step = 0; step < 20; step += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
     }
 
-    expect(state.years).toBe(3_490);
+    expect(state.years).toBe(startingYear + 20);
     expect(state.tick).toBe(20);
     assertDenseWorldHealth(state);
     const restored = deserializeWorld(serializeWorld(state));
     expect(worldDigest(restored)).toBe(worldDigest(state));
-    expect(restored.years).toBe(3_490);
+    expect(restored.years).toBe(startingYear + 20);
   });
 
   it("keeps an autonomous world advancing across a five-millennial horizon", () => {

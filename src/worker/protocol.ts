@@ -1,4 +1,4 @@
-import type { CultureIdentity, FacilityStatus, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
+import type { CultureIdentity, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -33,6 +33,8 @@ export type WorldSnapshot = {
   fields: WorldState["fields"];
   chemistry: WorldState["chemistry"];
   metrics: Record<string, number>;
+  foodSecurity?: Grid;
+  /** Legacy fixture compatibility. Runtime snapshots use the typed grid. */
   foodSecurityByRegion?: Record<string, number>;
   species?: WorldState["species"];
   populations?: WorldState["populations"];

@@ -96,33 +96,61 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
   };
 };
 
-const canonicalize = (value: unknown): unknown => {
-  if (value instanceof Float32Array) {
-    return Array.from(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.keys(record)
-      .filter((key) => key !== "observation")
-      .sort()
-      .reduce<Record<string, unknown>>((result, key) => {
-        result[key] = canonicalize(record[key]);
-        return result;
-      }, {});
-  }
-  return value;
-};
-
 const digestText = (value: unknown): string => {
-  const input = JSON.stringify(canonicalize(value));
   let hash = 2166136261;
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
+  const append = (input: string): void => {
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+  };
+  const appendValue = (candidate: unknown, arrayItem = false): boolean => {
+    if (candidate === null) {
+      append("null");
+      return true;
+    }
+    if (typeof candidate === "string") {
+      append(JSON.stringify(candidate));
+      return true;
+    }
+    if (typeof candidate === "number") {
+      append(Number.isFinite(candidate) ? String(candidate) : "null");
+      return true;
+    }
+    if (typeof candidate === "boolean") {
+      append(candidate ? "true" : "false");
+      return true;
+    }
+    if (typeof candidate === "undefined" || typeof candidate === "function" || typeof candidate === "symbol") {
+      if (arrayItem) append("null");
+      return arrayItem;
+    }
+    if (typeof candidate === "bigint") throw new TypeError("Cannot digest a BigInt value");
+    if (candidate instanceof Float32Array || Array.isArray(candidate)) {
+      append("[");
+      for (let index = 0; index < candidate.length; index += 1) {
+        if (index > 0) append(",");
+        appendValue(candidate[index], true);
+      }
+      append("]");
+      return true;
+    }
+    const record = candidate as Record<string, unknown>;
+    append("{");
+    let appended = 0;
+    for (const key of Object.keys(record).filter((key) => key !== "observation").sort()) {
+      const entry = record[key];
+      if (typeof entry === "undefined" || typeof entry === "function" || typeof entry === "symbol") continue;
+      if (appended > 0) append(",");
+      append(JSON.stringify(key));
+      append(":");
+      appendValue(entry);
+      appended += 1;
+    }
+    append("}");
+    return true;
+  };
+  appendValue(value);
   return (hash >>> 0).toString(16).padStart(8, "0");
 };
 

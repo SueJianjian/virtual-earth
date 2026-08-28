@@ -22,7 +22,7 @@ const substanceRichnessByRegion = (state: WorldState): Record<string, number> =>
   }
   return result;
 };
-const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
+const foodSecurityGrid = (state: WorldState): WorldState["fields"]["water"] => {
   const foodBalances = new Map<string, number>();
   for (const resource of state.resources) {
     if (resource.resourceId !== "food") continue;
@@ -36,15 +36,19 @@ const foodSecurityByRegion = (state: WorldState): Record<string, number> => {
     summary.regionId,
     summary.mode === "aggregate" ? aggregatePopulationForRegion(state, summary.regionId, summary.population) : summary.population,
   ]));
-  const result: Record<string, number> = {};
-  for (let y = 0; y < state.fields.elevation.height; y += 1) {
-    for (let x = 0; x < state.fields.elevation.width; x += 1) {
-      const regionId = `region:${x}:${y}`;
-      const populationCount = agentCounts.get(regionId) || summaryCounts.get(regionId) || populationCounts.get(regionId) || 0;
-      result[regionId] = foodSecurityFromBalance(foodBalances.get(regionId) ?? 0, populationCount);
-    }
+  const { width, height } = state.fields.elevation;
+  const values = new Float32Array(width * height);
+  const relevantRegions = new Set([...foodBalances.keys(), ...agentCounts.keys(), ...populationCounts.keys(), ...summaryCounts.keys()]);
+  for (const regionId of relevantRegions) {
+    const match = /^region:(\d+):(\d+)$/.exec(regionId);
+    if (!match) continue;
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= width || y < 0 || y >= height) continue;
+    const populationCount = agentCounts.get(regionId) || summaryCounts.get(regionId) || populationCounts.get(regionId) || 0;
+    values[y * width + x] = foodSecurityFromBalance(foodBalances.get(regionId) ?? 0, populationCount);
   }
-  return result;
+  return { width, height, values };
 };
 
 const organizationRank: Record<SceneEntity["kind"], number> = {
@@ -428,7 +432,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       fields: cloneFields(state.fields),
       chemistry: cloneChemistry(state.chemistry),
       metrics: metricsFor(state),
-      foodSecurityByRegion: foodSecurityByRegion(state),
+      foodSecurity: foodSecurityGrid(state),
       species: structuredClone(state.species),
       populations: structuredClone(state.populations),
       knowledge: structuredClone(state.knowledge),

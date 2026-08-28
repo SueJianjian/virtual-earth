@@ -107,7 +107,7 @@ const emptySnapshot: WorldSnapshot = {
   },
   digest: "",
   metrics: {},
-  foodSecurityByRegion: {},
+  foodSecurity: { width: 1, height: 1, values: new Float32Array(1) },
 };
 const client = createWorkerClient();
 const canvas = query<HTMLCanvasElement>("#world-map");

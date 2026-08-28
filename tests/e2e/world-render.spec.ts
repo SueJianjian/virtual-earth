@@ -166,6 +166,9 @@ test("renders a formed crust as a global map with expandable local detail", asyn
   await expect(canvas).toHaveAttribute("data-surface-mode", "planet-globe");
   await expect(canvas).toHaveAttribute("data-world-coverage", "100%");
   await expect(canvas).toHaveAttribute("data-visible-region-span", "96.00x48.00");
+  await expect(canvas).toHaveAttribute("data-terrain-reuse", "false");
+  await page.locator("#step-button").click();
+  await expect(canvas).toHaveAttribute("data-terrain-reuse", "true");
 
   const globeBox = await canvas.boundingBox();
   if (!globeBox) throw new Error("Planet globe is not measurable");

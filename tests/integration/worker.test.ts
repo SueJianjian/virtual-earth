@@ -8,6 +8,7 @@ import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import { SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
+import { snapshotTransferables } from "../../src/worker/transfer.ts";
 
 describe("simulation worker runtime", () => {
   beforeEach(() => clearSimulationStages());
@@ -42,6 +43,19 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.runtime?.lastStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.averageStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.peakStepMs).toBeGreaterThanOrEqual(snapshot.snapshot.runtime?.lastStepMs ?? 0);
+  });
+
+  it("keeps authoritative grids attached after transferring a snapshot", () => {
+    const runtime = createSimulationRuntime(createWorld(149, { width: 8, height: 8, formation: "formed" }));
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    const received = structuredClone(message.snapshot, { transfer: snapshotTransferables(message.snapshot) });
+
+    expect(message.snapshot.fields.elevation.values.byteLength).toBe(0);
+    expect(received.fields.elevation.values).toHaveLength(64);
+    expect(runtime.getState().fields.elevation.values).toHaveLength(64);
+    expect(runtime.dispatch({ type: "pause" })[0]).toMatchObject({ type: "snapshot", snapshot: { tick: 0 } });
   });
 
   it("keeps the configured speed in the runtime protocol", () => {
@@ -383,7 +397,7 @@ describe("simulation worker runtime", () => {
     const runtime = createSimulationRuntime(state);
     const snapshot = runtime.dispatch({ type: "focusRegion", regionId: region })[0];
     expect(snapshot?.type === "snapshot" && snapshot.snapshot.selectedRegion).toMatchObject({ foodBalance: 2, foodPerAgent: 0.2, foodSecurity: 0.4 });
-    expect(snapshot?.type === "snapshot" && snapshot.snapshot.foodSecurityByRegion?.[region]).toBe(0.4);
+    expect(snapshot?.type === "snapshot" && snapshot.snapshot.foodSecurity?.values[1 * 8 + 1]).toBeCloseTo(0.4);
   });
 
   it("uses micro agents, aggregate summaries, then populations for regional food security", () => {
@@ -417,11 +431,12 @@ describe("simulation worker runtime", () => {
     const before = worldDigest(runtime.getState());
     const message = runtime.dispatch({ type: "pause" })[0];
 
-    expect(message?.type === "snapshot" && message.snapshot.foodSecurityByRegion).toMatchObject({
-      "region:0:0": 1,
-      "region:1:0": 0.4,
-      "region:2:0": 0.5,
-    });
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+    expect(Array.from(message.snapshot.foodSecurity?.values.slice(0, 3) ?? [])).toEqual([
+      1,
+      expect.closeTo(0.4, 5),
+      0.5,
+    ]);
     expect(worldDigest(runtime.getState())).toBe(before);
   });
 

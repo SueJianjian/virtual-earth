@@ -319,15 +319,16 @@ export const createMapCanvas = (
     return geometry;
   };
 
-  const globeGeometryFor = (current: WorldSnapshot): THREE.SphereGeometry => {
+  const updateGlobeGeometry = (current: WorldSnapshot, geometry: THREE.SphereGeometry): void => {
     const grid = current.fields.elevation;
-    const widthSegments = Math.max(64, Math.min(192, grid.width * 2));
-    const heightSegments = Math.max(32, Math.min(96, grid.height * 2));
     const radius = globeRadius();
-    const geometry = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
     const positions = geometry.getAttribute("position");
     const uvs = geometry.getAttribute("uv");
-    const colors = new Float32Array(positions.count * 3);
+    let colors = geometry.getAttribute("color");
+    if (!colors || colors.count !== positions.count) {
+      colors = new THREE.BufferAttribute(new Float32Array(positions.count * 3), 3);
+      geometry.setAttribute("color", colors);
+    }
     const direction = new THREE.Vector3();
     const sampleField = (values: Float32Array, u: number, v: number): number => {
       const sourceX = u * grid.width - 0.5;
@@ -377,13 +378,19 @@ export const createMapCanvas = (
       positions.setXYZ(vertex, direction.x, direction.y, direction.z);
       const [red, green, blue] = sampleColor(u, v);
       const variation = 0.94 + sceneHash(x, y, current.seed + 1663) * 0.1;
-      colors[vertex * 3] = red / 255 * variation;
-      colors[vertex * 3 + 1] = green / 255 * variation;
-      colors[vertex * 3 + 2] = blue / 255 * variation;
+      colors.setXYZ(vertex, red / 255 * variation, green / 255 * variation, blue / 255 * variation);
     }
     positions.needsUpdate = true;
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    colors.needsUpdate = true;
     geometry.computeVertexNormals();
+  };
+
+  const globeGeometryFor = (current: WorldSnapshot): THREE.SphereGeometry => {
+    const grid = current.fields.elevation;
+    const widthSegments = Math.max(64, Math.min(192, grid.width * 2));
+    const heightSegments = Math.max(32, Math.min(96, grid.height * 2));
+    const geometry = new THREE.SphereGeometry(globeRadius(), widthSegments, heightSegments);
+    updateGlobeGeometry(current, geometry);
     return geometry;
   };
 
@@ -401,6 +408,20 @@ export const createMapCanvas = (
 
   const rebuildTerrain = (): void => {
     if (!snapshot) return;
+    const grid = snapshot.fields.elevation;
+    const globeGridKey = `${grid.width}x${grid.height}`;
+    if (snapshot.formation.phase === "stable-crust"
+      && surfaceMode() === "planet-globe"
+      && terrainMesh === formationBodyMesh
+      && terrainMesh?.userData.surfaceMode === "planet-globe"
+      && terrainMesh.userData.gridKey === globeGridKey
+      && terrainMesh.geometry instanceof THREE.SphereGeometry) {
+      updateGlobeGeometry(snapshot, terrainMesh.geometry);
+      terrainRoot.rotation.order = "YXZ";
+      terrainRoot.rotation.set(globePitch, globeYaw, 0);
+      canvas.dataset.terrainReuse = "true";
+      return;
+    }
     if (selectionMarker?.parent === terrainRoot) selectionMarker = undefined;
     clearGroup(terrainRoot);
     terrainRoot.rotation.set(0, 0, 0);
@@ -408,7 +429,7 @@ export const createMapCanvas = (
     terrainMesh = undefined;
     formationBodyMesh = undefined;
     waterSurface = undefined;
-    const grid = snapshot.fields.elevation;
+    canvas.dataset.terrainReuse = "false";
     const bodyScale = formationBodyScale(snapshot.formation);
     canvas.dataset.formationBodyScale = bodyScale.toFixed(3);
     if (snapshot.formation.phase !== "stable-crust") {
@@ -460,6 +481,8 @@ export const createMapCanvas = (
         }),
       );
       formationBodyMesh.castShadow = formationBodyMesh.receiveShadow = true;
+      formationBodyMesh.userData.surfaceMode = "planet-globe";
+      formationBodyMesh.userData.gridKey = globeGridKey;
       terrainMesh = formationBodyMesh;
       terrainRoot.add(formationBodyMesh);
       const atmosphere = new THREE.Mesh(
@@ -853,9 +876,19 @@ export const createMapCanvas = (
     canvas.dataset.worldGrid = `${next.fields.elevation.width}x${next.fields.elevation.height}`;
     canvas.dataset.crossRegionLinkCount = String(sceneLinks.filter((link) => link.kind === "trade" || link.kind === "border-conflict").length);
     rebuildTerrain();
-    rebuildTerritories();
-    rebuildProps();
-    rebuildEntities();
+    if (surfaceMode() === "planet-globe") {
+      clearGroup(territoryRoot);
+      clearGroup(propRoot);
+      clearGroup(entityRoot);
+      clearGroup(linkRoot);
+      animatedObjects.length = 0;
+      entityPositions.clear();
+      updateSceneLod();
+    } else {
+      rebuildTerritories();
+      rebuildProps();
+      rebuildEntities();
+    }
     updateSelectionMarker();
   };
 

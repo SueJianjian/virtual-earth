@@ -35,7 +35,7 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const oxygen = clamp(snapshot.chemistry.oxygen.values[index] ?? 0);
   const width = fields.elevation.width;
   const regionId = `region:${index % width}:${Math.floor(index / width)}`;
-  const foodSecurity = clamp(snapshot.foodSecurityByRegion?.[regionId] ?? 0);
+  const foodSecurity = clamp(snapshot.foodSecurity?.values[index] ?? snapshot.foodSecurityByRegion?.[regionId] ?? 0);
   const substanceRichness = clamp(snapshot.substanceRichnessByRegion?.[regionId] ?? 0);
   const culture = snapshot.cultureIdentityByRegion?.[regionId];
   if (layer === "temperature") return mix([43, 93, 145], [221, 72, 40], temperature);

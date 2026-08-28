@@ -1,25 +1,37 @@
 import { createSimulationRuntime } from "./runtime.ts";
 import type { WorkerCommand } from "./protocol.ts";
-import { REAL_MILLISECONDS_PER_SIMULATED_DAY } from "../sim/time.ts";
+import { messageTransferables } from "./transfer.ts";
+import { scheduledStepBatch, simulationStepIntervalMs } from "./scheduler.ts";
 
 const runtime = createSimulationRuntime();
 let timer: ReturnType<typeof setTimeout> | undefined;
+let nextStepAtMs: number | undefined;
 
-const post = (messages: ReturnType<typeof runtime.dispatch>): void => messages.forEach((message) => self.postMessage(message));
+const workerScope = self as unknown as { postMessage(message: unknown, transfer: Transferable[]): void };
+const post = (messages: ReturnType<typeof runtime.dispatch>): void => messages.forEach((message) => {
+  workerScope.postMessage(message, messageTransferables(message));
+});
 const stopLoop = (): void => {
-  if (timer === undefined) return;
-  clearTimeout(timer);
+  if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
+  nextStepAtMs = undefined;
 };
-const loopDelayFor = (speed: 1 | 4 | 16 | 64): number => REAL_MILLISECONDS_PER_SIMULATED_DAY / speed;
 const startLoop = (): void => {
   stopLoop();
+  nextStepAtMs = performance.now() + simulationStepIntervalMs(runtime.getSpeed());
   const scheduleNext = (): void => {
-    if (runtime.isPaused()) return;
+    if (runtime.isPaused() || nextStepAtMs === undefined) return;
+    const delay = Math.max(0, nextStepAtMs - performance.now());
     timer = setTimeout(() => {
       timer = undefined;
-      if (runtime.isPaused()) return;
-      const messages = runtime.dispatch({ type: "step", count: 1 });
+      if (runtime.isPaused() || nextStepAtMs === undefined) return;
+      const scheduled = scheduledStepBatch(performance.now(), nextStepAtMs, runtime.getSpeed());
+      if (scheduled.count === 0) {
+        scheduleNext();
+        return;
+      }
+      nextStepAtMs = scheduled.nextStepAtMs;
+      const messages = runtime.dispatch({ type: "step", count: scheduled.count });
       if (messages.some((message) => message.type === "error")) {
         stopLoop();
         post(messages);
@@ -27,7 +39,7 @@ const startLoop = (): void => {
       }
       post(messages);
       scheduleNext();
-    }, loopDelayFor(runtime.getSpeed()));
+    }, delay);
   };
   scheduleNext();
 };

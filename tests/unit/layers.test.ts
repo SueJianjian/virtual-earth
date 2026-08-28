@@ -16,7 +16,7 @@ describe("food security map layer", () => {
       fields: world.fields,
       chemistry: world.chemistry,
       metrics: {},
-      foodSecurityByRegion: { "region:0:0": 0, "region:1:0": 1 },
+      foodSecurity: { width: 2, height: 1, values: new Float32Array([0, 1]) },
     };
 
     expect(colorForCell(snapshot, 0, "foodSecurity")).not.toEqual(colorForCell(snapshot, 1, "foodSecurity"));
