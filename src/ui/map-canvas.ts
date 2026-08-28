@@ -68,7 +68,8 @@ export const createMapCanvas = (
   const linkRoot = new THREE.Group();
   const entityRoot = new THREE.Group();
   const effectRoot = new THREE.Group();
-  scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot);
+  const weatherRoot = new THREE.Group();
+  scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot, weatherRoot);
 
   scene.add(new THREE.HemisphereLight(0xc8e7ef, 0x31422d, 1.05));
   const sunlight = new THREE.DirectionalLight(0xffe8bc, 2.15);
@@ -126,6 +127,22 @@ export const createMapCanvas = (
   const animatedObjects: THREE.Object3D[] = [];
   const animatedRouteObjects: Array<THREE.Line | THREE.Mesh> = [];
   const entityPositions = new Map<string, THREE.Vector3>();
+  let weatherMotion: {
+    geometry: THREE.BufferGeometry;
+    positions: Float32Array;
+    floors: Float32Array;
+    resetX: Float32Array;
+    resetZ: Float32Array;
+    resetY: Float32Array;
+    lengths: Float32Array;
+    maxY: number;
+    speed: number;
+    drift: number;
+    xMin: number;
+    xMax: number;
+    zMin: number;
+    zMax: number;
+  } | undefined;
 
   const dimensionsFor = (): { width: number; height: number } => {
     const base = renderDimensions[quality];
@@ -691,6 +708,100 @@ export const createMapCanvas = (
     propRoot.add(rockMesh);
   };
 
+  const rebuildWeather = (): void => {
+    clearGroup(weatherRoot);
+    weatherMotion = undefined;
+    canvas.dataset.weatherMode = "clear";
+    canvas.dataset.weatherParticleCount = "0";
+    canvas.dataset.weatherIntensity = "0.00";
+    canvas.dataset.weatherFrame = "0";
+    if (!snapshot || snapshot.formation.phase !== "stable-crust" || surfaceMode() === "planet-globe") return;
+
+    const grid = snapshot.fields.elevation;
+    const patchLod = terrainPatchLodForZoom(zoom);
+    const bounds = patchLod
+      ? terrainPatchBounds(patchLod.radius + 3)
+      : { xMin: 0, xMax: grid.width - 1, yMin: 0, yMax: grid.height - 1 };
+    let humidityTotal = 0;
+    let waterTotal = 0;
+    let sampleCount = 0;
+    for (let y = bounds.yMin; y <= bounds.yMax; y += 1) for (let x = bounds.xMin; x <= bounds.xMax; x += 1) {
+      const index = y * grid.width + x;
+      humidityTotal += clamp(snapshot.fields.humidity.values[index] ?? 0, 0, 1);
+      waterTotal += currentWater(index);
+      sampleCount += 1;
+    }
+    const humidity = humidityTotal / Math.max(1, sampleCount);
+    const water = waterTotal / Math.max(1, sampleCount);
+    const intensity = clamp((humidity - 0.3) * 1.8 + water * 0.42, 0, 1);
+    const count = intensity < 0.06 ? 0 : Math.min(180, 24 + Math.round(intensity * 156));
+    canvas.dataset.weatherMode = count > 0 ? "rain" : "clear";
+    canvas.dataset.weatherParticleCount = String(count);
+    canvas.dataset.weatherIntensity = intensity.toFixed(2);
+    if (count === 0) return;
+
+    const xMin = bounds.xMin - (grid.width - 1) / 2;
+    const xMax = bounds.xMax - (grid.width - 1) / 2;
+    const zMin = bounds.yMin - (grid.height - 1) / 2;
+    const zMax = bounds.yMax - (grid.height - 1) / 2;
+    const maxY = 4.6 + intensity * 1.8;
+    const positions = new Float32Array(count * 6);
+    const floors = new Float32Array(count);
+    const resetX = new Float32Array(count);
+    const resetZ = new Float32Array(count);
+    const resetY = new Float32Array(count);
+    const lengths = new Float32Array(count);
+    for (let index = 0; index < count; index += 1) {
+      const horizontal = sceneHash(index, snapshot.seed, 1901);
+      const depth = sceneHash(index, snapshot.seed, 1907);
+      const height = sceneHash(index, snapshot.seed, 1913);
+      const x = xMin + horizontal * Math.max(0.1, xMax - xMin);
+      const z = zMin + depth * Math.max(0.1, zMax - zMin);
+      const ground = elevationAt(Math.round(x + (grid.width - 1) / 2), Math.round(z + (grid.height - 1) / 2)) + 0.08;
+      const length = 0.2 + sceneHash(index, snapshot.seed, 1919) * 0.24;
+      const startY = ground + 1.4 + height * maxY;
+      const offset = index * 6;
+      positions[offset] = x;
+      positions[offset + 1] = startY;
+      positions[offset + 2] = z;
+      positions[offset + 3] = x;
+      positions[offset + 4] = startY - length;
+      positions[offset + 5] = z;
+      floors[index] = ground;
+      resetX[index] = x;
+      resetZ[index] = z;
+      resetY[index] = startY;
+      lengths[index] = length;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0x9dd7e3,
+      transparent: true,
+      opacity: 0.18 + intensity * 0.34,
+      depthWrite: false,
+    });
+    const rain = new THREE.LineSegments(geometry, material);
+    rain.userData.weatherKind = "rain";
+    weatherRoot.add(rain);
+    weatherMotion = {
+      geometry,
+      positions,
+      floors,
+      resetX,
+      resetZ,
+      resetY,
+      lengths,
+      maxY,
+      speed: 0.07 + intensity * 0.11,
+      drift: 0.012 + intensity * 0.018,
+      xMin,
+      xMax,
+      zMin,
+      zMax,
+    };
+  };
+
   const rebuildTerritories = (): void => {
     clearGroup(territoryRoot);
     const owners = new Map<string, SceneEntity>();
@@ -922,6 +1033,7 @@ export const createMapCanvas = (
     propRoot.visible = snapshot?.formation.phase !== "stable-crust" || (!globeView && propsPerCellForZoom(zoom) > 0);
     territoryRoot.visible = !globeView && sceneLod !== "individual";
     linkRoot.visible = snapshot?.formation.phase === "stable-crust";
+    weatherRoot.visible = snapshot?.formation.phase === "stable-crust" && !globeView && sceneLod !== "global";
     let visibleStrategicLinkCount = 0;
     let visiblePersonalLinkCount = 0;
     effectRoot.visible = !globeView;
@@ -1008,6 +1120,8 @@ export const createMapCanvas = (
       clearGroup(propRoot);
       clearGroup(entityRoot);
       clearGroup(linkRoot);
+      clearGroup(weatherRoot);
+      weatherMotion = undefined;
       animatedObjects.length = 0;
       entityPositions.clear();
       rebuildLinks();
@@ -1015,6 +1129,7 @@ export const createMapCanvas = (
     } else {
       rebuildTerritories();
       rebuildProps();
+      rebuildWeather();
       rebuildEntities();
       rebuildLinks();
       updateSceneLod();
@@ -1029,6 +1144,7 @@ export const createMapCanvas = (
     if (snapshot && previousLod !== nextLod) {
       rebuildTerrain();
       rebuildProps();
+      rebuildWeather();
       rebuildEntities();
       rebuildLinks();
       updateSelectionMarker();
@@ -1059,6 +1175,34 @@ export const createMapCanvas = (
       if (waterSurface) {
         waterSurface.position.y = 1.47 + Math.sin(phase * 0.85) * 0.025;
         (waterSurface.material as THREE.MeshPhysicalMaterial).clearcoatRoughness = 0.13 + Math.sin(phase * 0.6) * 0.04;
+      }
+      if (weatherMotion && weatherRoot.visible) {
+        const motion = weatherMotion;
+        const positions = motion.positions;
+        for (let index = 0; index < motion.floors.length; index += 1) {
+          const offset = index * 6;
+          positions[offset] = positions[offset]! + motion.drift;
+          positions[offset + 3] = positions[offset + 3]! + motion.drift;
+          positions[offset + 1] = positions[offset + 1]! - motion.speed;
+          positions[offset + 4] = positions[offset + 4]! - motion.speed;
+          if (positions[offset + 1]! < motion.floors[index]!) {
+            const wrappedX = motion.resetX[index]! + (phase * motion.drift) % Math.max(0.1, motion.xMax - motion.xMin);
+            const x = wrappedX > motion.xMax ? wrappedX - (motion.xMax - motion.xMin) : wrappedX;
+            const y = motion.resetY[index]!;
+            positions[offset] = x;
+            positions[offset + 1] = y;
+            positions[offset + 2] = motion.resetZ[index]!;
+            positions[offset + 3] = x;
+            positions[offset + 4] = y - motion.lengths[index]!;
+            positions[offset + 5] = motion.resetZ[index]!;
+          }
+          if (positions[offset + 2]! < motion.zMin || positions[offset + 2]! > motion.zMax) {
+            positions[offset + 2] = motion.resetZ[index]!;
+            positions[offset + 5] = motion.resetZ[index]!;
+          }
+        }
+        motion.geometry.getAttribute("position").needsUpdate = true;
+        canvas.dataset.weatherFrame = String(Number(canvas.dataset.weatherFrame ?? 0) + 1);
       }
       for (const object of animatedObjects) {
         if (object.userData.flame) {
@@ -1198,6 +1342,7 @@ export const createMapCanvas = (
   const endPointer = (event?: PointerEvent): void => {
     clampSurfacePan();
     if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
+    if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildWeather();
     pointerStart = undefined;
     if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     canvas.style.cursor = "grab";

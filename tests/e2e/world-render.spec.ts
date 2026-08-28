@@ -370,6 +370,49 @@ test("renders a formed crust as a global map with expandable local detail", asyn
   expect(boundedPan.z).toBeLessThan(24);
 });
 
+test("animates bounded local weather without adding global particles", async ({ page }) => {
+  await page.goto("/");
+  const canvas = page.locator("#world-map");
+  const humidWorld = createWorld(42_427, { width: 32, height: 16, formation: "formed" });
+  humidWorld.fields.humidity.values.fill(0.86);
+  humidWorld.fields.water.values.fill(0.42);
+  await page.locator("#load-input").setInputFiles({
+    name: "humid-formed-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(humidWorld)),
+  });
+  await page.locator("#pause-button").click();
+
+  await expect(canvas).toHaveAttribute("data-surface-mode", "planet-globe");
+  await expect(canvas).toHaveAttribute("data-weather-mode", "clear");
+  await expect(canvas).toHaveAttribute("data-weather-particle-count", "0");
+
+  for (let click = 0; click < 22; click += 1) await page.locator("#zoom-in").click();
+  await expect(canvas).toHaveAttribute("data-surface-mode", "local-surface");
+  await expect(canvas).toHaveAttribute("data-weather-mode", "rain");
+  const particleCount = Number(await canvas.getAttribute("data-weather-particle-count"));
+  expect(particleCount).toBeGreaterThan(0);
+  expect(particleCount).toBeLessThanOrEqual(180);
+
+  await page.locator("#play-button").click();
+  const frameBefore = Number(await canvas.getAttribute("data-weather-frame"));
+  await page.waitForTimeout(180);
+  const frameAfter = Number(await canvas.getAttribute("data-weather-frame"));
+  const afterSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("webgl2") ?? element.getContext("webgl");
+    if (!context || element.width === 0 || element.height === 0) return 0;
+    const pixel = new Uint8Array(4);
+    let signal = 0;
+    for (let y = 1; y <= 4; y += 1) for (let x = 1; x <= 6; x += 1) {
+      context.readPixels(Math.floor(element.width * x / 7), Math.floor(element.height * y / 5), 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel);
+      signal += pixel[0]! + pixel[1]! + pixel[2]!;
+    }
+    return signal;
+  });
+  expect(frameAfter).toBeGreaterThan(frameBefore);
+  expect(afterSignal).toBeGreaterThan(0);
+});
+
 test("renders global civilization routes and separates them from personal links", async ({ page }) => {
   const state = createWorld(90_212, { width: 64, height: 40, formation: "formed" });
   const firstRegion = "region:14:20" as never;
