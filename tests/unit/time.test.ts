@@ -90,6 +90,14 @@ describe("simulation time scale", () => {
       step: String(BigInt(Number.MAX_SAFE_INTEGER) + 4097n),
       days: String(BigInt(MAX_SIMULATION_DAYS) + 4097n),
     });
+
+    const legacyWorld = {
+      tick: Number.MAX_SAFE_INTEGER,
+      years: MAX_SIMULATION_YEARS,
+      simulationDays: MAX_SIMULATION_DAYS + 4096,
+    };
+    expect(simulationDaysFromWorld(legacyWorld)).toBe(MAX_SIMULATION_DAYS);
+    expect(exactSimulationDaysForWorld(legacyWorld)).toBe(BigInt(legacyWorld.simulationDays));
   });
 
   it("derives legacy timestamps from the exact next-step clock", () => {

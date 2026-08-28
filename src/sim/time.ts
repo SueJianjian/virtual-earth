@@ -23,6 +23,15 @@ const exactNumber = (value: number, label: string): bigint => {
   return BigInt(value);
 };
 
+const exactDaysFromNumericWorld = (world: { years: number; simulationDays?: number }): bigint => {
+  if (!Number.isFinite(world.years) || world.years < 0) {
+    throw new RangeError("World time must be a finite, non-negative number");
+  }
+  return world.simulationDays === undefined
+    ? simulationDaysFromYearsExact(world.years, "World time")
+    : exactNumber(world.simulationDays, "World time days");
+};
+
 const exactStep = (value: string | number, label = "Simulation step"): bigint => {
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`${label} must be a non-negative safe integer`);
@@ -79,7 +88,7 @@ export const timelineForWorld = (world: {
     if (!isSimulationTimeline(world.timeline)) throw new RangeError("World timeline is invalid");
     return world.timeline;
   }
-  return { step: String(world.tick), days: String(simulationDaysFromWorld(world)) };
+  return { step: String(world.tick), days: exactDaysFromNumericWorld(world).toString() };
 };
 
 /** The exact current step. Number fields are intentionally not used here. */
@@ -223,16 +232,7 @@ export type SimulationAge = {
 };
 
 export const simulationDaysFromWorld = (world: { years: number; simulationDays?: number }): number => {
-  if (!Number.isFinite(world.years) || world.years < 0) {
-    throw new RangeError("World time must be a finite, non-negative number");
-  }
-  if (world.simulationDays !== undefined) {
-    if (!Number.isSafeInteger(world.simulationDays) || world.simulationDays < 0 || world.simulationDays > MAX_SIMULATION_DAYS) {
-      throw new RangeError("World time exceeds the supported calendar precision");
-    }
-    return world.simulationDays;
-  }
-  return simulationDaysFromYears(world.years, "World time");
+  return projectedInteger(exactDaysFromNumericWorld(world));
 };
 
 export const simulationDaysFromYears = (elapsedYears: number, label = "Simulation time"): number => {
