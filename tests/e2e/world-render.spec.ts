@@ -374,6 +374,7 @@ test("animates bounded local weather without adding global particles", async ({ 
   await page.goto("/");
   const canvas = page.locator("#world-map");
   const humidWorld = createWorld(42_427, { width: 32, height: 16, formation: "formed" });
+  humidWorld.fields.temperature.values.fill(0.68);
   humidWorld.fields.humidity.values.fill(0.86);
   humidWorld.fields.water.values.fill(0.42);
   await page.locator("#load-input").setInputFiles({
@@ -386,6 +387,8 @@ test("animates bounded local weather without adding global particles", async ({ 
   await expect(canvas).toHaveAttribute("data-surface-mode", "planet-globe");
   await expect(canvas).toHaveAttribute("data-weather-mode", "clear");
   await expect(canvas).toHaveAttribute("data-weather-particle-count", "0");
+  await expect(canvas).toHaveAttribute("data-season", /^(spring|summer|autumn|winter)$/);
+  await expect(canvas).toHaveAttribute("data-solar-flux", /\d+\.\d{3}/);
 
   for (let click = 0; click < 22; click += 1) await page.locator("#zoom-in").click();
   await expect(canvas).toHaveAttribute("data-surface-mode", "local-surface");
@@ -411,6 +414,21 @@ test("animates bounded local weather without adding global particles", async ({ 
   });
   expect(frameAfter).toBeGreaterThan(frameBefore);
   expect(afterSignal).toBeGreaterThan(0);
+
+  await page.locator("#pause-button").click();
+  const frozenWorld = createWorld(42_428, { width: 32, height: 16, formation: "formed" });
+  frozenWorld.fields.temperature.values.fill(0.18);
+  frozenWorld.fields.humidity.values.fill(0.86);
+  frozenWorld.fields.water.values.fill(0.42);
+  await page.locator("#load-input").setInputFiles({
+    name: "frozen-formed-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(frozenWorld)),
+  });
+  await expect(canvas).toHaveAttribute("data-weather-mode", "snow");
+  const snowParticleCount = Number(await canvas.getAttribute("data-weather-particle-count"));
+  expect(snowParticleCount).toBeGreaterThan(0);
+  expect(snowParticleCount).toBeLessThanOrEqual(180);
 });
 
 test("renders global civilization routes and separates them from personal links", async ({ page }) => {

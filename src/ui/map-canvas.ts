@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { RegionId } from "../sim/types.ts";
+import type { PlanetSeason, RegionId } from "../sim/types.ts";
 import type { SceneEntity, SceneLink, WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 import { createAgentModel, createFacilityModel, createFantasyTreeGeometry, createLifeformModel, createLifeformPopulation, createOrganizationModel, createPopulationCamp, createWorldviewModel, enableFantasyShadows, fantasyMaterials } from "./fantasy-assets.ts";
@@ -21,6 +21,20 @@ const radians = (degrees: number): number => degrees * Math.PI / 180;
 const degrees = (value: number): number => value * 180 / Math.PI;
 const normalizeYaw = (value: number): number => ((value % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
 
+const seasonVisuals: Record<PlanetSeason, {
+  sky: number;
+  fog: number;
+  hemisphere: number;
+  ground: number;
+  sunlight: number;
+  rim: number;
+}> = {
+  spring: { sky: 0x78aeb2, fog: 0x91c4c0, hemisphere: 0xd6ece4, ground: 0x4c684e, sunlight: 0xffefc5, rim: 0x76bdc4 },
+  summer: { sky: 0x6ca2b4, fog: 0x86b9bd, hemisphere: 0xd7ebf0, ground: 0x4a6040, sunlight: 0xffe6ad, rim: 0x69a9c2 },
+  autumn: { sky: 0x9b927e, fog: 0xb8ae94, hemisphere: 0xf0dec6, ground: 0x614d3a, sunlight: 0xffd29c, rim: 0xa87e61 },
+  winter: { sky: 0x687e91, fog: 0x9aaebc, hemisphere: 0xdbe7f2, ground: 0x52606a, sunlight: 0xd9e7ff, rim: 0x8db9d7 },
+};
+
 const stringSeed = (value: string): number => {
   let hash = 2166136261;
   for (const character of value) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
@@ -37,7 +51,7 @@ const clearGroup = (group: THREE.Group): void => {
   for (const child of [...group.children]) {
     group.remove(child);
     child.traverse((object) => {
-      if (!(object instanceof THREE.Mesh || object instanceof THREE.Line)) return;
+      if (!(object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)) return;
       object.geometry.dispose();
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const item of materials) if (!item.userData.shared) item.dispose();
@@ -71,7 +85,8 @@ export const createMapCanvas = (
   const weatherRoot = new THREE.Group();
   scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot, weatherRoot);
 
-  scene.add(new THREE.HemisphereLight(0xc8e7ef, 0x31422d, 1.05));
+  const hemisphereLight = new THREE.HemisphereLight(0xc8e7ef, 0x31422d, 1.05);
+  scene.add(hemisphereLight);
   const sunlight = new THREE.DirectionalLight(0xffe8bc, 2.15);
   sunlight.position.set(-18, 28, 14);
   sunlight.castShadow = true;
@@ -128,6 +143,7 @@ export const createMapCanvas = (
   const animatedRouteObjects: Array<THREE.Line | THREE.Mesh> = [];
   const entityPositions = new Map<string, THREE.Vector3>();
   let weatherMotion: {
+    kind: "rain" | "snow";
     geometry: THREE.BufferGeometry;
     positions: Float32Array;
     floors: Float32Array;
@@ -143,6 +159,31 @@ export const createMapCanvas = (
     zMin: number;
     zMax: number;
   } | undefined;
+
+  const syncEnvironmentalPresentation = (): void => {
+    if (!snapshot?.orbital) return;
+    const orbital = snapshot.orbital;
+    const visuals = seasonVisuals[orbital.season];
+    const humidity = clamp(snapshot.metrics.meanHumidity ?? 0, 0, 1);
+    const solarScale = clamp(orbital.solarFlux / 1.05, 0.45, 1.35);
+    (scene.background as THREE.Color).set(visuals.sky);
+    if (scene.fog instanceof THREE.FogExp2) {
+      scene.fog.color.set(visuals.fog);
+      scene.fog.density = 0.0042 + humidity * 0.0024;
+    }
+    hemisphereLight.color.set(visuals.hemisphere);
+    hemisphereLight.groundColor.set(visuals.ground);
+    hemisphereLight.intensity = 0.82 + solarScale * 0.2;
+    sunlight.color.set(visuals.sunlight);
+    sunlight.intensity = 1.62 + solarScale * 0.55;
+    const solarAngle = orbital.seasonalPhase * Math.PI * 2 + orbital.periapsisPhase * Math.PI * 2;
+    sunlight.position.set(Math.cos(solarAngle) * 26, 19 + solarScale * 10, Math.sin(solarAngle) * 26);
+    rimLight.color.set(visuals.rim);
+    rimLight.intensity = 0.46 + (1 - humidity) * 0.22;
+    canvas.dataset.season = orbital.season;
+    canvas.dataset.solarFlux = orbital.solarFlux.toFixed(3);
+    canvas.dataset.atmosphereHumidity = humidity.toFixed(2);
+  };
 
   const dimensionsFor = (): { width: number; height: number } => {
     const base = renderDimensions[quality];
@@ -724,20 +765,25 @@ export const createMapCanvas = (
       : { xMin: 0, xMax: grid.width - 1, yMin: 0, yMax: grid.height - 1 };
     let humidityTotal = 0;
     let waterTotal = 0;
+    let temperatureTotal = 0;
     let sampleCount = 0;
     for (let y = bounds.yMin; y <= bounds.yMax; y += 1) for (let x = bounds.xMin; x <= bounds.xMax; x += 1) {
       const index = y * grid.width + x;
       humidityTotal += clamp(snapshot.fields.humidity.values[index] ?? 0, 0, 1);
       waterTotal += currentWater(index);
+      temperatureTotal += clamp(snapshot.fields.temperature.values[index] ?? 0, 0, 1);
       sampleCount += 1;
     }
     const humidity = humidityTotal / Math.max(1, sampleCount);
     const water = waterTotal / Math.max(1, sampleCount);
+    const temperature = temperatureTotal / Math.max(1, sampleCount);
     const intensity = clamp((humidity - 0.3) * 1.8 + water * 0.42, 0, 1);
     const count = intensity < 0.06 ? 0 : Math.min(180, 24 + Math.round(intensity * 156));
-    canvas.dataset.weatherMode = count > 0 ? "rain" : "clear";
+    const kind: "rain" | "snow" = temperature < 0.32 ? "snow" : "rain";
+    canvas.dataset.weatherMode = count > 0 ? kind : "clear";
     canvas.dataset.weatherParticleCount = String(count);
     canvas.dataset.weatherIntensity = intensity.toFixed(2);
+    canvas.dataset.weatherTemperature = temperature.toFixed(2);
     if (count === 0) return;
 
     const xMin = bounds.xMin - (grid.width - 1) / 2;
@@ -745,7 +791,7 @@ export const createMapCanvas = (
     const zMin = bounds.yMin - (grid.height - 1) / 2;
     const zMax = bounds.yMax - (grid.height - 1) / 2;
     const maxY = 4.6 + intensity * 1.8;
-    const positions = new Float32Array(count * 6);
+    const positions = new Float32Array(kind === "rain" ? count * 6 : count * 3);
     const floors = new Float32Array(count);
     const resetX = new Float32Array(count);
     const resetZ = new Float32Array(count);
@@ -758,15 +804,17 @@ export const createMapCanvas = (
       const x = xMin + horizontal * Math.max(0.1, xMax - xMin);
       const z = zMin + depth * Math.max(0.1, zMax - zMin);
       const ground = elevationAt(Math.round(x + (grid.width - 1) / 2), Math.round(z + (grid.height - 1) / 2)) + 0.08;
-      const length = 0.2 + sceneHash(index, snapshot.seed, 1919) * 0.24;
+      const length = kind === "rain" ? 0.2 + sceneHash(index, snapshot.seed, 1919) * 0.24 : 0;
       const startY = ground + 1.4 + height * maxY;
-      const offset = index * 6;
+      const offset = kind === "rain" ? index * 6 : index * 3;
       positions[offset] = x;
       positions[offset + 1] = startY;
       positions[offset + 2] = z;
-      positions[offset + 3] = x;
-      positions[offset + 4] = startY - length;
-      positions[offset + 5] = z;
+      if (kind === "rain") {
+        positions[offset + 3] = x;
+        positions[offset + 4] = startY - length;
+        positions[offset + 5] = z;
+      }
       floors[index] = ground;
       resetX[index] = x;
       resetZ[index] = z;
@@ -775,16 +823,25 @@ export const createMapCanvas = (
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.LineBasicMaterial({
-      color: 0x9dd7e3,
-      transparent: true,
-      opacity: 0.18 + intensity * 0.34,
-      depthWrite: false,
-    });
-    const rain = new THREE.LineSegments(geometry, material);
-    rain.userData.weatherKind = "rain";
-    weatherRoot.add(rain);
+    const weather = kind === "rain"
+      ? new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({
+        color: 0x9dd7e3,
+        transparent: true,
+        opacity: 0.18 + intensity * 0.34,
+        depthWrite: false,
+      }))
+      : new THREE.Points(geometry, new THREE.PointsMaterial({
+        color: 0xf2f8ff,
+        size: 0.18,
+        transparent: true,
+        opacity: 0.42 + intensity * 0.34,
+        depthWrite: false,
+        sizeAttenuation: true,
+      }));
+    weather.userData.weatherKind = kind;
+    weatherRoot.add(weather);
     weatherMotion = {
+      kind,
       geometry,
       positions,
       floors,
@@ -1101,6 +1158,7 @@ export const createMapCanvas = (
 
   const applySnapshot = (next: WorldSnapshot): void => {
     snapshot = next;
+    syncEnvironmentalPresentation();
     sceneEntities = next.sceneEntities ?? [];
     sceneLinks = next.sceneLinks ?? [];
     canvas.dataset.sceneEntityCount = String(sceneEntities.length);
@@ -1180,25 +1238,49 @@ export const createMapCanvas = (
         const motion = weatherMotion;
         const positions = motion.positions;
         for (let index = 0; index < motion.floors.length; index += 1) {
-          const offset = index * 6;
-          positions[offset] = positions[offset]! + motion.drift;
-          positions[offset + 3] = positions[offset + 3]! + motion.drift;
-          positions[offset + 1] = positions[offset + 1]! - motion.speed;
-          positions[offset + 4] = positions[offset + 4]! - motion.speed;
-          if (positions[offset + 1]! < motion.floors[index]!) {
-            const wrappedX = motion.resetX[index]! + (phase * motion.drift) % Math.max(0.1, motion.xMax - motion.xMin);
-            const x = wrappedX > motion.xMax ? wrappedX - (motion.xMax - motion.xMin) : wrappedX;
-            const y = motion.resetY[index]!;
-            positions[offset] = x;
-            positions[offset + 1] = y;
-            positions[offset + 2] = motion.resetZ[index]!;
-            positions[offset + 3] = x;
-            positions[offset + 4] = y - motion.lengths[index]!;
-            positions[offset + 5] = motion.resetZ[index]!;
+          if (motion.kind === "rain") {
+            const offset = index * 6;
+            positions[offset] = positions[offset]! + motion.drift;
+            positions[offset + 3] = positions[offset + 3]! + motion.drift;
+            positions[offset + 1] = positions[offset + 1]! - motion.speed;
+            positions[offset + 4] = positions[offset + 4]! - motion.speed;
+            if (positions[offset + 1]! < motion.floors[index]!) {
+              const wrappedX = motion.resetX[index]! + (phase * motion.drift) % Math.max(0.1, motion.xMax - motion.xMin);
+              const x = wrappedX > motion.xMax ? wrappedX - (motion.xMax - motion.xMin) : wrappedX;
+              const y = motion.resetY[index]!;
+              positions[offset] = x;
+              positions[offset + 1] = y;
+              positions[offset + 2] = motion.resetZ[index]!;
+              positions[offset + 3] = x;
+              positions[offset + 4] = y - motion.lengths[index]!;
+              positions[offset + 5] = motion.resetZ[index]!;
+            }
+            if (positions[offset + 2]! < motion.zMin || positions[offset + 2]! > motion.zMax) {
+              positions[offset + 2] = motion.resetZ[index]!;
+              positions[offset + 5] = motion.resetZ[index]!;
+            }
+            continue;
           }
-          if (positions[offset + 2]! < motion.zMin || positions[offset + 2]! > motion.zMax) {
+          const offset = index * 3;
+          const xSpan = Math.max(0.1, motion.xMax - motion.xMin);
+          const driftedX = motion.resetX[index]! + (phase * motion.drift * 0.45) % xSpan;
+          positions[offset] = driftedX > motion.xMax ? driftedX - xSpan : driftedX;
+          positions[offset + 1] = positions[offset + 1]! - motion.speed * 0.45;
+          positions[offset + 2] = clamp(
+            motion.resetZ[index]! + Math.sin(phase * 0.8 + index) * 0.22,
+            motion.zMin,
+            motion.zMax,
+          );
+          const x = positions[offset]!;
+          const z = positions[offset + 2]!;
+          if (positions[offset + 1]! < motion.floors[index]!
+            || x < motion.xMin
+            || x > motion.xMax
+            || z < motion.zMin
+            || z > motion.zMax) {
+            positions[offset] = motion.resetX[index]!;
+            positions[offset + 1] = motion.resetY[index]!;
             positions[offset + 2] = motion.resetZ[index]!;
-            positions[offset + 5] = motion.resetZ[index]!;
           }
         }
         motion.geometry.getAttribute("position").needsUpdate = true;
