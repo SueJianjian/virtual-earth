@@ -319,7 +319,7 @@ const regionalHistoryReport = (snapshot: WorldSnapshot, organizationId?: string)
     ? Math.max(0, summaryOrganization?.archivedHistoryCount ?? 0, directoryOrganization?.archivedHistoryCount ?? 0, archivedOrganization?.historyCount ?? 0)
     : Math.max(0, snapshot.selectedRegion?.archivedHistoryCount ?? 0);
   const scope = organizationId ? "该组织在当前区域内" : "当前区域";
-  return `<section class="worldview-records regional-history" aria-label="区域因果历史"><div class="worldview-heading"><strong>区域因果历史</strong><span>${scope}最近 ${format(events.length)} 条${archiveCount > 0 ? `，另有 ${format(archiveCount)} 条已归档` : ""}</span></div><ol class="worldview-list">${events.length > 0 ? events.map((event) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${event.archived ? "历史档案" : "近期账本"}</small></div><strong>${regionEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 触发概率 ${formatPercent(event.probability).value}%</p></li>`).join("") : `<li class="worldview-empty">${archiveCount > 0 ? "近期事件已归档；当前保留账本中没有该范围的可读记录" : "尚未形成可追溯事件"}</li>`}</ol></section>`;
+  return `<section class="worldview-records regional-history" aria-label="区域因果历史"><div class="worldview-heading"><strong>区域因果历史</strong><span>${scope}最近 ${format(events.length)} 条${archiveCount > 0 ? `，另有 ${format(archiveCount)} 条已归档` : ""}</span></div><ol class="worldview-list">${events.length > 0 ? events.map((event) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${event.archived ? "历史档案" : "近期账本"}</small></div><strong>${regionEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 触发概率 ${formatPercent(event.probability).value}%</p>${historyRelatedLinks(snapshot, event)}</li>`).join("") : `<li class="worldview-empty">${archiveCount > 0 ? "近期事件已归档；当前保留账本中没有该范围的可读记录" : "尚未形成可追溯事件"}</li>`}</ol></section>`;
 };
 type InspectorHistoryEvent = RecentRegionEvent | EventMilestone;
 const historyEventIds = (event: InspectorHistoryEvent): string[] => {
@@ -395,10 +395,65 @@ const objectHistoryReport = (snapshot: WorldSnapshot, detail: InspectorDetail): 
     .sort((left, right) => compareSimulationSteps(right.event.timelineStep ?? String(right.event.tick), left.event.timelineStep ?? String(left.event.tick)) || right.event.id.localeCompare(left.event.id))
     .slice(0, 24);
   const label = detailLevelLabel(detail.level);
-  return `<section class="worldview-records entity-history" data-history-level="${detail.level}" data-history-id="${escapeHtml(detail.id)}" aria-label="对象演化时间轴"><div class="worldview-heading"><strong>对象演化时间轴</strong><span>${escapeHtml(label)} ${escapeHtml(detail.id.slice(-12))} · 显示 ${format(ordered.length)} 条关联记录</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map(({ event, archived }) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${archived ? "历史档案" : "近期账本"}</small></div><strong>${historyEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 关联 ${format(historyEventIds(event).filter((id) => targetIds.has(id)).length)} 个对象</p></li>`).join("") : "<li class=\"worldview-empty\">尚未形成该对象的可追溯演化记录</li>"}</ol></section>`;
+  return `<section class="worldview-records entity-history" data-history-level="${detail.level}" data-history-id="${escapeHtml(detail.id)}" aria-label="对象演化时间轴"><div class="worldview-heading"><strong>对象演化时间轴</strong><span>${escapeHtml(label)} ${escapeHtml(detail.id.slice(-12))} · 显示 ${format(ordered.length)} 条关联记录</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map(({ event, archived }) => `<li data-event-kind="${escapeHtml(event.kind)}"><div><span>${escapeHtml(regionEventLabels[event.kind] ?? event.kind)}</span><small>${event.timelineDays === undefined ? formatSimulationAge(event.years ?? event.tick) : formatSimulationAgeFromDays(event.timelineDays)} · ${archived ? "历史档案" : "近期账本"}</small></div><strong>${historyEventContext(event)}</strong><p>${event.source === "user" ? "用户事件" : "自然演化"} · 规则 ${escapeHtml(event.ruleId)} · 关联 ${format(historyEventIds(event).filter((id) => targetIds.has(id)).length)} 个对象</p>${historyRelatedLinks(snapshot, event, targetIds)}</li>`).join("") : "<li class=\"worldview-empty\">尚未形成该对象的可追溯演化记录</li>"}</ol></section>`;
 };
 const organizationName = (organization: { id: string; type: OrganizationType }): string => `${organizationLabels[organization.type]} · ${organization.id.slice(-8)}`;
 const detailLink = (level: DetailLevel, id: string, label: string, regionId?: RegionId): string => `<button type="button" class="detail-link" data-detail-link data-detail-level="${level}" data-detail-id="${escapeHtml(id)}"${regionId ? ` data-detail-region="${escapeHtml(regionId)}"` : ""}>${escapeHtml(label)}</button>`;
+type HistoryTarget = { level: DetailLevel; id: string; label: string; regionId?: RegionId };
+const historyTargetFor = (snapshot: WorldSnapshot, id: string): HistoryTarget | undefined => {
+  if (id.startsWith("agent:")) {
+    const agent = snapshot.projection?.agents.find((candidate) => candidate.id === id);
+    return agent ? { level: "agent", id, label: `个体 · ${id.slice(-8)} · ${format(agent.age)} 岁`, regionId: agent.regionId } : undefined;
+  }
+  if (id.startsWith("population:")) {
+    const population = snapshot.populations?.find((candidate) => candidate.id === id);
+    if (!population) return undefined;
+    const species = allSpeciesForSnapshot(snapshot).find((candidate) => candidate.id === population.speciesId);
+    return { level: "population", id, label: `种群 · ${species ? speciesName(species) : id.slice(-8)}`, regionId: population.regionId };
+  }
+  if (id.startsWith("species:")) {
+    const species = allSpeciesForSnapshot(snapshot).find((candidate) => candidate.id === id);
+    return species
+      ? { level: "species", id, label: `物种 · ${speciesName(species)}`, ...(species.originRegionId ? { regionId: species.originRegionId } : {}) }
+      : undefined;
+  }
+  if (id.startsWith("culture:")) {
+    const culture = (snapshot.cultures ?? []).find((candidate) => candidate.id === id);
+    if (!culture) return undefined;
+    return { level: "culture", id, label: `文化 · ${snapshot.cultureIdentityByRegion?.[culture.regionId]?.name ?? id.slice(-8)}`, regionId: culture.regionId };
+  }
+  if (id.startsWith("facility:")) {
+    const facility = (snapshot.facilities ?? []).find((candidate) => candidate.id === id);
+    return facility ? { level: "facility", id, label: `设施 · ${knowledgeDomainLabels[facility.type]} · ${id.slice(-8)}`, regionId: facility.regionId } : undefined;
+  }
+  if (id.startsWith("substance:")) {
+    const substance = (snapshot.substances ?? []).find((candidate) => candidate.id === id);
+    return substance ? { level: "substance", id, label: `物质 · ${substance.name}`, regionId: substance.regionId } : undefined;
+  }
+  if (id.startsWith("pathogen:")) {
+    const pathogen = (snapshot.pathogens ?? []).find((candidate) => candidate.id === id);
+    return pathogen ? { level: "pathogen", id, label: `病原体 · ${pathogen.name}`, regionId: pathogen.regionId } : undefined;
+  }
+  if (id.startsWith("worldview:")) {
+    const entity = (snapshot.worldviewEntities ?? []).find((candidate) => candidate.id === id);
+    return entity ? { level: "worldview", id, label: `${worldviewEntityLabels[entity.kind]} · ${entity.name ?? id.slice(-8)}`, regionId: entity.regionId } : undefined;
+  }
+  if (id.startsWith("organization:")) {
+    const organization = organizationForSnapshot(snapshot, id);
+    return organization ? { level: organization.type, id, label: organizationName(organization), regionId: organization.regionId } : undefined;
+  }
+  return undefined;
+};
+const historyRelatedLinks = (snapshot: WorldSnapshot, event: InspectorHistoryEvent, excludedIds: ReadonlySet<string> = new Set()): string => {
+  const targets = new Map<string, HistoryTarget>();
+  for (const id of historyEventIds(event)) {
+    if (excludedIds.has(id)) continue;
+    const target = historyTargetFor(snapshot, id);
+    if (target) targets.set(target.id, target);
+  }
+  const links = [...targets.values()].slice(0, 5).map((target) => detailLink(target.level, target.id, target.label, target.regionId)).join("");
+  return links.length > 0 ? `<div class="history-related"><span>关联对象</span>${links}</div>` : "";
+};
 const organizationNavigationReport = (snapshot: WorldSnapshot, organization: OrganizationDetail, memberIds: readonly string[], projectedMembers: readonly AgentState[]): string => {
   const parent = organizationParentForSnapshot(snapshot, organization.id);
   const children = organizationChildIds(organization)

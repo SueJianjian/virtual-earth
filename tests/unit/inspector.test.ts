@@ -802,6 +802,10 @@ describe("region lineage inspector", () => {
 
     const element = { innerHTML: "" } as HTMLElement;
     const selection = { x: 0, y: 0, index: 0, regionId: region };
+    renderInspector(element, snapshot, selection);
+    expect(element.innerHTML).toContain(`data-detail-link data-detail-level="agent" data-detail-id="${agent.id}"`);
+    expect(element.innerHTML).toContain(`data-detail-link data-detail-level="substance" data-detail-id="substance:history"`);
+    expect(element.innerHTML).toContain("关联对象");
     const details = [
       ["agent", agent.id],
       ["family", family.id],

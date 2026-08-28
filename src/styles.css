@@ -230,6 +230,9 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .detail-navigation-group small { flex-basis: 100%; padding-left: 71px; }
 .detail-link { min-height: 24px; padding: 3px 6px; border: 1px solid var(--line); background: #20261f; color: #c8cfca; font-size: 9px; cursor: pointer; }
 .detail-link:hover { border-color: var(--acid); color: #f0dda0; }
+.history-related { display: flex !important; flex-wrap: wrap; align-items: center !important; justify-content: flex-start !important; gap: 4px; }
+.history-related > span { padding-left: 6px; border-left: 2px solid #66766a; color: var(--muted); font-size: 8px; }
+.history-related .detail-link { min-height: 22px; }
 .technology-effects { display: grid; gap: 7px; margin-top: 12px; padding-top: 2px; border-top: 1px solid var(--line); }
 .technology-effects .detail-heading { padding: 10px 0 3px; }
 .technology-effect-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }

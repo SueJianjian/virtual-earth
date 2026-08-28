@@ -127,7 +127,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("代际知识传承");
   await expect(page.getByRole("region", { name: "家庭谱系" })).toContainText("食物保障");
   await expect(page.getByRole("region", { name: "层级详情" })).toBeVisible();
-  await expect(page.locator("[data-detail-level=region]")).toHaveClass(/active/);
+  await expect(page.locator(".detail-tabs [data-detail-level=region]")).toHaveClass(/active/);
   await page.getByRole("button", { name: "单步推进" }).click();
   await expect(page.locator("#world-year")).toContainText("0 年 1 天");
   await expect(canvas).toHaveAttribute("data-formation-progress", "0.27");
@@ -257,7 +257,7 @@ test("loads and inspects an archived extinct species history", async ({ page }) 
   });
 
   await expect(page.locator("#inspector")).toContainText(regionId);
-  await page.locator("[data-detail-level=species]").click();
+  await page.locator(".detail-tabs [data-detail-level=species]").click();
   await page.locator("[data-detail-target]").selectOption(extinct.id);
   const detail = page.getByRole("region", { name: "层级详情" });
   await expect(detail).toContainText("已灭绝 · 历史摘要");
@@ -285,7 +285,7 @@ test("loads and inspects an archived organization history", async ({ page }) => 
   });
 
   await expect(page.locator("#inspector")).toContainText(regionId);
-  await page.locator("[data-detail-level=city]").click();
+  await page.locator(".detail-tabs [data-detail-level=city]").click();
   await page.locator("[data-detail-target]").selectOption(organization.id);
   const detail = page.locator("#inspector .detail-report");
   await expect(detail).toContainText(organization.id);
@@ -684,26 +684,26 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await expect(page.locator('[data-layer="culture"]')).toHaveClass(/active/);
   await expect(page.locator("#legend-low")).toHaveText("未形成");
   await expect(page.locator("#legend-high")).toHaveText("文化特征强");
-  await page.locator("[data-detail-level=culture]").click();
+  await page.locator(".detail-tabs [data-detail-level=culture]").click();
   await page.locator("[data-detail-target]").selectOption("culture:e2e");
   const detail = page.getByRole("region", { name: "层级详情" });
   await expect(detail).toContainText("文化报告");
   await expect(detail).toContainText("文化价值");
   await expect(detail.locator('[data-history-level="culture"]')).toContainText("对象演化时间轴");
-  await page.locator("[data-detail-level=substance]").click();
+  await page.locator(".detail-tabs [data-detail-level=substance]").click();
   await page.locator("[data-detail-target]").selectOption("substance:e2e-composite");
   await expect(detail).toContainText("物质报告");
   await expect(detail).toContainText("辉棱复晶");
   await expect(detail).toContainText("澜脉晶");
   await expect(detail).toContainText("导电性");
   await expect(detail.locator('[data-history-level="substance"]')).toHaveCount(1);
-  await page.locator("[data-detail-level=pathogen]").click();
+  await page.locator(".detail-tabs [data-detail-level=pathogen]").click();
   await page.locator("[data-detail-target]").selectOption(pathogen.id);
   await expect(detail).toContainText("病原体报告");
   await expect(detail).toContainText("雾环疫");
   await expect(detail).toContainText("累计病例");
   await expect(detail.locator('[data-history-level="pathogen"]')).toHaveCount(1);
-  await page.locator("[data-detail-level=agent]").click();
+  await page.locator(".detail-tabs [data-detail-level=agent]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
   await expect(detail).toContainText("个人健康");
   await expect(detail).toContainText("活动感染");
@@ -713,7 +713,7 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await expect(detail.locator('[data-history-level="agent"]')).toHaveCount(1);
   await page.getByRole("region", { name: "个体遗传" }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: "test-results/personal-genetics.png", fullPage: true });
-  await page.locator("[data-detail-level=species]").click();
+  await page.locator(".detail-tabs [data-detail-level=species]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
   await expect(detail).toContainText("物种报告");
   await expect(detail).toContainText("认知潜力");
@@ -723,12 +723,12 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await expect(detail).toContainText("感官系统");
   await expect(detail).toContainText("创新签名");
   await expect(detail.locator('[data-history-level="species"]')).toHaveCount(1);
-  await page.locator("[data-detail-level=population]").click();
+  await page.locator(".detail-tabs [data-detail-level=population]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
   await expect(detail).toContainText("种群报告");
   await expect(detail).toContainText("能量状态");
   await expect(detail.locator('[data-history-level="population"]')).toHaveCount(1);
-  await page.locator("[data-detail-level=worldview]").click();
+  await page.locator(".detail-tabs [data-detail-level=worldview]").click();
   await page.locator("[data-detail-target]").selectOption({ index: 1 });
   await expect(detail).toContainText("流派报告");
   await expect(detail).toContainText("风弦观测院");
@@ -832,7 +832,7 @@ test("navigates from a city report to its state and family reports", async ({ pa
     mimeType: "application/json",
     buffer: Buffer.from(serializeWorld(state)),
   });
-  await page.locator("[data-detail-level=city]").click();
+  await page.locator(".detail-tabs [data-detail-level=city]").click();
   await page.locator("[data-detail-target]").selectOption(city.id);
   const inspector = page.getByRole("region", { name: "层级详情" });
   await expect(inspector).toContainText("城市报告");
