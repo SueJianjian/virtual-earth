@@ -1,4 +1,5 @@
 import type { Grid, WorldEvent, WorldState } from "../types.ts";
+import { isOcean } from "./terrain.ts";
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
@@ -68,8 +69,17 @@ export const simulateWater = (
     const rain = clamp01(precipitation.values[index] ?? 0) * (0.022 + (1 - elevationValue) * 0.012);
     const diffusion = (neighborWater - waterValue) * 0.045;
     const runoff = Math.max(0, elevationValue - neighborElevation) * waterValue * 0.035;
+    const localOcean = isOcean(elevationValue);
+    const currentX = state.ocean.currentX.values[index] ?? 0;
+    const currentY = state.ocean.currentY.values[index] ?? 0;
+    const currentUpstreamX = (x - Math.sign(currentX) + water.width) % water.width;
+    const currentUpstreamY = Math.max(0, Math.min(water.height - 1, y - Math.sign(currentY)));
+    const currentUpstream = currentUpstreamY * water.width + currentUpstreamX;
+    const currentAdvection = localOcean && isOcean(elevation.values[currentUpstream] ?? elevationValue)
+      ? ((water.values[currentUpstream] ?? waterValue) - waterValue) * Math.min(0.06, Math.hypot(currentX, currentY) * 0.045)
+      : 0;
     const years = Math.max(0, elapsedYears);
-    next[index] = clamp01(waterValue + (-evaporation + rain + diffusion - runoff) * years);
+    next[index] = clamp01(waterValue + (-evaporation + rain + diffusion + currentAdvection - runoff) * years);
   }
   return rebalance(next, targetTotal);
 };

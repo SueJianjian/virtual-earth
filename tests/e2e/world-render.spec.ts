@@ -325,11 +325,27 @@ test("renders a formed crust as a global map with expandable local detail", asyn
   await expect(canvas).toHaveAttribute("data-terrain-reuse", "false");
   await page.locator("#step-button").click();
   await expect(canvas).toHaveAttribute("data-terrain-reuse", "true");
+  for (const layer of ["seaTemperature", "salinity", "currents", "seaIce"] as const) {
+    await page.locator(`[data-layer="${layer}"]`).click();
+    await expect(page.locator(`[data-layer="${layer}"]`)).toHaveClass(/active/);
+  }
+  await expect(page.locator("#status-panel")).toContainText("海洋覆盖");
 
   const globeBox = await canvas.boundingBox();
   if (!globeBox) throw new Error("Planet globe is not measurable");
-  await canvas.click({ position: { x: globeBox.width / 2, y: globeBox.height / 2 } });
+  const oceanProbePoints = [
+    [0.5, 0.5], [0.38, 0.5], [0.62, 0.5], [0.5, 0.38], [0.5, 0.62],
+    [0.32, 0.38], [0.68, 0.38], [0.32, 0.62], [0.68, 0.62],
+  ] as const;
+  for (const [x, y] of oceanProbePoints) {
+    await canvas.click({ position: { x: globeBox.width * x, y: globeBox.height * y } });
+    if ((await page.locator("#inspector").textContent())?.includes("海表温度")) break;
+  }
   await expect(page.locator("#inspector")).toContainText("region:");
+  await expect(page.locator("#inspector .ocean-report")).toBeVisible();
+  await expect(page.locator("#inspector")).toContainText("海表温度");
+  await expect(page.locator("#inspector")).toContainText("相对盐度");
+  await expect(page.locator("#inspector")).toContainText("洋流速度");
   const globeSignal = await canvas.evaluate((element: HTMLCanvasElement) => {
     const context = element.getContext("webgl2") ?? element.getContext("webgl");
     if (!context || element.width === 0 || element.height === 0) return 0;

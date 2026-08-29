@@ -66,6 +66,34 @@ describe("food security map layer", () => {
     expect(colorForCell(snapshot, 0, "rainfall")).not.toEqual(colorForCell(snapshot, 1, "rainfall"));
   });
 
+  it("renders ocean overlays from sea temperature, salinity, currents and sea ice", () => {
+    const world = createWorld(207, { width: 8, height: 8, formation: "formed" });
+    world.fields.elevation.values.fill(0.1);
+    world.ocean.seaTemperature.values[0] = 0;
+    world.ocean.seaTemperature.values[1] = 1;
+    world.ocean.salinity.values[0] = 0;
+    world.ocean.salinity.values[1] = 1;
+    world.ocean.currentX.values[0] = 0;
+    world.ocean.currentX.values[1] = 1;
+    world.ocean.seaIce.values[0] = 0;
+    world.ocean.seaIce.values[1] = 1;
+    const snapshot: WorldSnapshot = {
+      seed: world.seed,
+      tick: 0,
+      years: 0,
+      formation: world.formation,
+      ocean: world.ocean,
+      digest: "",
+      fields: world.fields,
+      chemistry: world.chemistry,
+      metrics: {},
+    };
+
+    for (const layer of ["seaTemperature", "salinity", "currents", "seaIce"] as const) {
+      expect(colorForCell(snapshot, 0, layer)).not.toEqual(colorForCell(snapshot, 1, layer));
+    }
+  });
+
   it("renders local carbon and oxygen chemistry as distinct overlays", () => {
     const world = createWorld(202, { width: 2, height: 1 });
     world.chemistry.carbon.values.set([0, 1]);

@@ -1,12 +1,16 @@
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
-export type MapLayer = "natural" | "tectonics" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
+export type MapLayer = "natural" | "tectonics" | "temperature" | "rainfall" | "seaTemperature" | "salinity" | "currents" | "seaIce" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
 
 export const layerLabels: Record<MapLayer, string> = {
   natural: "自然",
   tectonics: "地质板块",
   temperature: "温度",
   rainfall: "降水",
+  seaTemperature: "海温",
+  salinity: "盐度",
+  currents: "洋流",
+  seaIce: "海冰",
   nutrients: "养分",
   biomass: "生物量",
   carbon: "碳循环",
@@ -19,6 +23,7 @@ export const layerLabels: Record<MapLayer, string> = {
 };
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
+const isOceanCell = (elevation: number): boolean => elevation < 0.48;
 const mix = (from: [number, number, number], to: [number, number, number], amount: number): [number, number, number] => [
   Math.round(from[0] + (to[0] - from[0]) * amount),
   Math.round(from[1] + (to[1] - from[1]) * amount),
@@ -44,6 +49,10 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const water = clamp(fields.water.values[index] ?? 0);
   const temperature = clamp(fields.temperature.values[index] ?? 0);
   const precipitation = clamp(snapshot.atmosphere?.precipitation.values[index] ?? 0);
+  const seaTemperature = clamp(snapshot.ocean?.seaTemperature.values[index] ?? temperature);
+  const salinity = clamp(snapshot.ocean?.salinity.values[index] ?? 0.52);
+  const currentMagnitude = clamp(Math.hypot(snapshot.ocean?.currentX.values[index] ?? 0, snapshot.ocean?.currentY.values[index] ?? 0));
+  const seaIce = clamp(snapshot.ocean?.seaIce.values[index] ?? 0);
   const nutrients = clamp(fields.nutrients.values[index] ?? 0);
   const biomass = clamp(fields.biomass.values[index] ?? 0);
   const carbon = clamp(snapshot.chemistry.carbon.values[index] ?? 0);
@@ -65,6 +74,18 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   }
   if (layer === "temperature") return mix([43, 93, 145], [221, 72, 40], temperature);
   if (layer === "rainfall") return mix([37, 43, 46], [44, 163, 191], precipitation);
+  if (layer === "seaTemperature") return isOceanCell(elevation)
+    ? mix([38, 93, 149], [232, 117, 52], seaTemperature)
+    : [39, 44, 45];
+  if (layer === "salinity") return isOceanCell(elevation)
+    ? mix([40, 89, 123], [223, 181, 75], salinity)
+    : [39, 44, 45];
+  if (layer === "currents") return isOceanCell(elevation)
+    ? mix([31, 59, 91], [70, 201, 178], currentMagnitude)
+    : [39, 44, 45];
+  if (layer === "seaIce") return isOceanCell(elevation)
+    ? mix([27, 58, 76], [214, 239, 235], seaIce)
+    : [39, 44, 45];
   if (layer === "nutrients") return mix([51, 47, 41], [211, 167, 63], nutrients);
   if (layer === "biomass") return mix([50, 48, 43], [65, 157, 85], biomass);
   if (layer === "carbon") return mix([47, 92, 105], [201, 118, 58], carbon);

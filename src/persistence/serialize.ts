@@ -19,6 +19,7 @@ import { createOrbitalState, isOrbitalState } from "../sim/environment/orbit.ts"
 import { createClimateCycleState, isClimateCycleState } from "../sim/environment/cycle.ts";
 import { createTectonicState, isTectonicState } from "../sim/environment/geology.ts";
 import { isAtmosphereState, restoreAtmosphereState } from "../sim/environment/atmosphere.ts";
+import { isOceanState, restoreOceanState } from "../sim/environment/ocean.ts";
 
 const encode = (value: unknown): unknown => {
   if (value instanceof Float32Array) return { __type: "Float32Array", values: Array.from(value) };
@@ -331,6 +332,16 @@ const validateWorld = (value: unknown): WorldState => {
   if (!isAtmosphereState(atmosphere, elevationGrid.width, elevationGrid.height)) {
     throw new Error("Save contains invalid atmosphere state");
   }
+  const ocean = world.ocean === undefined
+    ? restoreOceanState(world.seed!, fields as WorldState["fields"], atmosphere, {
+      elapsedYears: world.years!,
+      lastUpdatedTick: world.tick,
+      timelineStep: world.timeline?.step ?? String(world.tick),
+    })
+    : world.ocean;
+  if (!isOceanState(ocean, elevationGrid.width, elevationGrid.height)) {
+    throw new Error("Save contains invalid ocean state");
+  }
   if (world.climateCycle !== undefined && !isClimateCycleState(world.climateCycle)) throw new Error("Save contains invalid climate cycle state");
   const climateCycle = world.climateCycle === undefined
     ? hydrateClimateCycle(timelineDays, fields as WorldState["fields"])
@@ -482,6 +493,7 @@ const validateWorld = (value: unknown): WorldState => {
     formation,
     tectonics,
     atmosphere,
+    ocean,
     orbital,
     climateCycle,
     species: normalizedSpecies,

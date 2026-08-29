@@ -798,6 +798,33 @@ const regionalAtmosphereReport = (snapshot: WorldSnapshot, regionId?: RegionId):
   return `<section class="organization-governance atmosphere-report" aria-label="区域大气环流"><div class="detail-heading"><strong>大气环流</strong><span>${direction} · ${rainClass}</span></div><dl class="detail-grid"><div><dt>相对气压</dt><dd>${formatPercent(pressure).value}%</dd></div><div><dt>风向</dt><dd>${direction}</dd></div><div><dt>风速指数</dt><dd>${formatPercent(Math.hypot(windX, windY)).value}%</dd></div><div><dt>实际降水</dt><dd>${formatPercent(precipitation).value}%</dd></div><div><dt>东西风分量</dt><dd>${formatNumber(windX, 3)}</dd></div><div><dt>南北风分量</dt><dd>${formatNumber(windY, 3)}</dd></div><div><dt>环流更新</dt><dd>${format(atmosphere.updateCount)} 次</dd></div><div><dt>最后更新</dt><dd>演化步 ${escapeHtml(atmosphere.lastUpdatedTimelineStep ?? String(atmosphere.lastUpdatedTick))}</dd></div></dl></section>`;
 };
 
+const regionalOceanReport = (snapshot: WorldSnapshot, regionId?: RegionId): string => {
+  const ocean = snapshot.ocean;
+  if (!ocean || !regionId) return "";
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  const x = Number(match?.[1] ?? -1);
+  const y = Number(match?.[2] ?? -1);
+  if (x < 0 || x >= ocean.seaTemperature.width || y < 0 || y >= ocean.seaTemperature.height) return "";
+  const index = y * ocean.seaTemperature.width + x;
+  const elevation = snapshot.fields.elevation.values[index] ?? 0;
+  if (snapshot.formation.phase !== "stable-crust") {
+    return `<section class="organization-governance ocean-report" aria-label="区域海洋"><div class="detail-heading"><strong>海洋状态</strong><span>尚未形成稳定海洋</span></div><div class="detail-tags"><span>地壳冷却与水体汇聚后开始记录海温、盐度、洋流和海冰</span></div></section>`;
+  }
+  if (elevation >= 0.48) {
+    return `<section class="organization-governance ocean-report" aria-label="区域海洋"><div class="detail-heading"><strong>海洋状态</strong><span>陆地区域</span></div><div class="detail-tags"><span>该坐标没有海洋水体，海洋网格保持为空</span></div></section>`;
+  }
+  const seaTemperature = ocean.seaTemperature.values[index] ?? 0;
+  const salinity = ocean.salinity.values[index] ?? 0;
+  const currentX = ocean.currentX.values[index] ?? 0;
+  const currentY = ocean.currentY.values[index] ?? 0;
+  const seaIce = ocean.seaIce.values[index] ?? 0;
+  const horizontal = Math.abs(currentX) < 0.025 ? "" : currentX > 0 ? "向东" : "向西";
+  const vertical = Math.abs(currentY) < 0.025 ? "" : currentY > 0 ? "向南" : "向北";
+  const direction = [horizontal, vertical].filter(Boolean).join("、") || "局地静流";
+  const iceLabel = seaIce >= 0.7 ? "高覆盖海冰" : seaIce >= 0.15 ? "季节性海冰" : "无明显海冰";
+  return `<section class="organization-governance ocean-report" aria-label="区域海洋"><div class="detail-heading"><strong>海洋状态</strong><span>${direction} · ${iceLabel}</span></div><dl class="detail-grid"><div><dt>海表温度</dt><dd>${formatPercent(seaTemperature).value}%</dd></div><div><dt>相对盐度</dt><dd>${formatPercent(salinity).value}%</dd></div><div><dt>洋流方向</dt><dd>${direction}</dd></div><div><dt>洋流速度</dt><dd>${formatPercent(Math.hypot(currentX, currentY)).value}%</dd></div><div><dt>东西流分量</dt><dd>${formatNumber(currentX, 3)}</dd></div><div><dt>南北流分量</dt><dd>${formatNumber(currentY, 3)}</dd></div><div><dt>海冰覆盖</dt><dd>${formatPercent(seaIce).value}%</dd></div><div><dt>海洋更新</dt><dd>${format(ocean.updateCount)} 次</dd></div></dl></section>`;
+};
+
 const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"]): Array<{ id: string; label: string }> => {
   if (level === "region") return [];
   if (level === "substance") return (snapshot.substances ?? [])
@@ -900,7 +927,8 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     }).join("");
     const facilities = (snapshot.facilities ?? []).filter((facility) => facility.regionId === snapshot.focusRegionId);
     const substances = (snapshot.substances ?? []).filter((substance) => substance.regionId === snapshot.focusRegionId);
-    const environmentReport = regionalAtmosphereReport(snapshot, snapshot.focusRegionId)
+    const environmentReport = regionalOceanReport(snapshot, snapshot.focusRegionId)
+      + regionalAtmosphereReport(snapshot, snapshot.focusRegionId)
       + regionalTectonicReport(snapshot, snapshot.focusRegionId)
       + regionalHealthReport(snapshot, snapshot.focusRegionId)
       + ecologicalRelationshipReport(snapshot, snapshot.focusRegionId);
@@ -1165,6 +1193,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
   const windSpeed = atmosphere
     ? Math.hypot(atmosphere.windX.values[selection.index] ?? 0, atmosphere.windY.values[selection.index] ?? 0)
     : undefined;
+  const ocean = snapshot.ocean;
   element.innerHTML = `
     <div class="inspector-head"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
     <section class="observation-group" aria-label="区域地表">
@@ -1181,6 +1210,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
         ${seasonalOffset === undefined ? "" : observationMetric("季节温度偏置", { value: formatNumber(seasonalOffset * 100, 1), unit: "模型点" }, "由轴倾角与纬度决定")}
       </dl>
     </section>
+    ${ocean ? `<section class="observation-group" aria-label="区域海洋"><h3><span>海洋</span><small>海温、盐度与洋流</small></h3><dl class="observation-list">${(fields.elevation.values[selection.index] ?? 0) < 0.48 ? `${observationMetric("海表温度", formatPercent(ocean.seaTemperature.values[selection.index]), "相对海温")}${observationMetric("相对盐度", formatPercent(ocean.salinity.values[selection.index]), "相对盐度")}${observationMetric("洋流速度", formatPercent(Math.hypot(ocean.currentX.values[selection.index] ?? 0, ocean.currentY.values[selection.index] ?? 0)), "东西与南北流分量")}${observationMetric("海冰覆盖", formatPercent(ocean.seaIce.values[selection.index]), "相对覆盖")}` : `<div class="observation-empty">当前坐标为陆地区域</div>`}</dl></section>` : ""}
     <section class="observation-group" aria-label="区域生态">
       <h3><span>生态</span><small>局地承载状态</small></h3>
       <dl class="observation-list">

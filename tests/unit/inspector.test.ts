@@ -44,6 +44,7 @@ const lineageSnapshot = (): WorldSnapshot => {
     formation: state.formation,
     tectonics: state.tectonics,
     atmosphere: state.atmosphere,
+    ocean: state.ocean,
     digest: "test",
     fields: state.fields,
     chemistry: state.chemistry,

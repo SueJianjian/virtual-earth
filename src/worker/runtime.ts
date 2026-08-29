@@ -647,6 +647,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       formation: structuredClone(state.formation),
       tectonics: structuredClone(state.tectonics),
       atmosphere: structuredClone(state.atmosphere),
+      ocean: structuredClone(state.ocean),
       eventArchive: structuredClone(state.eventArchive),
       historySamples: structuredClone(state.eventArchive.historySamples ?? []),
       runtime: runtimeDiagnostics(),

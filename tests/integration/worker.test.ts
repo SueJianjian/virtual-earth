@@ -48,6 +48,8 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.tectonics?.plateIndex.values).toHaveLength(64);
     expect(snapshot.snapshot.atmosphere?.pressure.values).toHaveLength(64);
     expect(snapshot.snapshot.atmosphere?.precipitation.values).toHaveLength(64);
+    expect(snapshot.snapshot.ocean?.seaTemperature.values).toHaveLength(64);
+    expect(snapshot.snapshot.ocean?.seaIce.values).toHaveLength(64);
   });
 
   it("exposes bounded annual history samples through worker snapshots", () => {

@@ -24,6 +24,25 @@ describe("world persistence", () => {
     expect(firstUpgrade.atmosphere.pressure.values).toHaveLength(64);
   });
 
+  it("round-trips ocean state and deterministically restores legacy ocean data", () => {
+    const world = createWorld(123, { width: 8, height: 8, formation: "formed" });
+    const restored = deserializeWorld(serializeWorld(world));
+    expect(restored.ocean).toEqual(world.ocean);
+
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { ocean?: unknown } };
+    delete legacy.world.ocean;
+    const firstUpgrade = deserializeWorld(JSON.stringify(legacy));
+    const secondUpgrade = deserializeWorld(JSON.stringify(legacy));
+    expect(firstUpgrade.ocean).toEqual(secondUpgrade.ocean);
+    expect(firstUpgrade.ocean.seaTemperature.values).toHaveLength(64);
+  });
+
+  it("rejects malformed ocean grids instead of loading corrupted sea state", () => {
+    const save = JSON.parse(serializeWorld(createWorld(124, { width: 8, height: 8 }))) as { world: { ocean: { salinity: { values: { values: number[] } } } } };
+    save.world.ocean.salinity.values.values[0] = 2;
+    expect(() => deserializeWorld(JSON.stringify(save))).toThrow("invalid ocean state");
+  });
+
   it("rejects malformed atmosphere grids instead of loading corrupted circulation", () => {
     const save = JSON.parse(serializeWorld(createWorld(122, { width: 8, height: 8 }))) as { world: { atmosphere: { pressure: { values: { values: number[] } } } } };
     save.world.atmosphere.pressure.values.values[0] = 2;

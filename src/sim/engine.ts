@@ -37,6 +37,7 @@ import { orbitalStateForWorld } from "./environment/orbit.ts";
 import { isClimateCycleState } from "./environment/cycle.ts";
 import { isTectonicState } from "./environment/geology.ts";
 import { isAtmosphereState } from "./environment/atmosphere.ts";
+import { isOceanState } from "./environment/ocean.ts";
 import type {
   EntityEffect,
   RuleContext,
@@ -961,6 +962,13 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
   )) {
     throw new Error("Invalid atmosphere state");
   }
+  if (delta.oceanEffect && !isOceanState(
+    delta.oceanEffect,
+    state.fields.elevation.width,
+    state.fields.elevation.height,
+  )) {
+    throw new Error("Invalid ocean state");
+  }
 };
 
 const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: readonly WorldDelta[] = [delta]): void => {
@@ -989,6 +997,7 @@ const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: rea
   if (delta.climateCycleEffect) state.climateCycle = structuredClone(delta.climateCycleEffect);
   if (delta.tectonicEffect) state.tectonics = structuredClone(delta.tectonicEffect);
   if (delta.atmosphereEffect) state.atmosphere = structuredClone(delta.atmosphereEffect);
+  if (delta.oceanEffect) state.ocean = structuredClone(delta.oceanEffect);
   for (const effect of delta.lodEffects ?? []) {
     const index = state.lod.summaries.findIndex((summary) => summary.regionId === (effect.operation === "upsert-summary" ? effect.summary.regionId : effect.regionId));
     if (effect.operation === "remove-summary") {
@@ -1167,6 +1176,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     if (delta.climateCycleEffect) merged.climateCycleEffect = delta.climateCycleEffect;
     if (delta.tectonicEffect) merged.tectonicEffect = delta.tectonicEffect;
     if (delta.atmosphereEffect) merged.atmosphereEffect = delta.atmosphereEffect;
+    if (delta.oceanEffect) merged.oceanEffect = delta.oceanEffect;
   }
   const next = options.mutateState
     ? previous

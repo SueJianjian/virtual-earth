@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { applyEnvironmentDelta, applyNaturalHazardWaterEffects, calculateClimate, initializeEnvironment, MAX_NATURAL_HAZARDS_PER_STEP, naturalHazardDelta, stepEnvironment } from "../../src/sim/environment/index.ts";
 import { projectChemistry } from "../../src/sim/environment/chemistry.ts";
-import { totalWater } from "../../src/sim/environment/hydrology.ts";
+import { simulateWater, totalWater } from "../../src/sim/environment/hydrology.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { createTectonicState, isTectonicState, MAX_TECTONIC_EVENTS_PER_STEP, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES, stepTectonics } from "../../src/sim/environment/geology.ts";
 import { calculateAtmosphere, createAtmosphereState, isAtmosphereState } from "../../src/sim/environment/atmosphere.ts";
+import { calculateOcean, createOceanState, isOceanState } from "../../src/sim/environment/ocean.ts";
 
 const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
@@ -64,6 +65,55 @@ describe("environment simulation", () => {
     expect(Object.values(atmosphere).filter((value) => typeof value === "object" && "values" in value)).toHaveLength(4);
     expect(atmosphere.updateCount).toBe(world.atmosphere.updateCount + 1);
     expect(isAtmosphereState(atmosphere, 16, 8)).toBe(true);
+  });
+
+  it("couples ocean temperature, salinity and ice to bounded environmental inputs", () => {
+    const world = makeEnvironment();
+    const coldFields = structuredClone(world.fields);
+    const warmFields = structuredClone(world.fields);
+    coldFields.temperature.values.fill(0.2);
+    warmFields.temperature.values.fill(0.8);
+    const cold = calculateOcean(createOceanState(world.seed, 16, 8), coldFields, world.atmosphere, world.seed, { elapsedYears: 1 });
+    const warm = calculateOcean(createOceanState(world.seed, 16, 8), warmFields, world.atmosphere, world.seed, { elapsedYears: 1 });
+    const mean = (values: Float32Array): number => values.reduce((sum, value) => sum + value, 0) / values.length;
+    expect(mean(warm.seaTemperature.values)).toBeGreaterThan(mean(cold.seaTemperature.values));
+    expect(cold.seaIce.values.some((value) => value > 0)).toBe(true);
+
+    const dryFields = structuredClone(world.fields);
+    const wetFields = structuredClone(world.fields);
+    dryFields.humidity.values.fill(0);
+    wetFields.humidity.values.fill(1);
+    const dryAtmosphere = structuredClone(world.atmosphere);
+    const wetAtmosphere = structuredClone(world.atmosphere);
+    dryAtmosphere.precipitation.values.fill(0);
+    wetAtmosphere.precipitation.values.fill(1);
+    const dry = calculateOcean(createOceanState(world.seed, 16, 8), dryFields, dryAtmosphere, world.seed, { elapsedYears: 1 });
+    const wet = calculateOcean(createOceanState(world.seed, 16, 8), wetFields, wetAtmosphere, world.seed, { elapsedYears: 1 });
+    expect(mean(dry.salinity.values)).toBeGreaterThan(mean(wet.salinity.values));
+    expect(isOceanState(warm, 16, 8)).toBe(true);
+  });
+
+  it("keeps ocean circulation finite for an effectively unbounded elapsed interval", () => {
+    const world = makeEnvironment();
+    const ocean = calculateOcean(world.ocean, world.fields, world.atmosphere, world.seed, {
+      elapsedYears: 1_000_000_000,
+      lastUpdatedTick: Number.MAX_SAFE_INTEGER,
+      lastUpdatedYears: Number.MAX_SAFE_INTEGER,
+      timelineStep: "1000000000000000000000000",
+    });
+
+    expect(ocean.updateCount).toBe(world.ocean.updateCount + 1);
+    expect(ocean.lastUpdatedTick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(ocean.lastUpdatedYears).toBe(Number.MAX_SAFE_INTEGER);
+    expect(ocean.lastUpdatedTimelineStep).toBe("1000000000000000000000000");
+    expect(isOceanState(ocean, 16, 8)).toBe(true);
+    expect([
+      ...ocean.seaTemperature.values,
+      ...ocean.salinity.values,
+      ...ocean.currentX.values,
+      ...ocean.currentY.values,
+      ...ocean.seaIce.values,
+    ].every(Number.isFinite)).toBe(true);
   });
 
   it("creates deterministic, seed-specific bounded tectonic plates", () => {
@@ -146,6 +196,24 @@ describe("environment simulation", () => {
     expect(after.organizations).toHaveLength(0);
     expect(after.atmosphere.updateCount).toBe(state.atmosphere.updateCount + 1);
     expect(after.atmosphere.precipitation.values.some((value) => value > 0)).toBe(true);
+  });
+
+  it("advects ocean water with currents while preserving the global water total", () => {
+    const calm = createWorld(90_005, { width: 8, height: 8, formation: "formed" });
+    calm.fields.elevation.values.fill(0.1);
+    calm.fields.water.values.fill(0);
+    calm.fields.water.values[3] = 1;
+    calm.fields.humidity.values.fill(1);
+    calm.atmosphere.precipitation.values.fill(0);
+    const moving = structuredClone(calm);
+    moving.ocean.currentX.values.fill(1);
+    moving.ocean.currentY.values.fill(0);
+
+    const calmWater = simulateWater(calm, [], 1, calm.atmosphere.precipitation);
+    const movingWater = simulateWater(moving, [], 1, moving.atmosphere.precipitation);
+    expect(totalWater({ ...moving.fields.water, values: movingWater })).toBeCloseTo(totalWater(calm.fields.water), 6);
+    expect(Array.from(movingWater)).not.toEqual(Array.from(calmWater));
+    expect(movingWater[4]).toBeGreaterThan(calmWater[4] ?? 0);
   });
 
   it("uses bounded typed-array patches for dense environmental fields", () => {

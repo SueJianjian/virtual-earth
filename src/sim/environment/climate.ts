@@ -39,13 +39,24 @@ export const calculateClimate = (
     const elevationValue = elevation.values[index] ?? 0;
     const seasonalOffset = seasonalTemperatureOffset(orbital, y, elevation.height);
     const diurnalOffset = diurnalTemperatureOffset(orbital, x, elevation.width);
-    const equilibrium = clamp01(temperatureAt(
+    const terrestrialEquilibrium = temperatureAt(
       elevationValue,
       y,
       elevation.height,
       oceanFraction,
       orbitalFlux,
-    ) + greenhouse + seasonalOffset + diurnalOffset);
+    ) + greenhouse + seasonalOffset + diurnalOffset;
+    const seaSurfaceTemperature = state.ocean && elevationValue < 0.48
+      ? state.ocean.seaTemperature.values[index] ?? terrestrialEquilibrium
+      : terrestrialEquilibrium;
+    const seaIceCooling = state.ocean && elevationValue < 0.48
+      ? (state.ocean.seaIce.values[index] ?? 0) * 0.06
+      : 0;
+    const equilibrium = clamp01(
+      terrestrialEquilibrium * (elevationValue < 0.48 ? 0.76 : 1)
+      + seaSurfaceTemperature * (elevationValue < 0.48 ? 0.24 : 0)
+      - seaIceCooling,
+    );
     const previousTemperature = state.fields.temperature.values[index] ?? 0;
     // No thermal history exists while the first climate field is initialized.
     const thermalInertia = previousTemperature > 0 ? oceanFraction * 0.42 : 0;

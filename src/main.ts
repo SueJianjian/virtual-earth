@@ -262,6 +262,14 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
         ? ["板块内部", "活跃边界"]
       : layer === "rainfall"
         ? ["少雨", "强降水"]
+      : layer === "seaTemperature"
+        ? ["低海温", "高海温"]
+      : layer === "salinity"
+        ? ["低盐度", "高盐度"]
+      : layer === "currents"
+        ? ["弱洋流", "强洋流"]
+      : layer === "seaIce"
+        ? ["无海冰", "海冰覆盖"]
       : layer === "foodSecurity"
         ? ["低保障", "高保障"]
         : layer === "health"

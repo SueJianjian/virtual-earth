@@ -78,6 +78,17 @@ export type AtmosphereState = {
   lastUpdatedTimelineStep?: string;
   lastUpdatedYears: number;
 };
+export type OceanState = {
+  seaTemperature: Grid;
+  salinity: Grid;
+  currentX: Grid;
+  currentY: Grid;
+  seaIce: Grid;
+  updateCount: number;
+  lastUpdatedTick: number;
+  lastUpdatedTimelineStep?: string;
+  lastUpdatedYears: number;
+};
 export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[]; formation?: "dust" | "formed" };
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
@@ -424,6 +435,7 @@ export type WorldDelta = {
   climateCycleEffect?: ClimateCycleState;
   tectonicEffect?: TectonicState;
   atmosphereEffect?: AtmosphereState;
+  oceanEffect?: OceanState;
 };
 
 export type StateMetric =
@@ -1241,6 +1253,7 @@ export type WorldState = {
   formation: PlanetFormationState;
   tectonics: TectonicState;
   atmosphere: AtmosphereState;
+  ocean: OceanState;
   fields: {
     elevation: Grid;
     temperature: Grid;
