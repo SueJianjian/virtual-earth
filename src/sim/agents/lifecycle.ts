@@ -36,6 +36,7 @@ const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.mi
 const asEntityId = (value: string): EntityId => value as EntityId;
 export const MAX_DETAILED_AGENTS = 256;
 export const MAX_AGENT_MEMORY_IDS = 128;
+export const MAX_BELIEFS_PER_AGENT = 32;
 export const MAX_RELATIONSHIPS_PER_AGENT = 32;
 export const MAX_RELATIONSHIP_RECORDS = Math.floor(MAX_DETAILED_AGENTS * MAX_RELATIONSHIPS_PER_AGENT / 2);
 
@@ -123,6 +124,12 @@ export const compactAgentMemoryRecords = (state: WorldState): number => {
 
   let removed = 0;
   for (const agent of state.agents) {
+    const beliefIds = [...new Set(agent.beliefIds)].sort();
+    if (beliefIds.length > MAX_BELIEFS_PER_AGENT) {
+      agent.beliefIds = beliefIds.slice(-MAX_BELIEFS_PER_AGENT);
+    } else if (beliefIds.some((id, index) => id !== agent.beliefIds[index])) {
+      agent.beliefIds = beliefIds;
+    }
     const activeMemorySet = activeMemoriesByAgent.get(agent.id);
     const knowledgeIsCanonical = agent.knowledgeIds.length <= MAX_AGENT_MEMORY_IDS && isSortedUnique(agent.knowledgeIds);
     const activeMemories = activeMemorySet

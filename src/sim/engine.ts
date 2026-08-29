@@ -13,17 +13,17 @@ import { stepEnvironment } from "./environment/index.ts";
 import { stepEcology } from "./ecology/index.ts";
 import { compactExtinctSpecies, compactPopulationRecords } from "./ecology/archive.ts";
 import { ensureSpeciesIdentity } from "./ecology/blueprints.ts";
-import { agentsStage, compactAgentMemoryRecords, compactRelationshipRecords } from "./agents/index.ts";
+import { agentsStage, compactAgentMemoryRecords, compactRelationshipRecords, MAX_BELIEFS_PER_AGENT } from "./agents/index.ts";
 import { createRelationship } from "./agents/relationships.ts";
 import { cultureStage } from "./culture/index.ts";
-import { compactCultureRecords, compactKnowledgeRecords } from "./culture/archive.ts";
+import { compactCultureRecords, compactKnowledgeRecords, MAX_BELIEFS_PER_CULTURE } from "./culture/archive.ts";
 import { ensureCultureIdentity } from "./culture/identity.ts";
 import { societyStage } from "./society/index.ts";
 import { archiveOrganizationRecords, compactOrganizationRecords } from "./society/archive.ts";
 import { compactFacilityRecords } from "./society/facilities.ts";
 import { lodStage } from "./lod/index.ts";
 import { worldviewStage } from "./worldview/index.ts";
-import { compactWorldviewRecords } from "./worldview/archive.ts";
+import { compactWorldviewRecords, MAX_WORLDVIEW_PRACTICES } from "./worldview/archive.ts";
 import { reconcileWorldviewLifecycle } from "./worldview/lifecycle.ts";
 import { meanFoodSecurity } from "./agents/food.ts";
 import { worldDigest } from "./world.ts";
@@ -46,6 +46,7 @@ import type {
   WorldState,
   WorldviewEffect,
   WorldviewEntityState,
+  WorldviewGovernanceEffect,
 } from "./types.ts";
 
 const stageRegistry = new Map<string, SimulationStage>();
@@ -405,6 +406,157 @@ const fusionKindFor = (source: WorldviewEntityState, target: WorldviewEntityStat
       ? "cultivation-path"
       : "sect";
 
+const worldviewOrganizationRank: Record<WorldState["organizations"][number]["type"], number> = {
+  family: 0,
+  clan: 1,
+  tribe: 2,
+  settlement: 3,
+  city: 4,
+  state: 5,
+  federation: 6,
+  empire: 7,
+};
+
+const primaryWorldviewOrganization = (state: WorldState, regionId: string, preferredId?: string): WorldState["organizations"][number] | undefined => {
+  const preferred = preferredId
+    ? state.organizations.find((organization) => organization.id === preferredId && organization.status === "active" && organization.regionId === regionId)
+    : undefined;
+  if (preferred) return preferred;
+  return state.organizations
+    .filter((organization) => organization.status === "active" && organization.regionId === regionId)
+    .sort((left, right) => worldviewOrganizationRank[right.type] - worldviewOrganizationRank[left.type]
+      || right.memberIds.length - left.memberIds.length
+      || left.id.localeCompare(right.id))[0];
+};
+
+const worldviewGovernanceImpact = (kind: Extract<WorldviewEffect, { kind: "interact-entities" }>["interaction"]): {
+  effect: WorldviewGovernanceEffect;
+  values: Pick<NonNullable<WorldState["organizations"][number]["governance"]>, "stability" | "legitimacy" | "cohesion" | "publicGoods" | "warWeariness">;
+} => kind === "conflict"
+  ? { effect: "destabilizing", values: { stability: -0.006, legitimacy: -0.004, cohesion: -0.007, publicGoods: -0.002, warWeariness: 0.018 } }
+  : kind === "fusion"
+    ? { effect: "integrating", values: { stability: 0.004, legitimacy: 0.006, cohesion: 0.008, publicGoods: 0.003, warWeariness: -0.004 } }
+    : { effect: "stabilizing", values: { stability: 0.002, legitimacy: 0.003, cohesion: 0.004, publicGoods: 0.002, warWeariness: -0.002 } };
+
+const applyWorldviewGovernanceImpact = (
+  state: WorldState,
+  effect: Extract<WorldviewEffect, { kind: "interact-entities" }>,
+  source: WorldviewEntityState,
+  target: WorldviewEntityState,
+): WorldviewGovernanceEffect => {
+  const impact = worldviewGovernanceImpact(effect.interaction);
+  const scale = Math.max(0, Math.min(1, effect.intensity * (0.65 + effect.compatibility * 0.35)));
+  const regions = [...new Set([source.regionId, target.regionId])].sort();
+  for (const regionId of regions) {
+    const preferredId = regionId === source.regionId ? source.sponsorOrganizationId : target.sponsorOrganizationId;
+    const organization = primaryWorldviewOrganization(state, regionId, preferredId);
+    if (!organization) continue;
+    const governance = governanceForOrganization(organization);
+    organization.governance = {
+      ...governance,
+      stability: Math.max(0, Math.min(1, governance.stability + impact.values.stability * scale)),
+      legitimacy: Math.max(0, Math.min(1, governance.legitimacy + impact.values.legitimacy * scale)),
+      cohesion: Math.max(0, Math.min(1, governance.cohesion + impact.values.cohesion * scale)),
+      publicGoods: Math.max(0, Math.min(1, governance.publicGoods + impact.values.publicGoods * scale)),
+      warWeariness: Math.max(0, Math.min(1, governance.warWeariness + impact.values.warWeariness * scale)),
+    };
+  }
+  return impact.effect;
+};
+
+const sourcePhenomenonFor = (state: WorldState, entity: WorldviewEntityState): WorldState["worldview"]["phenomena"][number] | undefined => {
+  if (!entity.sourcePhenomenonId) return undefined;
+  return state.worldview.phenomena.find((phenomenon) => phenomenon.id === entity.sourcePhenomenonId && phenomenon.packId === entity.packId);
+};
+
+const boundedBeliefIds = (ids: readonly string[], requiredId: string): string[] => {
+  const unique = [...new Set([...ids, requiredId])].sort();
+  if (unique.length <= MAX_BELIEFS_PER_AGENT) return unique;
+  const retained = unique.filter((id) => id !== requiredId).slice(-(MAX_BELIEFS_PER_AGENT - 1));
+  return [...retained, requiredId].sort();
+};
+
+const boundedCultureBeliefIds = (ids: readonly string[], requiredId: string): string[] => {
+  const unique = [...new Set([...ids, requiredId])].sort();
+  if (unique.length <= MAX_BELIEFS_PER_CULTURE) return unique;
+  const retained = unique.filter((id) => id !== requiredId).slice(-(MAX_BELIEFS_PER_CULTURE - 1));
+  return [...retained, requiredId].sort();
+};
+
+const applyWorldviewTransmission = (
+  state: WorldState,
+  effect: Extract<WorldviewEffect, { kind: "interact-entities" }>,
+  source: WorldviewEntityState,
+  target: WorldviewEntityState,
+  interactionId: string,
+): { transmittedBeliefId?: string; transmittedPracticeId?: string } => {
+  if (source.regionId === target.regionId || (effect.interaction !== "propagation" && effect.interaction !== "fusion")) return {};
+  const targetAgentIds = new Set([
+    ...(target.memberIds ?? []),
+    ...state.agents.filter((agent) => agent.regionId === target.regionId).map((agent) => agent.id),
+  ]);
+  const targetAgents = [...targetAgentIds]
+    .map((agentId) => state.agents.find((agent) => agent.id === agentId))
+    .filter((agent): agent is WorldState["agents"][number] => agent !== undefined && agent.regionId === target.regionId)
+    .sort((left, right) => (right.traits.cognitivePotential ?? 0) - (left.traits.cognitivePotential ?? 0) || left.id.localeCompare(right.id));
+  const phenomenon = sourcePhenomenonFor(state, source);
+  const transmittedBeliefId = phenomenon ? `belief:${phenomenon.id}` : undefined;
+  if (transmittedBeliefId) {
+    const culture = state.cultures.find((candidate) => candidate.regionId === target.regionId);
+    if (culture && !culture.beliefIds.includes(transmittedBeliefId)) {
+      culture.beliefIds = boundedCultureBeliefIds(culture.beliefIds, transmittedBeliefId);
+    }
+    const adopterCount = Math.min(targetAgents.length, Math.max(1, Math.ceil(targetAgents.length * Math.min(1, effect.intensity * effect.compatibility * 0.25))));
+    for (const agent of targetAgents.slice(0, adopterCount)) agent.beliefIds = boundedBeliefIds(agent.beliefIds, transmittedBeliefId);
+  }
+
+  if (state.worldview.practices.length >= MAX_WORLDVIEW_PRACTICES || targetAgents.length === 0) return transmittedBeliefId ? { transmittedBeliefId } : {};
+  const sourcePractice = state.worldview.practices
+    .filter((practice) => practice.status === "active"
+      && practice.regionId === source.regionId
+      && state.agents.some((agent) => agent.id === practice.practitionerId)
+      && ((source.kind === "cultivation-path" && !source.sourcePhenomenonId)
+        || (source.sourcePhenomenonId !== undefined && practice.phenomenonId === source.sourcePhenomenonId)))
+    .sort((left, right) => right.attunement - left.attunement || left.id.localeCompare(right.id))[0];
+  const recipient = targetAgents.find((agent) => !state.worldview.practices.some((practice) => practice.practitionerId === agent.id
+    && practice.phenomenonId === sourcePractice?.phenomenonId));
+  if (!sourcePractice || !recipient) return transmittedBeliefId ? { transmittedBeliefId } : {};
+  const practiceId = `practice:transmission:${hashString(`${interactionId}:${sourcePractice.id}:${recipient.id}`).toString(16)}`;
+  if (state.worldview.practices.some((practice) => practice.id === practiceId)) return transmittedBeliefId ? { transmittedBeliefId, transmittedPracticeId: practiceId } : {};
+  const organization = primaryWorldviewOrganization(state, target.regionId);
+  state.worldview.practices.push({
+    id: practiceId,
+    packId: sourcePractice.packId,
+    name: `${sourcePractice.name} / transmitted`,
+    phenomenonId: sourcePractice.phenomenonId,
+    regionId: target.regionId,
+    practitionerId: recipient.id,
+    teacherId: sourcePractice.practitionerId,
+    originTick: nextSimulationTick(state),
+    originTimelineStep: nextSimulationStep(state),
+    lastTrainedTick: state.tick,
+    lastTrainedTimelineStep: timelineForWorld(state).step,
+    attunement: Math.max(0.02, Math.min(0.22, sourcePractice.attunement * 0.7)),
+    energy: 0.08,
+    attempts: 0,
+    failures: 0,
+    status: "active",
+    ...(organization ? { organizationId: organization.id } : {}),
+  });
+  const relationship = createRelationship("teacher", sourcePractice.practitionerId, recipient.id, nextSimulationTick(state), Math.max(0.35, Math.min(0.8, effect.compatibility)), nextSimulationStep(state));
+  if (!state.relationships.some((candidate) => candidate.id === relationship.id)) {
+    state.relationships.push(relationship);
+    for (const agentId of [relationship.fromId, relationship.toId]) {
+      const agent = state.agents.find((candidate) => candidate.id === agentId);
+      if (agent && !agent.relationshipIds.includes(relationship.id)) agent.relationshipIds.push(relationship.id);
+    }
+  }
+  return {
+    ...(transmittedBeliefId ? { transmittedBeliefId } : {}),
+    transmittedPracticeId: practiceId,
+  };
+};
+
 const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewEffect, { kind: "interact-entities" }>): void => {
   const source = state.worldview.entities.find((entity) => entity.id === effect.sourceEntityId);
   const target = state.worldview.entities.find((entity) => entity.id === effect.targetEntityId);
@@ -425,6 +577,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
   const targetPackId = target.packId;
   const intensity = Math.max(0, Math.min(1, effect.intensity));
   const compatibility = Math.max(0, Math.min(1, effect.compatibility));
+  const governanceEffect = applyWorldviewGovernanceImpact(state, effect, source, target);
 
   if (effect.interaction === "conflict") {
     source.influence = Math.max(0, Math.min(1, source.influence + intensity * 0.015));
@@ -475,6 +628,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
       };
       state.worldview.entities.push(fusionEntity);
     }
+    const transmission = applyWorldviewTransmission(state, effect, source, target, interactionId);
     source.fusionCount = addPersistentTotal(source.fusionCount ?? 0, 1);
     target.fusionCount = addPersistentTotal(target.fusionCount ?? 0, 1);
     source.lastInteractionTick = nextTick;
@@ -484,6 +638,8 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
     const fusionEntity = state.worldview.entities.find((entity) => entity.id === fusionId);
     if (existing) {
       if (fusionEntity) existing.fusionEntityId = fusionEntity.id;
+      existing.governanceEffect = governanceEffect;
+      Object.assign(existing, transmission);
       existing.status = "resolved";
     } else {
       state.worldview.interactions.push({
@@ -506,11 +662,15 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
         intensity,
         status: "resolved",
         ...(fusionEntity ? { fusionEntityId: fusionEntity.id } : {}),
+        ...(transmission.transmittedBeliefId ? { transmittedBeliefId: transmission.transmittedBeliefId } : {}),
+        ...(transmission.transmittedPracticeId ? { transmittedPracticeId: transmission.transmittedPracticeId } : {}),
+        governanceEffect,
       });
     }
     return;
   }
 
+  const transmission = applyWorldviewTransmission(state, effect, source, target, interactionId);
   source.lastInteractionTick = nextTick;
   target.lastInteractionTick = nextTick;
   source.lastInteractionTimelineStep = nextStep;
@@ -522,6 +682,8 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
     existing.successes = addPersistentTotal(existing.successes, 1);
     existing.compatibility = compatibility;
     existing.intensity = intensity;
+    existing.governanceEffect = governanceEffect;
+    Object.assign(existing, transmission);
     existing.status = source.status === "active" && target.status === "active" ? "active" : "dormant";
   } else {
     state.worldview.interactions.push({
@@ -543,6 +705,9 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
       compatibility,
       intensity,
       status: "active",
+      ...(transmission.transmittedBeliefId ? { transmittedBeliefId: transmission.transmittedBeliefId } : {}),
+      ...(transmission.transmittedPracticeId ? { transmittedPracticeId: transmission.transmittedPracticeId } : {}),
+      governanceEffect,
     });
   }
 };

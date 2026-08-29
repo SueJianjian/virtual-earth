@@ -354,6 +354,7 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
          targetPackId: target.packId,
          regionId: effect.regionId,
          ...(effect.targetRegionId === undefined ? {} : { targetRegionId: effect.targetRegionId }),
+         sourcePhenomenonId: source.sourcePhenomenonId ?? null,
          compatibility: effect.compatibility,
          intensity: effect.intensity,
          route: effect.evidence.route ?? "local",

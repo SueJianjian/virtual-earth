@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { clearSimulationStages, listSimulationStages, registerSimulationStage, stepWorld } from "../src/sim/engine.ts";
-import { MAX_AGENT_MEMORY_IDS, MAX_DETAILED_AGENTS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../src/sim/agents/lifecycle.ts";
+import { MAX_AGENT_MEMORY_IDS, MAX_BELIEFS_PER_AGENT, MAX_DETAILED_AGENTS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../src/sim/agents/lifecycle.ts";
 import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS } from "../src/sim/events/ledger.ts";
 import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../src/sim/environment/substances.ts";
 import { MAX_POPULATION_RECORDS } from "../src/sim/ecology/archive.ts";
@@ -258,6 +258,7 @@ const health = {
   activeSpeciesDiversityBounded: Object.entries(activeSpeciesIds).every(([role, ids]) =>
     ids.size <= ACTIVE_ADAPTIVE_SPECIES_LIMITS[role as keyof typeof ACTIVE_ADAPTIVE_SPECIES_LIMITS]),
   validAgentPopulations: state.agents.every((agent) => populationIds.has(agent.populationId)),
+  agentBeliefsBounded: state.agents.every((agent) => agent.beliefIds.length <= MAX_BELIEFS_PER_AGENT),
   normalizedPopulationEnergy: state.populations.every((population) => Number.isFinite(population.energy) && population.energy >= 0 && population.energy <= 1),
   knowledgeCountBounded: state.knowledge.length <= MAX_KNOWLEDGE_RECORDS,
   cultureCountBounded: state.cultures.length <= MAX_CULTURE_RECORDS,

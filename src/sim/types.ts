@@ -915,6 +915,7 @@ export type WorldviewEntityState = {
 };
 export type WorldviewInteractionKind = "propagation" | "conflict" | "fusion";
 export type WorldviewInteractionStatus = "active" | "dormant" | "resolved";
+export type WorldviewGovernanceEffect = "stabilizing" | "destabilizing" | "integrating";
 export type WorldviewInteractionState = {
   id: string;
   kind: WorldviewInteractionKind;
@@ -936,6 +937,9 @@ export type WorldviewInteractionState = {
   intensity: number;
   status: WorldviewInteractionStatus;
   fusionEntityId?: EntityId;
+  transmittedBeliefId?: string;
+  transmittedPracticeId?: string;
+  governanceEffect?: WorldviewGovernanceEffect;
 };
 export type WorldviewPhenomenonKind =
   | "natural-anomaly"

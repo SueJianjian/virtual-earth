@@ -16,13 +16,14 @@ import { defaultGovernanceFor } from "./society/organization.ts";
 import { createEventArchive } from "./events/ledger.ts";
 import { MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "./health/disease.ts";
 import { validAgentGenetics } from "./agents/genetics.ts";
+import { MAX_BELIEFS_PER_AGENT } from "./agents/lifecycle.ts";
 import { MAX_FACILITY_RECORDS } from "./society/facilities.ts";
 import { MAX_RESOURCE_RECORDS } from "./resources.ts";
 import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "./ecology/archive.ts";
 import { isArchivedOrganizationSummary, MAX_ARCHIVED_ORGANIZATION_SUMMARIES } from "./society/archive.ts";
 import { isSimulationTimeline } from "./time.ts";
 import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
-import { MAX_WORLDVIEW_INTERACTIONS } from "./worldview/archive.ts";
+import { MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PRACTICES } from "./worldview/archive.ts";
 import { createClimateCycleState, isClimateCycleState } from "./environment/cycle.ts";
 
 const DEFAULT_WIDTH = 96;
@@ -254,6 +255,8 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     agent.health?.vitality ?? 1,
     ...(agent.health?.infections.flatMap((infection) => [infection.infectedTick, infection.severity]) ?? []),
   ].every(Number.isFinite)
+    && agent.beliefIds.length <= MAX_BELIEFS_PER_AGENT
+    && agent.beliefIds.every((beliefId) => typeof beliefId === "string")
     && (agent.health?.infections ?? []).every((infection) => infection.infectedTimelineStep === undefined || /^\d+$/.test(infection.infectedTimelineStep))
     && (!agent.genetics || validAgentGenetics(agent.genetics)));
   const finiteSpecies = state.species.every((species) => validTimelineStep(species.originTimelineStep));
@@ -341,7 +344,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
   const finiteArchivedOrganizations = state.eventArchive.archivedOrganizationSummaries.length <= MAX_ARCHIVED_ORGANIZATION_SUMMARIES
     && state.eventArchive.archivedOrganizationSummaries.every(isArchivedOrganizationSummary);
   const worldviewEntitiesById = new Map(state.worldview.entities.map((entity) => [entity.id, entity]));
-  const finiteWorldviews = state.worldview.practices.every((practice) => [
+  const finiteWorldviews = state.worldview.practices.length <= MAX_WORLDVIEW_PRACTICES && state.worldview.practices.every((practice) => [
     practice.originTick,
     practice.lastTrainedTick,
     practice.attunement,
@@ -373,6 +376,9 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     interaction.intensity,
   ].every(Number.isFinite)
     && (interaction.targetRegionId === undefined || typeof interaction.targetRegionId === "string")
+    && (interaction.transmittedBeliefId === undefined || typeof interaction.transmittedBeliefId === "string")
+    && (interaction.transmittedPracticeId === undefined || typeof interaction.transmittedPracticeId === "string")
+    && (interaction.governanceEffect === undefined || ["stabilizing", "destabilizing", "integrating"].includes(interaction.governanceEffect))
     && worldviewEntitiesById.get(interaction.sourceEntityId)?.regionId === interaction.regionId
     && worldviewEntitiesById.get(interaction.targetEntityId)?.regionId === (interaction.targetRegionId ?? interaction.regionId)
     && interaction.attempts >= 0

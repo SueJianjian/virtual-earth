@@ -168,6 +168,99 @@ describe("worldview packs", () => {
     expect(isFiniteWorld(result)).toBe(true);
   });
 
+  it("turns interregional worldview fusion into bounded belief, practice, and governance effects", () => {
+    const sourceRegion = "region:1:1" as never;
+    const targetRegion = "region:5:1" as never;
+    const world = createWorld(1_505, { width: 8, height: 8, enabledPackIds: ["emergence.original-worldview", "mythology.chinese-motif"], formation: "formed" });
+    const species = createSpecies("worldview-transmission", "consumer");
+    species.traits.cognitivePotential = 1;
+    const sourcePopulation = { id: "population:worldview-source" as never, speciesId: species.id, regionId: sourceRegion, count: 12, energy: 1 };
+    const targetPopulation = { id: "population:worldview-target" as never, speciesId: species.id, regionId: targetRegion, count: 12, energy: 1 };
+    const teacher = createAgent(sourcePopulation, species, 0, "worldview-teacher");
+    const recipient = createAgent(targetPopulation, species, 0, "worldview-recipient");
+    const sourceOrganization = createOrganization("city", sourceRegion, [teacher.id]);
+    const targetOrganization = createOrganization("city", targetRegion, [recipient.id]);
+    const sourcePhenomenon = {
+      id: "phenomenon:transmitted-principle",
+      packId: "emergence.original-worldview",
+      kind: "verified-principle" as const,
+      epistemicStatus: "verified" as const,
+      name: "传输规律",
+      regionId: sourceRegion,
+      originTick: 1,
+      parentIds: [],
+      causeRuleId: "test",
+      evidence: { eligible: true },
+    };
+    world.species = [species];
+    world.populations = [sourcePopulation, targetPopulation];
+    world.agents = [teacher, recipient];
+    world.cultures = [
+      { id: "culture:worldview-source" as never, regionId: sourceRegion, knowledgeIds: [], beliefIds: [], transmissionRate: 0.8 },
+      { id: "culture:worldview-target" as never, regionId: targetRegion, knowledgeIds: [], beliefIds: [], transmissionRate: 0.8 },
+    ];
+    world.organizations = [sourceOrganization, targetOrganization];
+    world.worldview.phenomena = [sourcePhenomenon];
+    world.worldview.entities = [
+      { id: "worldview:transmission-source" as never, packId: "emergence.original-worldview", kind: "sect", regionId: sourceRegion, influence: 0.8, resourceBalances: {}, sourcePhenomenonId: sourcePhenomenon.id, memberIds: [teacher.id], sponsorOrganizationId: sourceOrganization.id, status: "active" },
+      { id: "worldview:transmission-target" as never, packId: "mythology.chinese-motif", kind: "deity", regionId: targetRegion, influence: 0.7, resourceBalances: {}, memberIds: [recipient.id], sponsorOrganizationId: targetOrganization.id, status: "active" },
+    ];
+    world.worldview.practices = [{
+      id: "practice:transmission-source",
+      packId: "emergence.original-worldview",
+      name: "来源修行",
+      phenomenonId: sourcePhenomenon.id,
+      regionId: sourceRegion,
+      practitionerId: teacher.id,
+      organizationId: sourceOrganization.id,
+      originTick: 1,
+      lastTrainedTick: 1,
+      attunement: 0.32,
+      energy: 0.6,
+      attempts: 2,
+      failures: 0,
+      status: "active",
+    }];
+    const initialSourceStability = sourceOrganization.governance!.stability;
+    const initialTargetLegitimacy = targetOrganization.governance!.legitimacy;
+    registerSimulationStage({
+      id: "worldview-transmission-test",
+      order: 1,
+      run: () => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [], worldviewEffects: [{
+        kind: "interact-entities",
+        packId: "emergence.original-worldview",
+        interaction: "fusion",
+        sourceEntityId: "worldview:transmission-source" as never,
+        targetEntityId: "worldview:transmission-target" as never,
+        regionId: sourceRegion,
+        targetRegionId: targetRegion,
+        probability: 1,
+        compatibility: 0.9,
+        intensity: 0.8,
+        evidence: { eligible: true, route: "trade" },
+      }] }),
+    });
+
+    const result = stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false }).state;
+    const interaction = result.worldview.interactions[0];
+    const transmittedPractice = result.worldview.practices.find((practice) => practice.teacherId === teacher.id && practice.regionId === targetRegion);
+    expect(interaction).toMatchObject({
+      kind: "fusion",
+      status: "resolved",
+      targetRegionId: targetRegion,
+      transmittedBeliefId: `belief:${sourcePhenomenon.id}`,
+      transmittedPracticeId: transmittedPractice?.id,
+      governanceEffect: "integrating",
+    });
+    expect(result.cultures.find((culture) => culture.regionId === targetRegion)?.beliefIds).toContain(`belief:${sourcePhenomenon.id}`);
+    expect(result.agents.find((agent) => agent.id === recipient.id)?.beliefIds).toContain(`belief:${sourcePhenomenon.id}`);
+    expect(transmittedPractice).toMatchObject({ practitionerId: recipient.id, organizationId: targetOrganization.id, status: "active" });
+    expect(result.relationships).toContainEqual(expect.objectContaining({ kind: "teacher", fromId: teacher.id, toId: recipient.id }));
+    expect(result.organizations.find((organization) => organization.id === sourceOrganization.id)?.governance?.stability).toBeGreaterThan(initialSourceStability);
+    expect(result.organizations.find((organization) => organization.id === targetOrganization.id)?.governance?.legitimacy).toBeGreaterThan(initialTargetLegitimacy);
+    expect(isFiniteWorld(result)).toBe(true);
+  });
+
   it("applies conflict, propagation, and fusion as bounded reducer effects", () => {
     const regionId = "region:3:2" as never;
     const makeWorld = () => {
