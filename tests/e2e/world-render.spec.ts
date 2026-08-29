@@ -100,6 +100,10 @@ test("renders a non-empty world map and interactive observation panels", async (
   expect(webglSignal).toBeGreaterThan(100);
   await page.getByRole("button", { name: "温度" }).click();
   await expect(page.getByRole("button", { name: "温度" })).toHaveClass(/active/);
+  await page.getByRole("button", { name: "降水" }).click();
+  await expect(page.getByRole("button", { name: "降水" })).toHaveClass(/active/);
+  await expect(page.locator("#legend-low")).toHaveText("少雨");
+  await expect(page.locator("#legend-high")).toHaveText("强降水");
   await page.getByRole("button", { name: "碳循环" }).click();
   await expect(page.getByRole("button", { name: "碳循环" })).toHaveClass(/active/);
   await page.getByRole("button", { name: "氧气" }).click();
@@ -120,6 +124,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("°C");
   await expect(page.locator("#inspector")).toContainText("相对浓度");
   await expect(page.getByRole("region", { name: "区域地质板块" })).toContainText("尚未形成");
+  await expect(page.getByRole("region", { name: "区域大气环流" })).toContainText("尚未建立");
   await expect(page.getByRole("region", { name: "认知与传说" })).toBeVisible();
   await expect(page.getByRole("region", { name: "认知与传说" })).toContainText("观测、理论、信仰与验证严格分离");
   await expect(page.getByRole("region", { name: "规律训练" })).toBeVisible();

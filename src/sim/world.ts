@@ -26,6 +26,7 @@ import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
 import { MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PRACTICES } from "./worldview/archive.ts";
 import { createClimateCycleState, isClimateCycleState } from "./environment/cycle.ts";
 import { createTectonicState, isTectonicState } from "./environment/geology.ts";
+import { createAtmosphereState, isAtmosphereState } from "./environment/atmosphere.ts";
 
 const DEFAULT_WIDTH = 96;
 const DEFAULT_HEIGHT = 48;
@@ -96,6 +97,7 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
     random: createRandom(normalizedSeed),
     formation: formed ? completedPlanetFormationState(normalizedSeed) : createPlanetFormationState(normalizedSeed),
     tectonics: createTectonicState(normalizedSeed, width, height),
+    atmosphere: createAtmosphereState(normalizedSeed, width, height),
     fields,
     chemistry: createChemistry(width, height, formed),
     substances: [],
@@ -207,6 +209,11 @@ export const isFiniteWorld = (state: WorldState): boolean => {
   const finiteClimateCycle = state.climateCycle === undefined || isClimateCycleState(state.climateCycle);
   const finiteTectonics = isTectonicState(
     state.tectonics,
+    state.fields.elevation.width,
+    state.fields.elevation.height,
+  );
+  const finiteAtmosphere = isAtmosphereState(
+    state.atmosphere,
     state.fields.elevation.width,
     state.fields.elevation.height,
   );
@@ -468,7 +475,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     ].every(Number.isFinite));
     return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && finiteAgentRecords && finiteEcologyRecords;
   });
-  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteTectonics && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
+  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteTectonics && finiteAtmosphere && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
 };
 
 export const regionIdForCell = (x: number, y: number): RegionId =>

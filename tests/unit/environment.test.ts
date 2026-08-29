@@ -4,10 +4,68 @@ import { projectChemistry } from "../../src/sim/environment/chemistry.ts";
 import { totalWater } from "../../src/sim/environment/hydrology.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { createTectonicState, isTectonicState, MAX_TECTONIC_EVENTS_PER_STEP, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES, stepTectonics } from "../../src/sim/environment/geology.ts";
+import { calculateAtmosphere, createAtmosphereState, isAtmosphereState } from "../../src/sim/environment/atmosphere.ts";
 
 const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
 describe("environment simulation", () => {
+  it("creates deterministic seed-specific pressure, wind and precipitation fields", () => {
+    const world = makeEnvironment();
+    const initial = createAtmosphereState(world.seed, 16, 8);
+    const first = calculateAtmosphere(initial, world.fields, world.seed, { elapsedYears: 1 });
+    const replay = calculateAtmosphere(createAtmosphereState(world.seed, 16, 8), world.fields, world.seed, { elapsedYears: 1 });
+    const different = calculateAtmosphere(createAtmosphereState(world.seed + 1, 16, 8), world.fields, world.seed + 1, { elapsedYears: 1 });
+
+    expect(first).toEqual(replay);
+    expect(first.pressure.values).not.toEqual(different.pressure.values);
+    expect(first.pressure.values.every((value) => value >= 0 && value <= 1)).toBe(true);
+    expect(first.windX.values.every((value) => value >= -1 && value <= 1)).toBe(true);
+    expect(first.windY.values.every((value) => value >= -1 && value <= 1)).toBe(true);
+    expect(first.precipitation.values.every((value) => value >= 0 && value <= 1)).toBe(true);
+    expect(isAtmosphereState(first, 16, 8)).toBe(true);
+  });
+
+  it("keeps the atmospheric pressure field continuous across the longitude seam", () => {
+    const world = initializeEnvironment(createWorld(90_004, { width: 96, height: 48, formation: "formed" }));
+    const atmosphere = calculateAtmosphere(world.atmosphere, world.fields, world.seed, { elapsedYears: 1 });
+    const seamDifferences = Array.from({ length: 48 }, (_, y) => Math.abs(
+      (atmosphere.pressure.values[y * 96] ?? 0) - (atmosphere.pressure.values[y * 96 + 95] ?? 0),
+    ));
+
+    expect(Math.max(...seamDifferences)).toBeLessThan(0.08);
+  });
+
+  it("moves ocean moisture downwind and increases rain over rising terrain", () => {
+    const world = createWorld(90_003, { width: 8, height: 8, formation: "formed" });
+    world.fields.temperature.values.fill(0.5);
+    world.fields.humidity.values.fill(0.05);
+    world.fields.water.values.fill(0);
+    world.fields.elevation.values.fill(0.1);
+    const row = 4 * 8;
+    world.fields.humidity.values[row + 4] = 0.95;
+    world.fields.water.values[row + 4] = 1;
+    world.fields.elevation.values[row + 3] = 0.7;
+
+    const atmosphere = calculateAtmosphere(
+      createAtmosphereState(world.seed, 8, 8),
+      world.fields,
+      world.seed,
+      { elapsedYears: 1 },
+    );
+
+    expect(atmosphere.windX.values[row + 3]).toBeLessThan(0);
+    expect(atmosphere.precipitation.values[row + 3]).toBeGreaterThan(atmosphere.precipitation.values[row + 5] ?? 0);
+  });
+
+  it("keeps atmospheric work and state bounded for a billion-year step", () => {
+    const world = makeEnvironment();
+    const atmosphere = calculateAtmosphere(world.atmosphere, world.fields, world.seed, { elapsedYears: 1_000_000_000 });
+
+    expect(Object.values(atmosphere).filter((value) => typeof value === "object" && "values" in value)).toHaveLength(4);
+    expect(atmosphere.updateCount).toBe(world.atmosphere.updateCount + 1);
+    expect(isAtmosphereState(atmosphere, 16, 8)).toBe(true);
+  });
+
   it("creates deterministic, seed-specific bounded tectonic plates", () => {
     const first = createTectonicState(90_001, 32, 16);
     const replay = createTectonicState(90_001, 32, 16);
@@ -86,6 +144,8 @@ describe("environment simulation", () => {
     expect(totalWater(after.fields.water)).toBeCloseTo(before, 4);
     expect(after.species).toHaveLength(0);
     expect(after.organizations).toHaveLength(0);
+    expect(after.atmosphere.updateCount).toBe(state.atmosphere.updateCount + 1);
+    expect(after.atmosphere.precipitation.values.some((value) => value > 0)).toBe(true);
   });
 
   it("uses bounded typed-array patches for dense environmental fields", () => {

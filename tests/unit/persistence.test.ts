@@ -11,6 +11,25 @@ import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
 import type { ArchivedSpeciesSummary } from "../../src/sim/types.ts";
 
 describe("world persistence", () => {
+  it("round-trips atmosphere and deterministically restores legacy saves", () => {
+    const world = createWorld(121, { width: 8, height: 8, formation: "formed" });
+    const restored = deserializeWorld(serializeWorld(world));
+    expect(restored.atmosphere).toEqual(world.atmosphere);
+
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { atmosphere?: unknown } };
+    delete legacy.world.atmosphere;
+    const firstUpgrade = deserializeWorld(JSON.stringify(legacy));
+    const secondUpgrade = deserializeWorld(JSON.stringify(legacy));
+    expect(firstUpgrade.atmosphere).toEqual(secondUpgrade.atmosphere);
+    expect(firstUpgrade.atmosphere.pressure.values).toHaveLength(64);
+  });
+
+  it("rejects malformed atmosphere grids instead of loading corrupted circulation", () => {
+    const save = JSON.parse(serializeWorld(createWorld(122, { width: 8, height: 8 }))) as { world: { atmosphere: { pressure: { values: { values: number[] } } } } };
+    save.world.atmosphere.pressure.values.values[0] = 2;
+    expect(() => deserializeWorld(JSON.stringify(save))).toThrow("invalid atmosphere state");
+  });
+
   it("round-trips tectonics and deterministically restores pre-tectonic saves", () => {
     const world = createWorld(119, { width: 8, height: 8, formation: "formed" });
     const restored = deserializeWorld(serializeWorld(world));

@@ -13,6 +13,12 @@ export const snapshotTransferables = (snapshot: WorldSnapshot): ArrayBuffer[] =>
     addGridBuffer(buffers, snapshot.tectonics.boundaryStress.values);
     addGridBuffer(buffers, snapshot.tectonics.boundaryActivity.values);
   }
+  if (snapshot.atmosphere) {
+    addGridBuffer(buffers, snapshot.atmosphere.pressure.values);
+    addGridBuffer(buffers, snapshot.atmosphere.windX.values);
+    addGridBuffer(buffers, snapshot.atmosphere.windY.values);
+    addGridBuffer(buffers, snapshot.atmosphere.precipitation.values);
+  }
   if (snapshot.foodSecurity) addGridBuffer(buffers, snapshot.foodSecurity.values);
   if (snapshot.diseasePrevalence) addGridBuffer(buffers, snapshot.diseasePrevalence.values);
   return [...buffers];

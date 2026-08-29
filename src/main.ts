@@ -260,6 +260,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
       ? ["海洋", "高地"]
       : layer === "tectonics"
         ? ["板块内部", "活跃边界"]
+      : layer === "rainfall"
+        ? ["少雨", "强降水"]
       : layer === "foodSecurity"
         ? ["低保障", "高保障"]
         : layer === "health"

@@ -31,6 +31,7 @@ export type WorldSnapshot = {
   climateCycle?: WorldState["climateCycle"];
   formation: WorldState["formation"];
   tectonics?: WorldState["tectonics"];
+  atmosphere?: WorldState["atmosphere"];
   eventArchive?: WorldState["eventArchive"];
   historySamples?: WorldHistorySample[];
   runtime?: RuntimeDiagnostics;

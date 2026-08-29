@@ -45,6 +45,27 @@ describe("food security map layer", () => {
     expect(colorForCell(snapshot, 0, "foodSecurity")).not.toEqual(colorForCell(snapshot, 1, "foodSecurity"));
   });
 
+  it("renders authoritative precipitation instead of humidity", () => {
+    const world = createWorld(206, { width: 8, height: 8, formation: "formed" });
+    world.fields.humidity.values[0] = 1;
+    world.fields.humidity.values[1] = 1;
+    world.atmosphere.precipitation.values[0] = 0;
+    world.atmosphere.precipitation.values[1] = 1;
+    const snapshot: WorldSnapshot = {
+      seed: world.seed,
+      tick: 0,
+      years: 0,
+      formation: world.formation,
+      atmosphere: world.atmosphere,
+      digest: "",
+      fields: world.fields,
+      chemistry: world.chemistry,
+      metrics: {},
+    };
+
+    expect(colorForCell(snapshot, 0, "rainfall")).not.toEqual(colorForCell(snapshot, 1, "rainfall"));
+  });
+
   it("renders local carbon and oxygen chemistry as distinct overlays", () => {
     const world = createWorld(202, { width: 2, height: 1 });
     world.chemistry.carbon.values.set([0, 1]);

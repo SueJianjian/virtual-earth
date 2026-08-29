@@ -776,6 +776,28 @@ const regionalTectonicReport = (snapshot: WorldSnapshot, regionId?: RegionId): s
   return `<section class="organization-governance tectonic-report" aria-label="区域地质板块"><div class="detail-heading"><strong>地质板块</strong><span>${escapeHtml(plate.name)} · ${kind}</span></div><dl class="detail-grid"><div><dt>板块编号</dt><dd>${escapeHtml(plate.id)}</dd></div><div><dt>局地位置</dt><dd>${boundary}</dd></div><div><dt>边界应力</dt><dd>${formatPercent(stress).value}%</dd></div><div><dt>聚散活动</dt><dd>${formatNumber(activity, 3)}</dd></div><div><dt>运动方向</dt><dd>${direction}</dd></div><div><dt>运动速度</dt><dd>${formatNumber(Math.hypot(plate.velocityX, plate.velocityY) * 1_000, 2)} 格 / 千年</dd></div><div><dt>相对密度</dt><dd>${formatPercent(plate.density).value}%</dd></div><div><dt>相对厚度</dt><dd>${formatPercent(plate.thickness).value}%</dd></div><div><dt>地壳年龄</dt><dd>${formatSimulationAge(plate.crustAgeYears)}</dd></div><div><dt>板块更新</dt><dd>${format(tectonics.updateCount)} 次 · 演化步 ${escapeHtml(tectonics.lastUpdatedTimelineStep ?? String(tectonics.lastUpdatedTick))}</dd></div></dl></section>`;
 };
 
+const regionalAtmosphereReport = (snapshot: WorldSnapshot, regionId?: RegionId): string => {
+  const atmosphere = snapshot.atmosphere;
+  if (!atmosphere || !regionId) return "";
+  if (snapshot.formation.phase !== "stable-crust" || atmosphere.updateCount === 0) {
+    return `<section class="organization-governance atmosphere-report" aria-label="区域大气环流"><div class="detail-heading"><strong>大气环流</strong><span>尚未建立</span></div><div class="detail-tags"><span>稳定地壳与水汽循环形成后开始记录气压、风场和降水</span></div></section>`;
+  }
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  const x = Number(match?.[1] ?? -1);
+  const y = Number(match?.[2] ?? -1);
+  if (x < 0 || x >= atmosphere.pressure.width || y < 0 || y >= atmosphere.pressure.height) return "";
+  const index = y * atmosphere.pressure.width + x;
+  const pressure = atmosphere.pressure.values[index] ?? 0;
+  const windX = atmosphere.windX.values[index] ?? 0;
+  const windY = atmosphere.windY.values[index] ?? 0;
+  const precipitation = atmosphere.precipitation.values[index] ?? 0;
+  const horizontal = Math.abs(windX) < 0.025 ? "" : windX > 0 ? "向东" : "向西";
+  const vertical = Math.abs(windY) < 0.025 ? "" : windY > 0 ? "向南" : "向北";
+  const direction = [horizontal, vertical].filter(Boolean).join("、") || "局地静风";
+  const rainClass = precipitation >= 0.7 ? "强降水" : precipitation >= 0.35 ? "稳定降水" : precipitation >= 0.08 ? "少量降水" : "干燥";
+  return `<section class="organization-governance atmosphere-report" aria-label="区域大气环流"><div class="detail-heading"><strong>大气环流</strong><span>${direction} · ${rainClass}</span></div><dl class="detail-grid"><div><dt>相对气压</dt><dd>${formatPercent(pressure).value}%</dd></div><div><dt>风向</dt><dd>${direction}</dd></div><div><dt>风速指数</dt><dd>${formatPercent(Math.hypot(windX, windY)).value}%</dd></div><div><dt>实际降水</dt><dd>${formatPercent(precipitation).value}%</dd></div><div><dt>东西风分量</dt><dd>${formatNumber(windX, 3)}</dd></div><div><dt>南北风分量</dt><dd>${formatNumber(windY, 3)}</dd></div><div><dt>环流更新</dt><dd>${format(atmosphere.updateCount)} 次</dd></div><div><dt>最后更新</dt><dd>演化步 ${escapeHtml(atmosphere.lastUpdatedTimelineStep ?? String(atmosphere.lastUpdatedTick))}</dd></div></dl></section>`;
+};
+
 const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"]): Array<{ id: string; label: string }> => {
   if (level === "region") return [];
   if (level === "substance") return (snapshot.substances ?? [])
@@ -878,7 +900,8 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     }).join("");
     const facilities = (snapshot.facilities ?? []).filter((facility) => facility.regionId === snapshot.focusRegionId);
     const substances = (snapshot.substances ?? []).filter((substance) => substance.regionId === snapshot.focusRegionId);
-    const environmentReport = regionalTectonicReport(snapshot, snapshot.focusRegionId)
+    const environmentReport = regionalAtmosphereReport(snapshot, snapshot.focusRegionId)
+      + regionalTectonicReport(snapshot, snapshot.focusRegionId)
       + regionalHealthReport(snapshot, snapshot.focusRegionId)
       + ecologicalRelationshipReport(snapshot, snapshot.focusRegionId);
     const regionalCulture = (snapshot.cultures ?? []).find((culture) => culture.regionId === snapshot.focusRegionId);
@@ -1138,6 +1161,10 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
   const seasonalOffset = snapshot.orbital
     ? seasonalTemperatureOffset(snapshot.orbital, selection.y, fields.elevation.height)
     : undefined;
+  const atmosphere = snapshot.atmosphere;
+  const windSpeed = atmosphere
+    ? Math.hypot(atmosphere.windX.values[selection.index] ?? 0, atmosphere.windY.values[selection.index] ?? 0)
+    : undefined;
   element.innerHTML = `
     <div class="inspector-head"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
     <section class="observation-group" aria-label="区域地表">
@@ -1147,6 +1174,9 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
         ${observationMetric("模型温度", formatModelTemperature(fields.temperature.values[selection.index]), "换算温标")}
         ${observationMetric("地表水量", formatIndex(fields.water.values[selection.index]), "相对指数")}
         ${observationMetric("空气湿度", formatPercent(fields.humidity.values[selection.index]))}
+        ${atmosphere ? observationMetric("相对气压", formatPercent(atmosphere.pressure.values[selection.index]), "大气环流场") : ""}
+        ${atmosphere ? observationMetric("实际降水", formatPercent(atmosphere.precipitation.values[selection.index]), "气流输送与地形抬升") : ""}
+        ${windSpeed === undefined ? "" : observationMetric("风速指数", formatPercent(windSpeed), "东西与南北风场合成")}
         ${snapshot.orbital ? observationMetric("当前季节", { value: seasonLabels[snapshot.orbital.season], unit: "" }) : ""}
         ${seasonalOffset === undefined ? "" : observationMetric("季节温度偏置", { value: formatNumber(seasonalOffset * 100, 1), unit: "模型点" }, "由轴倾角与纬度决定")}
       </dl>

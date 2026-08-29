@@ -68,6 +68,16 @@ export type TectonicState = {
   lastUpdatedTimelineStep?: string;
   lastUpdatedYears: number;
 };
+export type AtmosphereState = {
+  pressure: Grid;
+  windX: Grid;
+  windY: Grid;
+  precipitation: Grid;
+  updateCount: number;
+  lastUpdatedTick: number;
+  lastUpdatedTimelineStep?: string;
+  lastUpdatedYears: number;
+};
 export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[]; formation?: "dust" | "formed" };
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
@@ -413,6 +423,7 @@ export type WorldDelta = {
   formationEffect?: PlanetFormationState;
   climateCycleEffect?: ClimateCycleState;
   tectonicEffect?: TectonicState;
+  atmosphereEffect?: AtmosphereState;
 };
 
 export type StateMetric =
@@ -1229,6 +1240,7 @@ export type WorldState = {
   random: RandomState;
   formation: PlanetFormationState;
   tectonics: TectonicState;
+  atmosphere: AtmosphereState;
   fields: {
     elevation: Grid;
     temperature: Grid;

@@ -15,6 +15,7 @@ import { HERITABLE_AGENT_TRAITS, validAgentGenetics } from "../src/sim/agents/ge
 import { ACTIVE_ADAPTIVE_SPECIES_LIMITS } from "../src/sim/ecology/species.ts";
 import { isEntityHolderId } from "../src/sim/resources.ts";
 import { isTectonicState, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES } from "../src/sim/environment/geology.ts";
+import { isAtmosphereState } from "../src/sim/environment/atmosphere.ts";
 
 const requestedScenario = process.argv[4] ?? process.env.BENCHMARK_SCENARIO ?? "autonomous";
 const scenario = requestedScenario === "dense" ? "dense" : "autonomous";
@@ -99,6 +100,7 @@ if (scenario === "dense" && (warmupWidth !== width || warmupHeight !== height)) 
     ...state,
     formation: expanded.formation,
     tectonics: expanded.tectonics,
+    atmosphere: expanded.atmosphere,
     fields: expanded.fields,
     chemistry: expanded.chemistry,
   };
@@ -250,6 +252,7 @@ const health = {
   tectonicsHealthy: isTectonicState(state.tectonics, width, height)
     && state.tectonics.plates.length >= MIN_TECTONIC_PLATES
     && state.tectonics.plates.length <= MAX_TECTONIC_PLATES,
+  atmosphereHealthy: isAtmosphereState(state.atmosphere, width, height),
   finiteArchiveCounters: archiveCounters.every((value) => Number.isFinite(value) && value >= 0),
   eventLogBounded: state.events.length <= EVENT_LOG_MAX_COUNT,
   milestoneArchiveBounded: state.eventArchive.milestones.length <= MAX_EVENT_MILESTONES,
@@ -390,6 +393,7 @@ console.log(JSON.stringify({
   milestones: state.eventArchive.milestones.length,
   strategicRoutes: state.eventArchive.strategicRoutes.length,
   tectonicPlates: state.tectonics.plates.length,
+  atmosphereUpdates: state.atmosphere.updateCount,
   archivedEvents: state.eventArchive.archivedEventCount,
   archivedSpecies: state.eventArchive.archivedSpeciesCount,
   archivedKnowledge: state.eventArchive.archivedKnowledgeCount,

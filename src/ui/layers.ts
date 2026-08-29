@@ -43,7 +43,7 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const elevation = clamp(fields.elevation.values[index] ?? 0);
   const water = clamp(fields.water.values[index] ?? 0);
   const temperature = clamp(fields.temperature.values[index] ?? 0);
-  const humidity = clamp(fields.humidity.values[index] ?? 0);
+  const precipitation = clamp(snapshot.atmosphere?.precipitation.values[index] ?? 0);
   const nutrients = clamp(fields.nutrients.values[index] ?? 0);
   const biomass = clamp(fields.biomass.values[index] ?? 0);
   const carbon = clamp(snapshot.chemistry.carbon.values[index] ?? 0);
@@ -64,7 +64,7 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
     return mix(plateColor, [236, 91, 57], stress * 0.88);
   }
   if (layer === "temperature") return mix([43, 93, 145], [221, 72, 40], temperature);
-  if (layer === "rainfall") return mix([37, 43, 46], [44, 163, 191], humidity);
+  if (layer === "rainfall") return mix([37, 43, 46], [44, 163, 191], precipitation);
   if (layer === "nutrients") return mix([51, 47, 41], [211, 167, 63], nutrients);
   if (layer === "biomass") return mix([50, 48, 43], [65, 157, 85], biomass);
   if (layer === "carbon") return mix([47, 92, 105], [201, 118, 58], carbon);

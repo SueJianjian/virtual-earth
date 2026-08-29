@@ -19,12 +19,14 @@ import { deserializeWorld, serializeWorld } from "../../src/persistence/serializ
 import { MAX_SIMULATION_DAYS, MAX_SIMULATION_YEARS, SIMULATED_YEARS_PER_DAY } from "../../src/sim/time.ts";
 import { isOrbitalState } from "../../src/sim/environment/orbit.ts";
 import { isTectonicState, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES } from "../../src/sim/environment/geology.ts";
+import { isAtmosphereState } from "../../src/sim/environment/atmosphere.ts";
 
 describe("long-running worlds", () => {
   const assertDenseWorldHealth = (state: ReturnType<typeof createWorld>): void => {
     expect(isFiniteWorld(state)).toBe(true);
     expect(isOrbitalState(state.orbital)).toBe(true);
     expect(isTectonicState(state.tectonics, state.fields.elevation.width, state.fields.elevation.height)).toBe(true);
+    expect(isAtmosphereState(state.atmosphere, state.fields.elevation.width, state.fields.elevation.height)).toBe(true);
     expect(state.tectonics.plates.length).toBeGreaterThanOrEqual(MIN_TECTONIC_PLATES);
     expect(state.tectonics.plates.length).toBeLessThanOrEqual(MAX_TECTONIC_PLATES);
     expect(state.orbital.seasonalPhase).toBeGreaterThanOrEqual(0);

@@ -12,6 +12,7 @@ import { isWorldEventActive } from "../events/ledger.ts";
 import { advanceSimulationTimeline, nextSimulationStep, projectedYearsAfterStep, simulationDaysFromYears, timelineForWorld } from "../time.ts";
 import { advanceClimateCycle } from "./cycle.ts";
 import { orbitalStateForWorld } from "./orbit.ts";
+import { calculateAtmosphere } from "./atmosphere.ts";
 import type {
   EnvironmentDelta,
   EnvironmentInput,
@@ -139,6 +140,12 @@ export const initializeEnvironment = (state: WorldState): WorldState => {
   next.fields.temperature.values.set(climate.temperature);
   next.fields.humidity.values.set(climate.humidity);
   next.fields.nutrients.values.set(terrainNutrients(next));
+  next.atmosphere = calculateAtmosphere(next.atmosphere, next.fields, next.seed, {
+    elapsedYears: 0,
+    lastUpdatedTick: next.tick,
+    timelineStep: next.timeline?.step ?? String(next.tick),
+    lastUpdatedYears: next.years,
+  });
   return next;
 };
 
@@ -179,14 +186,21 @@ export const stepEnvironment = (
       nutrients: { ...state.fields.nutrients, values: nutrientValues },
     },
   } as WorldState;
-  const tectonicResult = stepTectonics(workingState, elapsedYears, input.timelineStep);
+  const atmosphere = calculateAtmosphere(state.atmosphere, workingState.fields, state.seed, {
+    elapsedYears,
+    lastUpdatedTick: Math.min(Number.MAX_SAFE_INTEGER, state.tick + 1),
+    timelineStep: input.timelineStep ?? nextSimulationStep(state),
+    lastUpdatedYears: projectedYearsAfterStep(state, elapsedYears),
+  });
+  const atmosphereState = { ...workingState, atmosphere } as WorldState;
+  const tectonicResult = stepTectonics(atmosphereState, elapsedYears, input.timelineStep);
   const geologyState = tectonicResult.tectonics
-    ? { ...workingState, tectonics: tectonicResult.tectonics } as WorldState
-    : workingState;
+    ? { ...atmosphereState, tectonics: tectonicResult.tectonics } as WorldState
+    : atmosphereState;
   const hazardResult = naturalHazardDelta(geologyState, elapsedYears);
   const water = applyNaturalHazardWaterEffects(
-    workingState,
-    simulateWater(workingState, activeEvents, elapsedYears),
+    geologyState,
+    simulateWater(geologyState, activeEvents, elapsedYears, atmosphere.precipitation),
     hazardResult.hazards,
   );
   const targetTimeline = input.timelineDays === undefined
@@ -225,6 +239,7 @@ export const stepEnvironment = (
   appendItems(delta.fieldChanges, tectonicResult.fieldChanges);
   appendItems(delta.eventDrafts, tectonicResult.eventDrafts);
   if (tectonicResult.tectonics) delta.tectonicEffect = tectonicResult.tectonics;
+  delta.atmosphereEffect = atmosphere;
   const technologyByRegion = technologyProfilesForState(state);
   const technologyCells = [...technologyByRegion.entries()]
     .filter(([, technology]) => technology.energy > 0)
@@ -304,11 +319,13 @@ export const applyEnvironmentDelta = (
   next.chemistry = projectChemistry(next, delta.chemistryPatches ?? [], delta.chemistryChanges);
   if (delta.climateCycleEffect) next.climateCycle = structuredClone(delta.climateCycleEffect);
   if (delta.tectonicEffect) next.tectonics = structuredClone(delta.tectonicEffect);
+  if (delta.atmosphereEffect) next.atmosphere = structuredClone(delta.atmosphereEffect);
   return next;
 };
 
 export { calculateChemistry, calculateChemistryPatches, calculateClimate, initializeTerrainWater, simulateWater };
 export { calculateGeology } from "./geology.ts";
+export { calculateAtmosphere, createAtmosphereState, isAtmosphereState, restoreAtmosphereState } from "./atmosphere.ts";
 export { applyNaturalHazardWaterEffects, naturalHazardDelta, naturalHazardsFor, MAX_NATURAL_HAZARDS_PER_STEP, type NaturalHazard, type NaturalHazardKind } from "./hazards.ts";
 export { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceEffectProfilesForState } from "./substances.ts";
 export { createOrbitalState, diurnalTemperatureOffset, isOrbitalState, orbitalStateAtDays, orbitalStateForWorld, seasonalTemperatureOffset } from "./orbit.ts";

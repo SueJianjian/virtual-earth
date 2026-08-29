@@ -43,6 +43,7 @@ const lineageSnapshot = (): WorldSnapshot => {
     years: state.years,
     formation: state.formation,
     tectonics: state.tectonics,
+    atmosphere: state.atmosphere,
     digest: "test",
     fields: state.fields,
     chemistry: state.chemistry,
@@ -209,6 +210,10 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("模拟海拔");
     expect(element.innerHTML).toContain("地质板块");
     expect(element.innerHTML).toContain("边界应力");
+    expect(element.innerHTML).toContain("大气环流");
+    expect(element.innerHTML).toContain("相对气压");
+    expect(element.innerHTML).toContain("实际降水");
+    expect(element.innerHTML).toContain("风速指数");
     expect(element.innerHTML).toContain("°C");
     expect(element.innerHTML).toContain("m");
     expect(element.innerHTML).toContain("相对浓度");

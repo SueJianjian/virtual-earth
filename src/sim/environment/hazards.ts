@@ -136,20 +136,31 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
     const boundaryType = stress < 0.01 ? "interior" : activity >= 0.12 ? "convergent" : activity <= -0.12 ? "divergent" : "transform";
     const temperatureValue = clamp(temperature.values[index] ?? 0);
     const humidityValue = clamp(humidity.values[index] ?? 0);
+    const atmosphereEstablished = state.atmosphere.updateCount > 0;
+    const precipitationValue = atmosphereEstablished
+      ? clamp(state.atmosphere.precipitation.values[index] ?? 0)
+      : humidityValue;
+    const pressureValue = atmosphereEstablished ? clamp(state.atmosphere.pressure.values[index] ?? 0.5) : 0.5;
+    const windSpeed = atmosphereEstablished
+      ? clamp(Math.hypot(state.atmosphere.windX.values[index] ?? 0, state.atmosphere.windY.values[index] ?? 0))
+      : 0;
     const waterValue = clamp(water.values[index] ?? 0);
     const nutrientsValue = clamp(nutrients.values[index] ?? 0);
     const volcanicScore = clamp(stress * 0.62 + Math.abs(activity) * 0.16 + elevationValue * 0.12 + relief * 0.1);
     const earthquakeScore = clamp(stress * 0.8 + relief * 0.2);
     const heat = clamp((temperatureValue - 0.6) / 0.4);
-    const aridity = (clamp((0.4 - humidityValue) / 0.4) + clamp((0.34 - waterValue) / 0.34)) / 2;
-    const droughtScore = clamp(heat * 0.42 + aridity * 0.58);
-    const wetness = (waterValue + humidityValue) / 2;
-    const floodScore = clamp(wetness * 0.68 + (1 - elevationValue) * 0.32);
+    const aridity = (clamp((0.4 - humidityValue) / 0.4) + clamp((0.34 - waterValue) / 0.34) + clamp((0.28 - precipitationValue) / 0.28)) / 3;
+    const droughtScore = clamp(heat * 0.4 + aridity * 0.6);
+    const wetness = waterValue * 0.46 + humidityValue * 0.2 + precipitationValue * 0.34;
+    const floodScore = clamp(wetness * 0.7 + (1 - elevationValue) * 0.3);
     const common = volcanicScore >= 0.73 || earthquakeScore >= 0.78 || droughtScore >= 0.74 || floodScore >= 0.78
       ? {
         elevation: round(elevationValue),
         temperature: round(temperatureValue),
         humidity: round(humidityValue),
+        precipitation: round(precipitationValue),
+        pressure: round(pressureValue),
+        windSpeed: round(windSpeed),
         water: round(waterValue),
         nutrients: round(nutrientsValue),
         samplingScale: sampleScale,
