@@ -1,8 +1,8 @@
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
-export type MapLayer = "natural" | "tectonics" | "temperature" | "rainfall" | "seaTemperature" | "salinity" | "currents" | "seaIce" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
+export type MapLayer = "natural" | "tectonics" | "temperature" | "rainfall" | "seaTemperature" | "salinity" | "currents" | "seaIce" | "marineNutrients" | "marineOxygen" | "primaryProductivity" | "plankton" | "marineCarbon" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
 
-export const layerLabels: Record<MapLayer, string> = {
+export const layerLabels: Record<Exclude<MapLayer, "marineNutrients" | "marineOxygen" | "primaryProductivity" | "plankton" | "marineCarbon">, string> = {
   natural: "自然",
   tectonics: "地质板块",
   temperature: "温度",
@@ -21,6 +21,14 @@ export const layerLabels: Record<MapLayer, string> = {
   foodSecurity: "食物保障",
   health: "疫情",
 };
+
+Object.assign(layerLabels, {
+  marineNutrients: "海洋营养盐",
+  marineOxygen: "海洋溶解氧",
+  primaryProductivity: "初级生产力",
+  plankton: "浮游生物",
+  marineCarbon: "海洋有机碳",
+} satisfies Record<Extract<MapLayer, "marineNutrients" | "marineOxygen" | "primaryProductivity" | "plankton" | "marineCarbon">, string>);
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 const isOceanCell = (elevation: number): boolean => elevation < 0.48;
@@ -53,6 +61,11 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const salinity = clamp(snapshot.ocean?.salinity.values[index] ?? 0.52);
   const currentMagnitude = clamp(Math.hypot(snapshot.ocean?.currentX.values[index] ?? 0, snapshot.ocean?.currentY.values[index] ?? 0));
   const seaIce = clamp(snapshot.ocean?.seaIce.values[index] ?? 0);
+  const marineNutrients = clamp(snapshot.ocean?.dissolvedNutrients.values[index] ?? 0);
+  const marineOxygen = clamp(snapshot.ocean?.dissolvedOxygen.values[index] ?? 0);
+  const primaryProductivity = clamp(snapshot.ocean?.primaryProductivity.values[index] ?? 0);
+  const plankton = clamp(snapshot.ocean?.planktonBiomass.values[index] ?? 0);
+  const marineCarbon = clamp(snapshot.ocean?.organicCarbon.values[index] ?? 0);
   const nutrients = clamp(fields.nutrients.values[index] ?? 0);
   const biomass = clamp(fields.biomass.values[index] ?? 0);
   const carbon = clamp(snapshot.chemistry.carbon.values[index] ?? 0);
@@ -85,6 +98,21 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
     : [39, 44, 45];
   if (layer === "seaIce") return isOceanCell(elevation)
     ? mix([27, 58, 76], [214, 239, 235], seaIce)
+    : [39, 44, 45];
+  if (layer === "marineNutrients") return isOceanCell(elevation)
+    ? mix([25, 57, 83], [224, 184, 60], marineNutrients)
+    : [39, 44, 45];
+  if (layer === "marineOxygen") return isOceanCell(elevation)
+    ? mix([53, 52, 70], [90, 207, 211], marineOxygen)
+    : [39, 44, 45];
+  if (layer === "primaryProductivity") return isOceanCell(elevation)
+    ? mix([34, 56, 85], [84, 211, 107], primaryProductivity)
+    : [39, 44, 45];
+  if (layer === "plankton") return isOceanCell(elevation)
+    ? mix([30, 53, 75], [204, 218, 83], plankton)
+    : [39, 44, 45];
+  if (layer === "marineCarbon") return isOceanCell(elevation)
+    ? mix([34, 64, 83], [174, 104, 62], marineCarbon)
     : [39, 44, 45];
   if (layer === "nutrients") return mix([51, 47, 41], [211, 167, 63], nutrients);
   if (layer === "biomass") return mix([50, 48, 43], [65, 157, 85], biomass);

@@ -84,6 +84,11 @@ export type OceanState = {
   currentX: Grid;
   currentY: Grid;
   seaIce: Grid;
+  dissolvedNutrients: Grid;
+  dissolvedOxygen: Grid;
+  organicCarbon: Grid;
+  primaryProductivity: Grid;
+  planktonBiomass: Grid;
   updateCount: number;
   lastUpdatedTick: number;
   lastUpdatedTimelineStep?: string;

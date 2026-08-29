@@ -13,7 +13,7 @@ import { advanceSimulationTimeline, nextSimulationStep, projectedYearsAfterStep,
 import { advanceClimateCycle } from "./cycle.ts";
 import { orbitalStateForWorld } from "./orbit.ts";
 import { calculateAtmosphere } from "./atmosphere.ts";
-import { calculateOcean } from "./ocean.ts";
+import { calculateMarineChemistryPatches, calculateOcean } from "./ocean.ts";
 import type {
   EnvironmentDelta,
   EnvironmentInput,
@@ -152,7 +152,7 @@ export const initializeEnvironment = (state: WorldState): WorldState => {
     lastUpdatedTick: next.tick,
     timelineStep: next.timeline?.step ?? String(next.tick),
     lastUpdatedYears: next.years,
-  });
+  }, next.chemistry);
   return next;
 };
 
@@ -205,7 +205,7 @@ export const stepEnvironment = (
     lastUpdatedTick: Math.min(Number.MAX_SAFE_INTEGER, state.tick + 1),
     timelineStep: input.timelineStep ?? nextSimulationStep(state),
     lastUpdatedYears: projectedYearsAfterStep(state, elapsedYears),
-  });
+  }, state.chemistry);
   const oceanState = { ...atmosphereState, ocean } as WorldState;
   const tectonicResult = stepTectonics(oceanState, elapsedYears, input.timelineStep);
   const geologyState = tectonicResult.tectonics
@@ -246,7 +246,10 @@ export const stepEnvironment = (
       causeRuleId: "terrain-nutrients",
     });
   }
-  delta.chemistryPatches = calculateChemistryPatches(workingState, elapsedYears);
+  delta.chemistryPatches = [
+    ...calculateChemistryPatches(workingState, elapsedYears),
+    ...calculateMarineChemistryPatches(ocean, state.chemistry, elapsedYears),
+  ];
   appendItems(delta.fieldChanges, hazardResult.delta.fieldChanges);
   appendItems(delta.chemistryChanges, hazardResult.delta.chemistryChanges);
   appendItems(delta.eventDrafts, hazardResult.delta.eventDrafts);
@@ -342,7 +345,7 @@ export const applyEnvironmentDelta = (
 export { calculateChemistry, calculateChemistryPatches, calculateClimate, initializeTerrainWater, simulateWater };
 export { calculateGeology } from "./geology.ts";
 export { calculateAtmosphere, createAtmosphereState, isAtmosphereState, restoreAtmosphereState } from "./atmosphere.ts";
-export { calculateOcean, createOceanState, isOceanState, restoreOceanState } from "./ocean.ts";
+export { calculateMarineChemistryPatches, calculateOcean, createOceanState, isOceanCoreState, isOceanState, restoreOceanState } from "./ocean.ts";
 export { applyNaturalHazardWaterEffects, naturalHazardDelta, naturalHazardsFor, MAX_NATURAL_HAZARDS_PER_STEP, type NaturalHazard, type NaturalHazardKind } from "./hazards.ts";
 export { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceEffectProfilesForState } from "./substances.ts";
 export { createOrbitalState, diurnalTemperatureOffset, isOrbitalState, orbitalStateAtDays, orbitalStateForWorld, seasonalTemperatureOffset } from "./orbit.ts";

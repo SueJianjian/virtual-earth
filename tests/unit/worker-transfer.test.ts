@@ -24,7 +24,7 @@ describe("worker snapshot transfer", () => {
 
     const buffers = snapshotTransferables(snapshot);
 
-    expect(buffers).toHaveLength(25);
+    expect(buffers).toHaveLength(30);
     expect(new Set(buffers).size).toBe(buffers.length);
     expect(buffers).toContain(snapshot.fields.water.values.buffer);
     expect(buffers).toContain(snapshot.chemistry.oxygen.values.buffer);
@@ -33,6 +33,8 @@ describe("worker snapshot transfer", () => {
     expect(buffers).toContain(snapshot.tectonics!.boundaryStress.values.buffer);
     expect(buffers).toContain(snapshot.atmosphere!.precipitation.values.buffer);
     expect(buffers).toContain(snapshot.ocean!.seaTemperature.values.buffer);
+    expect(buffers).toContain(snapshot.ocean!.dissolvedNutrients.values.buffer);
+    expect(buffers).toContain(snapshot.ocean!.primaryProductivity.values.buffer);
     expect(messageTransferables({ type: "events", events: [] })).toEqual([]);
 
     const received = structuredClone(snapshot, { transfer: buffers });

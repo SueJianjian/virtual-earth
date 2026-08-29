@@ -19,7 +19,7 @@ import { createOrbitalState, isOrbitalState } from "../sim/environment/orbit.ts"
 import { createClimateCycleState, isClimateCycleState } from "../sim/environment/cycle.ts";
 import { createTectonicState, isTectonicState } from "../sim/environment/geology.ts";
 import { isAtmosphereState, restoreAtmosphereState } from "../sim/environment/atmosphere.ts";
-import { isOceanState, restoreOceanState } from "../sim/environment/ocean.ts";
+import { isOceanCoreState, isOceanState, restoreOceanState } from "../sim/environment/ocean.ts";
 
 const encode = (value: unknown): unknown => {
   if (value instanceof Float32Array) return { __type: "Float32Array", values: Array.from(value) };
@@ -332,13 +332,22 @@ const validateWorld = (value: unknown): WorldState => {
   if (!isAtmosphereState(atmosphere, elevationGrid.width, elevationGrid.height)) {
     throw new Error("Save contains invalid atmosphere state");
   }
-  const ocean = world.ocean === undefined
+  const savedOcean = world.ocean as unknown;
+  const ocean = savedOcean === undefined
     ? restoreOceanState(world.seed!, fields as WorldState["fields"], atmosphere, {
       elapsedYears: world.years!,
       lastUpdatedTick: world.tick,
       timelineStep: world.timeline?.step ?? String(world.tick),
-    })
-    : world.ocean;
+    }, undefined, chemistry as WorldState["chemistry"])
+    : isOceanState(savedOcean, elevationGrid.width, elevationGrid.height)
+      ? savedOcean
+      : isOceanCoreState(savedOcean, elevationGrid.width, elevationGrid.height)
+        ? restoreOceanState(world.seed!, fields as WorldState["fields"], atmosphere, {
+          ...((savedOcean as Partial<WorldState["ocean"]>).lastUpdatedYears === undefined ? {} : { elapsedYears: (savedOcean as Partial<WorldState["ocean"]>).lastUpdatedYears }),
+          ...((savedOcean as Partial<WorldState["ocean"]>).lastUpdatedTick === undefined ? {} : { lastUpdatedTick: (savedOcean as Partial<WorldState["ocean"]>).lastUpdatedTick }),
+          ...((savedOcean as Partial<WorldState["ocean"]>).lastUpdatedTimelineStep === undefined ? {} : { timelineStep: (savedOcean as Partial<WorldState["ocean"]>).lastUpdatedTimelineStep }),
+        }, savedOcean as Pick<WorldState["ocean"], "seaTemperature" | "salinity" | "currentX" | "currentY" | "seaIce">, chemistry as WorldState["chemistry"])
+        : savedOcean;
   if (!isOceanState(ocean, elevationGrid.width, elevationGrid.height)) {
     throw new Error("Save contains invalid ocean state");
   }

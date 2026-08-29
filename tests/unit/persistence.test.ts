@@ -30,17 +30,28 @@ describe("world persistence", () => {
     expect(restored.ocean).toEqual(world.ocean);
 
     const legacy = JSON.parse(serializeWorld(world)) as { world: { ocean?: unknown } };
-    delete legacy.world.ocean;
+    const legacyOcean = legacy.world.ocean as Record<string, unknown>;
+    delete legacyOcean.dissolvedNutrients;
+    delete legacyOcean.dissolvedOxygen;
+    delete legacyOcean.organicCarbon;
+    delete legacyOcean.primaryProductivity;
+    delete legacyOcean.planktonBiomass;
     const firstUpgrade = deserializeWorld(JSON.stringify(legacy));
     const secondUpgrade = deserializeWorld(JSON.stringify(legacy));
     expect(firstUpgrade.ocean).toEqual(secondUpgrade.ocean);
     expect(firstUpgrade.ocean.seaTemperature.values).toHaveLength(64);
+    expect(firstUpgrade.ocean.dissolvedNutrients.values).toHaveLength(64);
+    expect(firstUpgrade.ocean.primaryProductivity.values.every((value) => Number.isFinite(value))).toBe(true);
   });
 
   it("rejects malformed ocean grids instead of loading corrupted sea state", () => {
     const save = JSON.parse(serializeWorld(createWorld(124, { width: 8, height: 8 }))) as { world: { ocean: { salinity: { values: { values: number[] } } } } };
     save.world.ocean.salinity.values.values[0] = 2;
     expect(() => deserializeWorld(JSON.stringify(save))).toThrow("invalid ocean state");
+
+    const marineSave = JSON.parse(serializeWorld(createWorld(125, { width: 8, height: 8 }))) as { world: { ocean: { dissolvedOxygen: { values: { values: number[] } } } } };
+    marineSave.world.ocean.dissolvedOxygen.values.values[0] = 2;
+    expect(() => deserializeWorld(JSON.stringify(marineSave))).toThrow("invalid ocean state");
   });
 
   it("rejects malformed atmosphere grids instead of loading corrupted circulation", () => {

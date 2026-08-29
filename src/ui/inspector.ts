@@ -825,6 +825,23 @@ const regionalOceanReport = (snapshot: WorldSnapshot, regionId?: RegionId): stri
   return `<section class="organization-governance ocean-report" aria-label="区域海洋"><div class="detail-heading"><strong>海洋状态</strong><span>${direction} · ${iceLabel}</span></div><dl class="detail-grid"><div><dt>海表温度</dt><dd>${formatPercent(seaTemperature).value}%</dd></div><div><dt>相对盐度</dt><dd>${formatPercent(salinity).value}%</dd></div><div><dt>洋流方向</dt><dd>${direction}</dd></div><div><dt>洋流速度</dt><dd>${formatPercent(Math.hypot(currentX, currentY)).value}%</dd></div><div><dt>东西流分量</dt><dd>${formatNumber(currentX, 3)}</dd></div><div><dt>南北流分量</dt><dd>${formatNumber(currentY, 3)}</dd></div><div><dt>海冰覆盖</dt><dd>${formatPercent(seaIce).value}%</dd></div><div><dt>海洋更新</dt><dd>${format(ocean.updateCount)} 次</dd></div></dl></section>`;
 };
 
+const regionalMarineBiogeochemistryReport = (snapshot: WorldSnapshot, regionId?: RegionId): string => {
+  const ocean = snapshot.ocean;
+  if (!ocean || !regionId) return "";
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  const x = Number(match?.[1] ?? -1);
+  const y = Number(match?.[2] ?? -1);
+  if (x < 0 || y < 0 || x >= ocean.primaryProductivity.width || y >= ocean.primaryProductivity.height) return "";
+  const index = y * ocean.primaryProductivity.width + x;
+  if ((snapshot.fields.elevation.values[index] ?? 1) >= 0.48) return "";
+  const productivity = ocean.primaryProductivity.values[index] ?? 0;
+  const plankton = ocean.planktonBiomass.values[index] ?? 0;
+  const oxygen = ocean.dissolvedOxygen.values[index] ?? 0;
+  const nutrients = ocean.dissolvedNutrients.values[index] ?? 0;
+  const organicCarbon = ocean.organicCarbon.values[index] ?? 0;
+  return `<section class="organization-governance ocean-report" aria-label="海洋生物地球化学"><div class="detail-heading"><strong>海洋生物地球化学</strong><span>固定网格实时状态</span></div><dl class="detail-grid"><div><dt>溶解营养盐</dt><dd>${formatPercent(nutrients).value}%</dd></div><div><dt>溶解氧</dt><dd>${formatPercent(oxygen).value}%</dd></div><div><dt>初级生产力</dt><dd>${formatPercent(productivity).value}%</dd></div><div><dt>浮游生物量</dt><dd>${formatPercent(plankton).value}%</dd></div><div><dt>有机碳</dt><dd>${formatPercent(organicCarbon).value}%</dd></div><div><dt>网格更新</dt><dd>${format(ocean.updateCount)} 次</dd></div></dl></section>`;
+};
+
 const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"]): Array<{ id: string; label: string }> => {
   if (level === "region") return [];
   if (level === "substance") return (snapshot.substances ?? [])

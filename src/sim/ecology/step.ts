@@ -11,6 +11,7 @@ import { simulationStepForWorld } from "../time.ts";
 import { annualClimateForLocal } from "../environment/cycle.ts";
 import type {
   EcologyDelta,
+  OceanState,
   RuleContext,
   WorldDelta,
   WorldState,
@@ -60,7 +61,7 @@ const neighborRegions = (regionId: string, width: number, height: number): strin
   ].filter((candidate): candidate is string => Boolean(candidate)))];
 };
 
-export const stepEcology = (state: WorldState, context: RuleContext): EcologyDelta => {
+export const stepEcology = (state: WorldState, context: RuleContext, pendingOcean?: OceanState): EcologyDelta => {
   const delta = emptyDelta();
   const width = state.fields.elevation.width;
   const height = state.fields.elevation.height;
@@ -69,6 +70,21 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
   const regionIndexCache = new Map<string, number>();
   const neighborCache = new Map<string, string[]>();
   const suitabilityCache = new Map<string, number>();
+  const ocean = pendingOcean ?? state.ocean;
+  const isMarineCell = (index: number): boolean => (state.fields.elevation.values[index] ?? 1) < 0.48;
+  const marineHabitatFor = (species: WorldState["species"][number], index: number): number => {
+    const affinity = Math.max(0, Math.min(1, species.traits.marineAffinity ?? 0));
+    if (affinity < 0.55) return isMarineCell(index) ? 0.12 : 1;
+    if (!isMarineCell(index)) return 0.04;
+    const temperature = ocean.seaTemperature.values[index] ?? state.fields.temperature.values[index] ?? 0.5;
+    const thermalFit = Math.max(0, 1 - Math.abs(temperature - (species.traits.temperatureOptimum ?? 0.5)) * 1.5);
+    const oxygen = ocean.dissolvedOxygen.values[index] ?? 0;
+    const food = species.role === "producer"
+      ? ocean.dissolvedNutrients.values[index] ?? 0
+      : ocean.planktonBiomass.values[index] ?? 0;
+    const oxygenFit = Math.min(1, oxygen * 2.2 + 0.2);
+    return Math.max(0, Math.min(1, thermalFit * 0.4 + oxygenFit * 0.25 + food * 0.35));
+  };
   const regionIndexFor = (regionId: string): number => {
     const cached = regionIndexCache.get(regionId);
     if (cached !== undefined) return cached;
@@ -102,7 +118,12 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
       fallbackHumidity,
       state.climateCycle,
     );
-    const value = suitability(species, climate.temperature, climate.humidity);
+    const terrestrial = suitability(species, climate.temperature, climate.humidity);
+    const marine = marineHabitatFor(species, index);
+    const affinity = Math.max(0, Math.min(1, species.traits.marineAffinity ?? 0));
+    // Existing lineages retain their coastal/terrestrial niche. Only a
+    // strongly adapted lineage switches to the marine biogeochemical niche.
+    const value = affinity >= 0.55 && isMarineCell(index) ? marine : terrestrial;
     suitabilityCache.set(key, value);
     return value;
   };
@@ -216,10 +237,16 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
     const temperature = climate.temperature;
     const humidity = climate.humidity;
     const nutrients = state.fields.nutrients.values[index] ?? metrics.nutrientLevel;
+    const marineAffinity = Math.max(0, Math.min(1, species.traits.marineAffinity ?? 0));
+    const marineFood = species.role === "producer"
+      ? (ocean.primaryProductivity.values[index] ?? 0) * 0.9 + (ocean.dissolvedNutrients.values[index] ?? 0) * 0.25
+      : (ocean.planktonBiomass.values[index] ?? 0) * (species.role === "consumer" ? 0.8 : 0.45);
+    const marineSpecialist = isMarineCell(index) && marineAffinity >= 0.55;
     const suitabilityScore = suitabilityFor(species, population.regionId);
-    const baseFood = species.role === "producer"
+    const terrestrialFood = species.role === "producer"
       ? nutrients
       : Math.min(1, producerFood * (species.role === "consumer" ? 0.2 : 0.12));
+    const baseFood = marineSpecialist ? marineFood : terrestrialFood;
     const food = Math.max(0, Math.min(1, baseFood + (interactionModel.foodAdjustments.get(population.id) ?? 0)));
     const count = nextPopulationCount(population, species, suitabilityScore, food);
     let nextRegionId = population.regionId;
@@ -230,9 +257,11 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
           const candidateIndex = regionIndexFor(regionId);
           const habitat = suitabilityFor(species, regionId);
           const foodSecurity = foodSecurityFromBalance(foodByRegion.get(regionId) ?? 0, population.count);
-          const ecologicalResource = species.role === "producer"
-            ? state.fields.nutrients.values[candidateIndex] ?? 0
-            : state.fields.biomass.values[candidateIndex] ?? 0;
+          const ecologicalResource = isMarineCell(candidateIndex) && marineAffinity >= 0.55
+            ? marineHabitatFor(species, candidateIndex)
+            : species.role === "producer"
+              ? state.fields.nutrients.values[candidateIndex] ?? 0
+              : state.fields.biomass.values[candidateIndex] ?? 0;
           const foodAdvantage = Math.max(0, foodSecurity - originFoodSecurity);
           const habitatAdvantage = habitat > suitabilityScore + 0.1;
           const foodDriven = foodAdvantage > 0.1 && habitat >= suitabilityScore - 0.05;
@@ -291,9 +320,11 @@ export const stepEcology = (state: WorldState, context: RuleContext): EcologyDel
         .map((regionId) => {
           const candidateIndex = regionIndexFor(regionId);
           const habitat = suitabilityFor(species, regionId);
-          const resources = species.role === "producer"
-            ? state.fields.nutrients.values[candidateIndex] ?? 0
-            : state.fields.biomass.values[candidateIndex] ?? 0;
+          const resources = isMarineCell(candidateIndex) && marineAffinity >= 0.55
+            ? marineHabitatFor(species, candidateIndex)
+            : species.role === "producer"
+              ? state.fields.nutrients.values[candidateIndex] ?? 0
+              : state.fields.biomass.values[candidateIndex] ?? 0;
           return { regionId, habitat, score: habitat * 0.82 + resources * 0.18 };
         })
         .sort((left, right) => right.score - left.score || left.regionId.localeCompare(right.regionId));

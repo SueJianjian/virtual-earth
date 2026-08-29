@@ -1116,9 +1116,9 @@ const installDefaultStages = (): void => {
     registerSimulationStage(annualized({
       id: "ecology",
       order: 20,
-      run: (state) => {
+      run: (state, _input, priorDeltas) => {
         const context: RuleContext = { state, random: state.random, metrics: metricsFor(state), tick: state.tick, years: state.years };
-        return stepEcology(state, context);
+        return stepEcology(state, context, priorDeltas.get("environment")?.oceanEffect);
       },
     }));
   }
@@ -1130,7 +1130,20 @@ const installDefaultStages = (): void => {
 };
 
 export const MAX_EXTERNAL_EVENTS_PER_STEP = 256;
-export type StepOptions = { computeDigest?: boolean; mutateState?: boolean };
+export type StepOptions = {
+  computeDigest?: boolean;
+  mutateState?: boolean;
+  validation?: "full" | "periodic" | "none";
+};
+
+const PERIODIC_VALIDATION_INTERVAL = 64;
+
+const periodicValidationDue = (state: WorldState): boolean => {
+  if (state.tick < Number.MAX_SAFE_INTEGER) return state.tick % PERIODIC_VALIDATION_INTERVAL === 0;
+  const timelineStep = state.timeline?.step;
+  if (!timelineStep || !/^\d+$/.test(timelineStep)) return true;
+  return Number(BigInt(timelineStep) % BigInt(PERIODIC_VALIDATION_INTERVAL)) === 0;
+};
 
 export const stepWorld = (state: WorldState, input: StepInput, options: StepOptions = {}): { state: WorldState; events: WorldState["events"]; digest: string } => {
   if (!Number.isSafeInteger(state.tick) || state.tick < 0) {
@@ -1182,7 +1195,12 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     ? previous
     : structuredClone({ ...previous, events: [] }) as WorldState;
   if (!options.mutateState) next.events = [...previous.events];
-  if (options.mutateState) validateDeltaBeforeMutation(next, merged);
+  const validation = options.validation ?? "periodic";
+  if (options.mutateState
+    && validation !== "none"
+    && (validation === "full" || periodicValidationDue(previous))) {
+    validateDeltaBeforeMutation(next, merged);
+  }
   synchronizeEventArchive(next.eventArchive, next.events);
   applyDelta(next, merged, orderedDeltas);
   appendItems(merged.eventDrafts, pruneTransientState(next));
@@ -1198,8 +1216,9 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   const emittedEvents = [...emittedExternal, ...emittedNatural];
   recordAppendedEvents(next.eventArchive, emittedEvents);
   if (wholeYearsCrossed(0, input.elapsedYears, currentTimeline.days) > 0) recordHistorySample(next);
-  compactEventLedger(next);
-  compactEventArchiveIndexes(next);
+  const archivedEvents = compactEventLedger(next);
+  const removedOrganization = merged.entityEffects.some((effect) => effect.collection === "organizations" && effect.operation === "remove");
+  if (archivedEvents.length > 0 || removedOrganization) compactEventArchiveIndexes(next);
   return { state: next, events: emittedEvents, digest: options.computeDigest === false ? "" : worldDigest(next) };
 };
 

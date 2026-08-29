@@ -5,7 +5,7 @@ import { simulateWater, totalWater } from "../../src/sim/environment/hydrology.t
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { createTectonicState, isTectonicState, MAX_TECTONIC_EVENTS_PER_STEP, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES, stepTectonics } from "../../src/sim/environment/geology.ts";
 import { calculateAtmosphere, createAtmosphereState, isAtmosphereState } from "../../src/sim/environment/atmosphere.ts";
-import { calculateOcean, createOceanState, isOceanState } from "../../src/sim/environment/ocean.ts";
+import { calculateMarineChemistryPatches, calculateOcean, createOceanState, isOceanState } from "../../src/sim/environment/ocean.ts";
 
 const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
@@ -78,6 +78,7 @@ describe("environment simulation", () => {
     const mean = (values: Float32Array): number => values.reduce((sum, value) => sum + value, 0) / values.length;
     expect(mean(warm.seaTemperature.values)).toBeGreaterThan(mean(cold.seaTemperature.values));
     expect(cold.seaIce.values.some((value) => value > 0)).toBe(true);
+    expect(mean(warm.primaryProductivity.values)).toBeGreaterThan(mean(cold.primaryProductivity.values));
 
     const dryFields = structuredClone(world.fields);
     const wetFields = structuredClone(world.fields);
@@ -91,6 +92,20 @@ describe("environment simulation", () => {
     const wet = calculateOcean(createOceanState(world.seed, 16, 8), wetFields, wetAtmosphere, world.seed, { elapsedYears: 1 });
     expect(mean(dry.salinity.values)).toBeGreaterThan(mean(wet.salinity.values));
     expect(isOceanState(warm, 16, 8)).toBe(true);
+  });
+
+  it("feeds marine production back into bounded ocean chemistry", () => {
+    const state = makeEnvironment();
+    state.ocean.primaryProductivity.values.fill(1);
+    state.ocean.planktonBiomass.values.fill(0.8);
+    const patches = calculateMarineChemistryPatches(state.ocean, state.chemistry, 1);
+    const projected = projectChemistry(state, patches, []);
+
+    expect(patches).toHaveLength(5);
+    expect(patches.every((patch) => patch.values.length === 16 * 8)).toBe(true);
+    expect(projected.oxygen.values.some((value, index) => value > state.chemistry.oxygen.values[index]!)).toBe(true);
+    expect(projected.organics.values.some((value, index) => value > state.chemistry.organics.values[index]!)).toBe(true);
+    expect(projected.carbon.values.every((value) => value >= 0 && value <= 1)).toBe(true);
   });
 
   it("keeps ocean circulation finite for an effectively unbounded elapsed interval", () => {
@@ -113,7 +128,19 @@ describe("environment simulation", () => {
       ...ocean.currentX.values,
       ...ocean.currentY.values,
       ...ocean.seaIce.values,
+      ...ocean.dissolvedNutrients.values,
+      ...ocean.dissolvedOxygen.values,
+      ...ocean.organicCarbon.values,
+      ...ocean.primaryProductivity.values,
+      ...ocean.planktonBiomass.values,
     ].every(Number.isFinite)).toBe(true);
+    expect([
+      ...ocean.dissolvedNutrients.values,
+      ...ocean.dissolvedOxygen.values,
+      ...ocean.organicCarbon.values,
+      ...ocean.primaryProductivity.values,
+      ...ocean.planktonBiomass.values,
+    ].every((value) => value >= 0 && value <= 1)).toBe(true);
   });
 
   it("creates deterministic, seed-specific bounded tectonic plates", () => {
@@ -226,10 +253,12 @@ describe("environment simulation", () => {
       expect.objectContaining({ field: "water", operation: "set", causeRuleId: "hydrology-cycle" }),
     ]));
     expect(delta.fieldPatches?.every((patch) => patch.values.length === 64 * 32)).toBe(true);
-    expect(delta.chemistryPatches).toHaveLength(5);
+    expect(delta.chemistryPatches).toHaveLength(10);
     expect(delta.chemistryPatches?.every((patch) => patch.values.length === 64 * 32)).toBe(true);
     expect(delta.fieldChanges.length).toBeLessThan(64);
     expect(delta.chemistryChanges.length).toBeLessThan(64);
+    expect(delta.chemistryPatches?.filter((patch) => patch.causeRuleId.startsWith("ocean:marine-")).map((patch) => patch.field))
+      .toEqual(["carbon", "nitrogen", "phosphorus", "organics", "oxygen"]);
 
     const next = applyEnvironmentDelta(state, delta);
     expect(next.fields.temperature.values.every(Number.isFinite)).toBe(true);

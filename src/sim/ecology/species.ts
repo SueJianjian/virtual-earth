@@ -65,6 +65,7 @@ export const createSpecies = (
     humidityOptimum: 0.3 + (hashString(`${seed}:humidity`) % 50) / 100,
     mobility: 0.15 + (hashString(`${seed}:mobility`) % 65) / 100,
     cognitivePotential: role === "consumer" ? (hashString(`${seed}:mind`) % 70) / 100 : 0,
+    marineAffinity: (hashString(`${seed}:marine`) % 1_001) / 1_000,
   },
   ...(parentId ? { parentId } : {}),
   ...(origin ? {
@@ -278,6 +279,7 @@ export const attemptAdaptiveSpeciation = (
     cognitivePotential: parent.role === "consumer"
       ? clamp01((parent.traits.cognitivePotential ?? 0) + mutation("mind") * 0.09 + 0.01 * populationOpportunity)
       : 0,
+    marineAffinity: clamp01((parent.traits.marineAffinity ?? 0.5) + mutation("marine") * 0.08),
   };
   if (parent) {
     const mutatedBlueprint = mutateSpeciesBlueprint(speciesBlueprintFor(parent), seed, parent.role, {
