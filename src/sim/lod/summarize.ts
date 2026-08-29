@@ -322,7 +322,7 @@ export const summarizeRegionState = (
   const population = agents.length;
   const foodPerAgent = foodBalance / Math.max(1, population);
   const foodSecurity = meanFoodSecurity({ resources: state.resources, organizations, agents });
-  const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal");
+  const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "organization-migration");
   const culture = index?.culturesByRegion.get(regionId) ?? state.cultures.find((candidate) => candidate.regionId === regionId);
   const cultureSummary = cultureSummaryFor(state, regionId, culture, agents);
   const societySummary = societySummaryFor(state, regionId, organizations, index?.facilitiesByRegion.get(regionId) ?? state.facilities, regionEvents);
@@ -381,7 +381,7 @@ export const refreshAggregateSummaryWithEvents = (
     ? aggregatePopulationForRegion(state, previous.regionId, 0, populations, populationByRegion)
     : hadRegionalPopulation ? 0 : previous.population;
   const regionEvents = regionEventsFor(state, previous.regionId, previous.organizations.map((organization) => organization.id), index);
-  const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal").length;
+  const migrationEvents = regionEvents.filter((event) => event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "organization-migration").length;
   const culture = index?.culturesByRegion.get(previous.regionId) ?? state.cultures.find((candidate) => candidate.regionId === previous.regionId);
   const existingCultureSummary = previous.cultureSummary
     ?? cultureSummaryFor(state, previous.regionId, culture, index?.agentsByRegion.get(previous.regionId) ?? state.agents.filter((agent) => agent.regionId === previous.regionId))

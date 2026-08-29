@@ -1,7 +1,7 @@
 import { forkRandom, hashString, randomFloat } from "../random.ts";
 import type { DiplomaticStance, EntityId, FoodBalanceIndex, OrganizationState, OrganizationType, RegionId, WorldDelta, WorldState } from "../types.ts";
 import { applyOrganizationConflict } from "./governance.ts";
-import { diplomacyForOrganization, governanceForOrganization } from "./organization.ts";
+import { diplomacyForOrganization, governanceForOrganization, minimumMembersFor } from "./organization.ts";
 import { createFoodBalanceIndex, foodSecurityForOrganization } from "../agents/food.ts";
 import { technologyProfileForRegion } from "../culture/technology.ts";
 import { culturalCompatibility, cultureIdentityFor } from "../culture/identity.ts";
@@ -250,6 +250,267 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 
 const average = (left: number, right: number): number => (left + right) / 2;
+
+const migrationOrganizationTypes = new Set<OrganizationType>(["settlement", "city", "state", "federation", "empire"]);
+const ORGANIZATION_MIGRATION_COOLDOWN = 24;
+
+const environmentalSuitabilityFor = (state: WorldState, regionId: RegionId): number => {
+  const point = parseRegion(regionId);
+  if (!point) return 0;
+  const index = point.y * state.fields.elevation.width + point.x;
+  const temperature = state.fields.temperature.values[index] ?? 0.5;
+  const humidity = state.fields.humidity.values[index] ?? 0.5;
+  const water = state.fields.water.values[index] ?? 0;
+  const biomass = state.fields.biomass.values[index] ?? 0;
+  const nutrients = state.fields.nutrients.values[index] ?? 0;
+  const thermalComfort = 1 - Math.min(1, Math.abs(temperature - 0.5) * 2);
+  const moistureComfort = 1 - Math.min(1, Math.abs(water - 0.45) * 2);
+  return clamp(biomass * 0.48 + nutrients * 0.14 + thermalComfort * 0.18 + moistureComfort * 0.12 + humidity * 0.08);
+};
+
+const migrationRecentlyRecorded = (state: WorldState, organizationId: string, currentStep: string): boolean => state.events.some((event) => {
+  if (event.kind !== "organization-migration") return false;
+  if (!event.sourceIds.includes(organizationId) && event.payload.organizationId !== organizationId) return false;
+  const eventStep = event.timelineStep ?? String(event.tick);
+  return compareSimulationSteps(currentStep, eventStep) >= 0
+    && simulationStepDistance(currentStep, eventStep) < ORGANIZATION_MIGRATION_COOLDOWN;
+});
+
+const populationIdForMigration = (speciesId: string, regionId: RegionId): EntityId =>
+  `population:${hashString(`${speciesId}:${regionId}`).toString(16)}` as EntityId;
+
+const migrateOrganizationMembers = (
+  state: WorldState,
+  delta: WorldDelta,
+  organization: OrganizationState,
+  destinationRegionId: RegionId,
+  memberIds: readonly EntityId[],
+): number => {
+  const movedByPopulation = new Map<string, number>();
+  const detailedByPopulation = new Map<string, number>();
+  for (const agent of state.agents) {
+    detailedByPopulation.set(String(agent.populationId), (detailedByPopulation.get(String(agent.populationId)) ?? 0) + 1);
+  }
+  for (const memberId of memberIds) {
+    const agent = state.agents.find((candidate) => candidate.id === memberId);
+    if (!agent || agent.regionId !== organization.regionId) continue;
+    const populationId = String(agent.populationId);
+    movedByPopulation.set(populationId, (movedByPopulation.get(populationId) ?? 0) + 1);
+  }
+
+  const populationsById = new Map(state.populations.map((population) => [String(population.id), population]));
+  const destinationPopulationBySpecies = new Map<string, WorldState["populations"][number]>();
+  const populationUpdates = new Map<string, WorldState["populations"][number]>();
+  const createdPopulationIds = new Set<string>();
+  const destinationPopulationIdByAgent = new Map<string, EntityId>();
+  let movedPopulationCount = 0;
+
+  for (const [populationId, movedAgentCount] of [...movedByPopulation.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const source = populationsById.get(populationId);
+    if (!source || movedAgentCount <= 0) continue;
+    const detailedCount = Math.max(1, detailedByPopulation.get(populationId) ?? movedAgentCount);
+    const species = state.species.find((candidate) => candidate.id === source.speciesId);
+    const minimumViableCount = species?.role === "producer" ? 1 : 4;
+    const allDetailedAgentsMoved = movedAgentCount >= detailedCount;
+    const representedCount = Math.max(1, Math.round(source.count / detailedCount));
+    const maximumTransfer = allDetailedAgentsMoved ? source.count : Math.max(0, source.count - minimumViableCount);
+    const transferred = Math.min(maximumTransfer, representedCount * movedAgentCount);
+    if (transferred <= 0) continue;
+
+    const destinationPopulationId = populationIdForMigration(source.speciesId, destinationRegionId);
+    const existingDestination = destinationPopulationBySpecies.get(String(source.speciesId))
+      ?? state.populations.find((candidate) => candidate.speciesId === source.speciesId && candidate.regionId === destinationRegionId);
+    const destination = existingDestination ?? {
+      ...source,
+      id: destinationPopulationId,
+      regionId: destinationRegionId,
+      count: 0,
+      energy: Math.max(0.1, source.energy * 0.78),
+    };
+    const priorDestinationCount = destinationPopulationBySpecies.get(String(source.speciesId))?.count
+      ?? (existingDestination ? existingDestination.count : 0);
+    const nextDestinationCount = priorDestinationCount + transferred;
+    const nextDestinationEnergy = (destination.energy * Math.max(0, priorDestinationCount) + Math.max(0.1, source.energy * 0.78) * transferred)
+      / Math.max(1, nextDestinationCount);
+    const nextDestination = {
+      ...destination,
+      count: nextDestinationCount,
+      energy: clamp(nextDestinationEnergy),
+    };
+    destinationPopulationBySpecies.set(String(source.speciesId), nextDestination);
+    populationUpdates.set(String(source.id), { ...source, count: source.count - transferred });
+    populationUpdates.set(String(nextDestination.id), nextDestination);
+    if (!existingDestination) createdPopulationIds.add(String(nextDestination.id));
+    for (const memberId of memberIds) {
+      const agent = state.agents.find((candidate) => candidate.id === memberId);
+      if (agent?.populationId === source.id && agent.regionId === organization.regionId) {
+        destinationPopulationIdByAgent.set(agent.id, nextDestination.id);
+      }
+    }
+    movedPopulationCount += transferred;
+  }
+
+  for (const population of populationUpdates.values()) {
+    const isDestination = population.regionId === destinationRegionId;
+    const operation = isDestination && createdPopulationIds.has(String(population.id)) ? "create" : "update";
+    delta.entityEffects.push({ collection: "populations", operation, id: population.id, value: population });
+  }
+  for (const memberId of memberIds) {
+    const agent = state.agents.find((candidate) => candidate.id === memberId);
+    if (!agent || agent.regionId !== organization.regionId) continue;
+    const populationId = destinationPopulationIdByAgent.get(agent.id);
+    delta.entityEffects.push({
+      collection: "agents",
+      operation: "update",
+      id: agent.id,
+      value: { ...agent, regionId: destinationRegionId, ...(populationId ? { populationId } : {}) },
+    });
+  }
+  return movedPopulationCount;
+};
+
+const migrateOrganizationFacilities = (
+  state: WorldState,
+  delta: WorldDelta,
+  organization: OrganizationState,
+  destinationRegionId: RegionId,
+): void => {
+  for (const facility of state.facilities) {
+    if (facility.ownerOrganizationId !== organization.id || facility.status === "abandoned") continue;
+    delta.entityEffects.push({
+      collection: "facilities",
+      operation: "update",
+      id: facility.id,
+      value: { ...facility, regionId: destinationRegionId },
+    });
+  }
+};
+
+const migrateOrganizations = (state: WorldState, delta: WorldDelta, index: TerritoryIndex, foodIndex: FoodBalanceIndex): void => {
+  const width = state.fields.elevation.width;
+  const height = state.fields.elevation.height;
+  const currentStep = simulationStepForWorld(state);
+  const organizations = state.organizations
+    .filter((organization) => organization.status === "active" && migrationOrganizationTypes.has(organization.type))
+    .sort((left, right) => (territorialRank[right.type] ?? 0) - (territorialRank[left.type] ?? 0) || left.id.localeCompare(right.id));
+  const occupiedRegions = new Set(organizations.flatMap((organization) => territoryFor(organization)));
+  const claimedDestinations = new Set<RegionId>();
+  const movedAgents = new Set<EntityId>();
+  const activeMembershipCounts = new Map<EntityId, number>();
+  for (const candidate of state.organizations.filter((organization) => organization.status === "active")) {
+    for (const memberId of new Set(candidate.memberIds)) {
+      activeMembershipCounts.set(memberId, (activeMembershipCounts.get(memberId) ?? 0) + 1);
+    }
+  }
+  const newlyCreatedOrganizationIds = new Set(delta.entityEffects
+    .filter((effect) => effect.collection === "organizations" && effect.operation === "create")
+    .map((effect) => effect.id));
+
+  for (const organization of organizations) {
+    if (newlyCreatedOrganizationIds.has(organization.id)
+      || organization.memberIds.length < minimumMembersFor(organization.type)
+      || organization.memberIds.some((memberId) => (activeMembershipCounts.get(memberId) ?? 0) > 1)
+      || migrationRecentlyRecorded(state, organization.id, currentStep)) continue;
+    const governance = governanceForOrganization(organization);
+    if (governance.lastConflictTimelineStep === currentStep) continue;
+    const currentHabitat = environmentalSuitabilityFor(state, organization.regionId);
+    const foodSecurity = foodSecurityForOrganization(state, organization, foodIndex);
+    const pressure = clamp((1 - foodSecurity) * 0.55 + (1 - currentHabitat) * 0.25 + (1 - governance.stability) * 0.2);
+    if (pressure < 0.62) continue;
+    const ownTerritory = new Set(territoryFor(organization));
+    const target = [...new Set(territoryFor(organization).flatMap((regionId) => neighboringRegionIds(regionId, width, height)))]
+      .filter((regionId) => !ownTerritory.has(regionId) && !claimedDestinations.has(regionId))
+      .filter((regionId) => !occupiedRegions.has(regionId))
+      .map((regionId) => ({
+        regionId,
+        habitat: environmentalSuitabilityFor(state, regionId),
+        score: environmentalSuitabilityFor(state, regionId) * 0.82 + Math.min(0.18, (index.agentCountByRegion.get(regionId) ?? 0) * 0.01),
+      }))
+      .sort((left, right) => right.score - left.score || left.regionId.localeCompare(right.regionId))[0];
+    if (!target || target.score <= currentHabitat + Math.max(0.06, pressure * 0.04)) continue;
+    const technology = technologyProfileForRegion(state, organization.regionId);
+    const advantage = target.score - currentHabitat;
+    const probability = clamp(0.05 + pressure * 0.35 + advantage * 0.55 + technology.navigation * 0.08, 0.05, 0.75);
+    const [roll] = randomFloat(forkRandom(state.random, `organization-migration:${organization.id}:${target.regionId}:${currentStep}`));
+    if (roll >= probability) continue;
+    const movingMembers = organization.memberIds
+      .filter((memberId) => !movedAgents.has(memberId))
+      .filter((memberId) => index.agentIds.has(memberId))
+      .sort();
+    const fromTerritory = territoryFor(organization);
+    const movedPopulationCount = migrateOrganizationMembers(state, delta, organization, target.regionId, movingMembers);
+    const resourceEntries = state.resources
+      .filter((resource) => resource.holderId === organization.id && resource.regionId === organization.regionId && resource.amount > 0.000000001)
+      .sort((left, right) => left.resourceId.localeCompare(right.resourceId) || left.id.localeCompare(right.id));
+    let carriedResourceAmount = 0;
+    for (const resource of resourceEntries) {
+      const destination = state.resources.find((candidate) => candidate.resourceId === resource.resourceId
+        && candidate.regionId === target.regionId && candidate.holderId === organization.id);
+      const destinationCapacity = destination ? Math.max(0, destination.cap - destination.amount) : resource.amount;
+      const carried = Math.min(resource.amount, destinationCapacity);
+      if (carried <= 0.000000001) continue;
+      carriedResourceAmount += carried;
+      delta.resourceTransactions.push({
+        id: `resource:${resource.resourceId}:organization-migration:${currentStep}:${organization.id}:${resource.id}`,
+        resourceId: resource.resourceId,
+        regionId: organization.regionId,
+        destinationRegionId: target.regionId,
+        amount: carried,
+        operation: "transfer",
+        source: "culture",
+        sourceId: organization.id,
+        fromHolderId: organization.id,
+        toHolderId: organization.id,
+        causeRuleId: "society:organization-migration",
+      });
+    }
+    for (const memberId of movingMembers) movedAgents.add(memberId);
+    migrateOrganizationFacilities(state, delta, organization, target.regionId);
+    const migratedOrganization: OrganizationState = {
+      ...organization,
+      regionId: target.regionId,
+      territoryRegionIds: [target.regionId],
+      status: "migrating",
+    };
+    delta.entityEffects.push({ collection: "organizations", operation: "update", id: organization.id, value: migratedOrganization });
+    delta.eventDrafts.push({
+      kind: "organization-migration",
+      ruleId: "society:organization-migration",
+      sourceIds: [organization.id, ...movingMembers.slice(0, 32)],
+      probability,
+      roll,
+      evidence: {
+        fromRegion: organization.regionId,
+        toRegion: target.regionId,
+        pressure,
+        foodSecurity,
+        currentHabitat,
+        destinationHabitat: target.habitat,
+        movedMemberCount: movingMembers.length,
+        movedPopulationCount,
+        carriedResourceAmount,
+        abandonedTerritoryCount: Math.max(0, fromTerritory.length - 1),
+        eligible: true,
+      },
+      payload: {
+        organizationId: organization.id,
+        fromOrganizationId: organization.id,
+        fromRegion: organization.regionId,
+        toRegion: target.regionId,
+        fromTerritoryRegionIds: fromTerritory,
+        toTerritoryRegionIds: [target.regionId],
+        movedMemberCount: movingMembers.length,
+        movedPopulationCount,
+        carriedResourceAmount,
+        reason: foodSecurity < 0.2 ? "food-shortage" : currentHabitat < 0.3 ? "environmental-pressure" : "governance-pressure",
+      },
+      source: "natural",
+    });
+    claimedDestinations.add(target.regionId);
+    for (const regionId of fromTerritory) occupiedRegions.delete(regionId);
+    occupiedRegions.add(target.regionId);
+  }
+};
 
 const addDiplomaticPacts = (state: WorldState, delta: WorldDelta, organizations: OrganizationState[], pairs?: OrganizationPair[]): void => {
   const width = state.fields.elevation.width;
@@ -555,5 +816,7 @@ export const stepTerritories = (state: WorldState, suppliedFoodIndex?: FoodBalan
     return currentLeft && currentRight ? [[currentLeft, currentRight] as const] : [];
   });
   resolveInterregionalWars({ ...state, organizations }, delta, organizations, index, foodIndex, currentPairs);
+  const postConflictOrganizations = organizationsAfter(state, delta);
+  migrateOrganizations({ ...state, organizations: postConflictOrganizations }, delta, index, foodIndex);
   return delta;
 };

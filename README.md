@@ -159,6 +159,12 @@ attempting to replay unbounded wall-clock debt.
   permanently freezing evolution after the first few species appear.
 - Mobile populations can migrate toward better adjacent habitats, with agent
   locations following the population delta and a causal migration event.
+- Food, ecological and governance pressure can also move a settlement, city or
+  larger polity to a better adjacent region. Organization migration carries
+  independent detailed members, represented population and held resources
+  through the same ledger, relinquishes the old territorial center, and records
+  the reason and destination for map routes and reports. Shared members remain
+  with their other active organizations so hierarchical societies stay intact.
 - Producer populations mint food through the resource ledger. Society rules
   allocate, trade and consume food with conservation checks and auditable
   transactions; organization conflict, fragmentation and dissolution remain in

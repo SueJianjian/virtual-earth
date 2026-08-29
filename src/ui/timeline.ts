@@ -40,6 +40,7 @@ const labelFor = (event: TimelineEvent): string => {
   "organization-split": "组织分裂",
   "population-migration": "人口迁移",
   "population-dispersal": "种群扩散",
+  "organization-migration": "组织迁徙",
   "territory-expansion": "疆域扩张",
   "interregional-trade": "区域贸易",
   "border-conflict": "边境冲突",

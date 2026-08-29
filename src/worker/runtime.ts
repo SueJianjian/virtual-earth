@@ -448,12 +448,14 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
   }
   const strategicEventKinds = new Set([
     "interregional-trade", "diplomatic-alliance", "border-conflict", "organization-war", "territory-transfer",
-    "population-migration", "population-dispersal", "war-displacement",
+    "population-migration", "population-dispersal", "organization-migration", "war-displacement",
   ]);
   const asRegionId = (value: unknown): RegionId | undefined => typeof value === "string" && value.startsWith("region:") ? value as RegionId : undefined;
   for (const event of state.events.filter((candidate) => strategicEventKinds.has(candidate.kind)).slice(-MAX_SCENE_EVENT_LINKS)) {
     const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.payload.populationId ?? event.sourceIds[0] ?? "");
-    const toId = String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId);
+    const toId = event.kind === "organization-migration"
+      ? String(event.payload.toOrganizationId ?? event.payload.organizationId ?? event.payload.fromOrganizationId ?? event.sourceIds[0] ?? fromId)
+      : String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId);
     const fromRegion = asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion)
       ?? entities.get(fromId)?.regionId
       ?? organizationLocations.get(fromId)?.regionId;
@@ -463,7 +465,7 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
     if (!fromId || !toId || !fromRegion || !toRegion) continue;
     const kind = event.kind === "interregional-trade" ? "trade"
       : event.kind === "diplomatic-alliance" ? "alliance"
-        : event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "war-displacement" ? "migration"
+        : event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "organization-migration" || event.kind === "war-displacement" ? "migration"
           : "border-conflict";
     const strength = Number(event.payload.amount ?? event.evidence.amount ?? event.evidence.intensity
       ?? event.evidence.displaced ?? event.evidence.branchCount ?? 0.7);

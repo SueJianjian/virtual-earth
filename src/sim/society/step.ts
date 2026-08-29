@@ -38,6 +38,16 @@ const organizationsAfter = (state: WorldState, delta: WorldDelta): WorldState["o
   return [...organizations.values()];
 };
 
+const facilitiesAfter = (state: WorldState, delta: WorldDelta): WorldState["facilities"] => {
+  const facilities = new Map(state.facilities.map((facility) => [facility.id, facility]));
+  for (const effect of delta.entityEffects) {
+    if (effect.collection !== "facilities") continue;
+    if (effect.operation === "remove") facilities.delete(effect.id);
+    else if (effect.value) facilities.set(effect.id, effect.value);
+  }
+  return [...facilities.values()];
+};
+
 const populationsAfter = (state: WorldState, delta: EcologyDelta): WorldState["populations"] => {
   const populations = new Map(state.populations.map((population) => [population.id, population]));
   for (const effect of delta.entityEffects) {
@@ -291,7 +301,12 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
   merge(delta, stepTerritories({ ...socialState, organizations: governedOrganizations }, foodIndex));
   const territorialOrganizations = organizationsAfter(socialState, delta);
   const activeOrganizations = territorialOrganizations.filter((organization) => organization.status === "active");
-  const facilityState = { ...socialState, organizations: territorialOrganizations };
+  const facilityState = {
+    ...socialState,
+    agents: agentsAfter(socialState, delta),
+    organizations: territorialOrganizations,
+    facilities: facilitiesAfter(socialState, delta),
+  };
   merge(delta, stepFacilities(facilityState, [...facilityState.events, ...externalEvents]));
   addEconomy(socialState, delta, activeOrganizations);
   addConflicts(socialState, delta, activeOrganizations);

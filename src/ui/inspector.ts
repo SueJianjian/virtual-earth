@@ -272,6 +272,7 @@ const regionEventLabels: Record<string, string> = {
   flood: "区域洪水",
   "population-migration": "人口迁徙",
   "population-dispersal": "种群扩散",
+  "organization-migration": "组织迁徙",
   "organization-formation": "组织形成",
   "organization-split": "组织分裂",
   "interregional-trade": "区域贸易",

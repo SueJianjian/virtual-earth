@@ -91,6 +91,131 @@ describe("cross-region territories", () => {
     expect(outcome?.eventDrafts.find((event) => event.kind === "territory-expansion")?.evidence.territorySize).toBe(2);
   });
 
+  it("moves a pressured organization with members, represented population, and held resources", () => {
+    const outcome = Array.from({ length: 128 }, (_, seed) => {
+      const state = territorialWorld(1_900 + seed);
+      state.tick = seed;
+      state.fields.biomass.values.fill(0);
+      state.fields.nutrients.values.fill(0.04);
+      state.fields.temperature.values.fill(0.1);
+      state.fields.humidity.values.fill(0.1);
+      state.fields.water.values.fill(0.05);
+      const currentRegion = "region:2:2" as never;
+      const destinationRegion = "region:2:3" as never;
+      const destinationIndex = 3 * state.fields.elevation.width + 2;
+      state.fields.biomass.values[destinationIndex] = 0.86;
+      state.fields.nutrients.values[destinationIndex] = 0.8;
+      state.fields.temperature.values[destinationIndex] = 0.5;
+      state.fields.humidity.values[destinationIndex] = 0.55;
+      state.fields.water.values[destinationIndex] = 0.45;
+      const organization = createOrganization("city", currentRegion, state.agents.slice(0, 40).map((agent) => agent.id));
+      organization.governance = { ...governanceForOrganization(organization), stability: 0.18 };
+      state.organizations = [organization];
+      state.resources = [
+        { id: "resource:migration:food", resourceId: "food", regionId: currentRegion, holderId: organization.id, amount: 0.1, cap: 10, originEventId: "test" },
+        { id: "resource:migration:materials", resourceId: "materials", regionId: currentRegion, holderId: organization.id, amount: 3, cap: 10, originEventId: "test" },
+      ];
+      return { state, delta: stepTerritories(state), organization };
+    }).find(({ delta }) => delta.eventDrafts.some((event) => event.kind === "organization-migration"));
+
+    expect(outcome).toBeDefined();
+    const migration = outcome?.delta.eventDrafts.find((event) => event.kind === "organization-migration");
+    const organization = outcome?.organization;
+    const organizationUpdate = outcome?.delta.entityEffects.find((effect) => effect.collection === "organizations" && effect.operation === "update");
+    const movedAgents = outcome?.delta.entityEffects.filter((effect) => effect.collection === "agents" && effect.operation === "update" && effect.value?.regionId === "region:2:3") ?? [];
+    const destinationPopulation = outcome?.delta.entityEffects.find((effect) => effect.collection === "populations" && effect.operation === "create" && effect.value?.regionId === "region:2:3");
+    expect(organizationUpdate?.collection === "organizations" ? organizationUpdate.value : undefined).toMatchObject({
+      regionId: "region:2:3",
+      territoryRegionIds: ["region:2:3"],
+      status: "migrating",
+    });
+    expect(movedAgents).toHaveLength(40);
+    expect(destinationPopulation?.value).toMatchObject({ regionId: "region:2:3", count: 80 });
+    expect(outcome?.delta.resourceTransactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resourceId: "food", destinationRegionId: "region:2:3", amount: 0.1, causeRuleId: "society:organization-migration" }),
+      expect.objectContaining({ resourceId: "materials", destinationRegionId: "region:2:3", amount: 3, causeRuleId: "society:organization-migration" }),
+    ]));
+    expect(migration).toMatchObject({
+      probability: expect.any(Number),
+      evidence: expect.objectContaining({ fromRegion: "region:2:2", toRegion: "region:2:3", movedMemberCount: 40, movedPopulationCount: 80 }),
+      payload: expect.objectContaining({ organizationId: organization?.id, reason: "food-shortage" }),
+    });
+  });
+
+  it("moves owned facilities with an organization before facility maintenance", () => {
+    const state = territorialWorld(2_050);
+    state.tick = 1;
+    state.fields.biomass.values.fill(0);
+    state.fields.nutrients.values.fill(0.04);
+    state.fields.temperature.values.fill(0.1);
+    state.fields.humidity.values.fill(0.1);
+    state.fields.water.values.fill(0.05);
+    const destinationIndex = 3 * state.fields.elevation.width + 2;
+    state.fields.biomass.values[destinationIndex] = 0.86;
+    state.fields.nutrients.values[destinationIndex] = 0.8;
+    state.fields.temperature.values[destinationIndex] = 0.5;
+    state.fields.humidity.values[destinationIndex] = 0.55;
+    state.fields.water.values[destinationIndex] = 0.45;
+    const organization = createOrganization("city", "region:2:2" as never, state.agents.slice(0, 40).map((agent) => agent.id));
+    organization.governance = { ...governanceForOrganization(organization), stability: 0.18 };
+    state.organizations = [organization];
+    state.resources = [{ id: "resource:migration:facility-materials", resourceId: "materials", regionId: organization.regionId, holderId: organization.id, amount: 4, cap: 10, originEventId: "test" }];
+    state.facilities = [{
+      id: "facility:migration:construction",
+      type: "construction",
+      regionId: organization.regionId,
+      ownerOrganizationId: organization.id,
+      level: 1,
+      condition: 0.7,
+      status: "damaged",
+      workforceIds: state.agents.slice(0, 3).map((agent) => agent.id),
+      workforceRequired: 3,
+      workforceEfficiency: 1,
+      materialInvested: 3,
+      plannedTick: 0,
+      builtTick: 0,
+      lastMaintainedTick: 0,
+      lastIncidentTick: 0,
+    }];
+
+    const outcome = Array.from({ length: 128 }, (_, seed) => {
+      const candidate = structuredClone(state);
+      candidate.seed += seed;
+      candidate.random = { value: candidate.random.value + seed };
+      return { delta: stepTerritories(candidate), candidate };
+    }).find(({ delta }) => delta.eventDrafts.some((event) => event.kind === "organization-migration"));
+
+    const facilityUpdate = outcome?.delta.entityEffects.find((effect) => effect.collection === "facilities" && effect.operation === "update" && effect.id === "facility:migration:construction");
+    expect(facilityUpdate?.collection === "facilities" ? facilityUpdate.value : undefined).toMatchObject({ regionId: "region:2:3" });
+  });
+
+  it("does not move shared members away from a neighboring organization", () => {
+    const state = territorialWorld(2_100);
+    state.tick = 1;
+    state.fields.biomass.values.fill(0);
+    state.fields.nutrients.values.fill(0.04);
+    state.fields.temperature.values.fill(0.1);
+    state.fields.humidity.values.fill(0.1);
+    state.fields.water.values.fill(0.05);
+    const destinationIndex = 3 * state.fields.elevation.width + 2;
+    state.fields.biomass.values[destinationIndex] = 0.86;
+    state.fields.nutrients.values[destinationIndex] = 0.8;
+    state.fields.temperature.values[destinationIndex] = 0.5;
+    state.fields.humidity.values[destinationIndex] = 0.55;
+    state.fields.water.values[destinationIndex] = 0.45;
+    const sharedMembers = state.agents.slice(0, 40).map((agent) => agent.id);
+    const organization = createOrganization("city", "region:2:2" as never, sharedMembers);
+    const peer = createOrganization("state", "region:2:2" as never, sharedMembers);
+    organization.governance = { ...governanceForOrganization(organization), stability: 0.18 };
+    peer.governance = { ...governanceForOrganization(peer), stability: 0.18 };
+    state.organizations = [organization, peer];
+
+    const delta = stepTerritories(state);
+
+    expect(delta.eventDrafts.some((event) => event.kind === "organization-migration")).toBe(false);
+    expect(delta.entityEffects.some((effect) => effect.collection === "agents" && effect.operation === "update")).toBe(false);
+  });
+
   it("creates a conserved trade transfer between touching settlements", () => {
     const outcome = Array.from({ length: 128 }, (_, tick) => {
       const state = territorialWorld(700 + tick);

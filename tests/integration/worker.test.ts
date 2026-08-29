@@ -482,6 +482,46 @@ describe("simulation worker runtime", () => {
     expect(message.snapshot.sceneLinks?.filter((link) => link.scope === "strategic")).toHaveLength(4);
   });
 
+  it("keeps an organization migration route attached to the migrating organization", () => {
+    const state = createWorld(148, { width: 8, height: 8, formation: "formed" });
+    const fromRegion = "region:2:2" as never;
+    const toRegion = "region:2:3" as never;
+    const organization = createOrganization("city", toRegion, []);
+    state.organizations = [organization];
+    state.events = [{
+      id: "event:organization-migration:strategic",
+      tick: 24,
+      years: 24,
+      kind: "organization-migration",
+      ruleId: "society:organization-migration",
+      source: "natural",
+      sourceIds: [organization.id, "agent:moved-member"],
+      probability: 0.72,
+      roll: 0.18,
+      evidence: { fromRegion, toRegion, movedMemberCount: 1, pressure: 0.82 },
+      payload: {
+        organizationId: organization.id,
+        fromOrganizationId: organization.id,
+        fromRegion,
+        toRegion,
+        movedMemberCount: 1,
+        reason: "food-shortage",
+      },
+    }];
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({
+      fromId: organization.id,
+      toId: organization.id,
+      fromRegion,
+      toRegion,
+      kind: "migration",
+      scope: "strategic",
+    }));
+  });
+
   it("bounds dense diplomacy before sending strategic scene routes", () => {
     const state = createWorld(147, { width: 32, height: 16, formation: "formed" });
     state.organizations = Array.from({ length: 180 }, (_, index) => createOrganization(
