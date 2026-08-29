@@ -3,7 +3,7 @@ import { addPersistentTotal } from "../numeric.ts";
 import { compareSimulationSteps } from "../time.ts";
 import { MAX_ARCHIVED_SPECIES_SUMMARIES, retainArchivedSpeciesSummaries } from "../ecology/archive.ts";
 import { MAX_ARCHIVED_ORGANIZATION_SUMMARIES, retainArchivedOrganizationSummaries } from "../society/archive.ts";
-import type { EventArchive, EventMilestone, WorldEvent, WorldEventDraft, WorldHistorySample, WorldState } from "../types.ts";
+import type { EventArchive, EventMilestone, RegionId, StrategicRouteKind, StrategicRouteSummary, WorldEvent, WorldEventDraft, WorldHistorySample, WorldState } from "../types.ts";
 
 export const EVENT_LOG_RETAIN_COUNT = 4_096;
 export const EVENT_LOG_COMPACT_THRESHOLD = 4_608;
@@ -13,6 +13,7 @@ export const MAX_ARCHIVE_COUNTER_KEYS = 512;
 export const ARCHIVE_OTHER_KEY = "__other__";
 export const MAX_EVENT_MILESTONES = 512;
 export const MAX_MILESTONE_RELATED_IDS = 12;
+export const MAX_STRATEGIC_ROUTE_SUMMARIES = 256;
 export const MAX_HISTORY_SAMPLES = 256;
 
 type HotTradeCache = {
@@ -115,6 +116,7 @@ export const createEventArchive = (events: readonly WorldEvent[] = []): EventArc
     archivedOrganizationCount: 0,
     archivedOrganizationSummaries: [],
     milestones: retainMilestones(events.filter(isMilestoneEvent).map(eventMilestoneFor)),
+    strategicRoutes: [],
     historySamples: [],
   };
 };
@@ -260,6 +262,112 @@ export const retainHistorySamples = (input: readonly WorldHistorySample[]): Worl
   return anchor.timelineStep === recent[0]?.timelineStep ? recent : [anchor, ...recent];
 };
 
+const strategicRouteKindFor = (event: WorldEvent): StrategicRouteKind | undefined => {
+  if (event.kind === "interregional-trade") return "trade";
+  if (event.kind === "diplomatic-alliance") return "alliance";
+  if (["population-migration", "population-dispersal", "organization-migration", "war-displacement"].includes(event.kind)) return "migration";
+  if (event.kind === "border-conflict" || event.kind === "organization-war") return "border-conflict";
+  return undefined;
+};
+
+const asRegionId = (value: unknown): RegionId | undefined =>
+  typeof value === "string" && /^region:\d+:\d+$/.test(value) ? value as RegionId : undefined;
+
+const positiveAmount = (event: WorldEvent): number => {
+  const value = Number(event.payload.amount ?? event.evidence.amount
+    ?? event.payload.movedMemberCount ?? event.evidence.movedMemberCount
+    ?? event.payload.movedPopulationCount ?? event.evidence.movedPopulationCount
+    ?? event.payload.branchCount ?? event.evidence.branchCount
+    ?? event.payload.displaced ?? event.evidence.displaced
+    ?? event.evidence.intensity ?? 1);
+  return Number.isFinite(value) && value > 0 ? boundedRouteAmount(value) : 1;
+};
+
+const boundedRouteAmount = (value: number): number => {
+  const bounded = Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value));
+  return bounded >= Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Math.round(bounded * 1_000_000) / 1_000_000;
+};
+
+export const strategicRouteKey = (route: Pick<StrategicRouteSummary, "kind" | "fromId" | "toId" | "fromRegion" | "toRegion" | "resourceId">): string =>
+  `${route.kind}|${route.fromId}|${route.toId}|${route.fromRegion}|${route.toRegion}|${route.resourceId ?? ""}`;
+
+export const strategicRouteForEvent = (event: WorldEvent): StrategicRouteSummary | undefined => {
+  const kind = strategicRouteKindFor(event);
+  if (!kind) return undefined;
+  const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.payload.populationId ?? event.payload.organizationId ?? event.sourceIds[0] ?? "");
+  const toId = event.kind === "organization-migration"
+    ? String(event.payload.toOrganizationId ?? event.payload.organizationId ?? event.payload.fromOrganizationId ?? event.sourceIds[0] ?? fromId)
+    : String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId);
+  const fromRegion = asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion);
+  const toRegion = asRegionId(event.payload.toRegion ?? event.evidence.toRegion ?? event.evidence.rightRegion);
+  if (!fromId || !toId || !fromRegion || !toRegion || fromRegion === toRegion) return undefined;
+  const resourceId = kind === "trade" && ["food", "materials", "energy"].includes(String(event.payload.resourceId ?? event.evidence.resourceId))
+    ? String(event.payload.resourceId ?? event.evidence.resourceId) as StrategicRouteSummary["resourceId"]
+    : undefined;
+  if (kind === "trade" && !resourceId) return undefined;
+  const cumulativeAmount = positiveAmount(event);
+  return {
+    kind,
+    fromId,
+    toId,
+    fromRegion,
+    toRegion,
+    ...(resourceId ? { resourceId } : {}),
+    cumulativeAmount,
+    occurrenceCount: 1,
+    firstTick: event.tick,
+    ...(event.timelineStep === undefined ? {} : { firstTimelineStep: event.timelineStep }),
+    ...(event.timelineDays === undefined ? {} : { firstTimelineDays: event.timelineDays }),
+    ...(event.years === undefined ? {} : { firstYears: event.years }),
+    lastTick: event.tick,
+    ...(event.timelineStep === undefined ? {} : { lastTimelineStep: event.timelineStep }),
+    ...(event.timelineDays === undefined ? {} : { lastTimelineDays: event.timelineDays }),
+    ...(event.years === undefined ? {} : { lastYears: event.years }),
+  };
+};
+
+const mergeStrategicRoutes = (left: StrategicRouteSummary, right: StrategicRouteSummary): StrategicRouteSummary => {
+  const first = compareSimulationSteps(left.firstTimelineStep ?? String(left.firstTick), right.firstTimelineStep ?? String(right.firstTick)) <= 0 ? left : right;
+  const last = compareSimulationSteps(left.lastTimelineStep ?? String(left.lastTick), right.lastTimelineStep ?? String(right.lastTick)) >= 0 ? left : right;
+  return {
+    kind: left.kind,
+    fromId: left.fromId,
+    toId: left.toId,
+    fromRegion: left.fromRegion,
+    toRegion: left.toRegion,
+    ...(left.resourceId ? { resourceId: left.resourceId } : {}),
+    cumulativeAmount: boundedRouteAmount(addPersistentTotal(left.cumulativeAmount, right.cumulativeAmount)),
+    occurrenceCount: addPersistentTotal(left.occurrenceCount, right.occurrenceCount),
+    firstTick: first.firstTick,
+    ...(first.firstTimelineStep === undefined ? {} : { firstTimelineStep: first.firstTimelineStep }),
+    ...(first.firstTimelineDays === undefined ? {} : { firstTimelineDays: first.firstTimelineDays }),
+    ...(first.firstYears === undefined ? {} : { firstYears: first.firstYears }),
+    lastTick: last.lastTick,
+    ...(last.lastTimelineStep === undefined ? {} : { lastTimelineStep: last.lastTimelineStep }),
+    ...(last.lastTimelineDays === undefined ? {} : { lastTimelineDays: last.lastTimelineDays }),
+    ...(last.lastYears === undefined ? {} : { lastYears: last.lastYears }),
+  };
+};
+
+export const retainStrategicRoutes = (input: readonly StrategicRouteSummary[]): StrategicRouteSummary[] => {
+  const routes = new Map<string, StrategicRouteSummary>();
+  for (const route of input) {
+    const key = strategicRouteKey(route);
+    const existing = routes.get(key);
+    routes.set(key, existing ? mergeStrategicRoutes(existing, route) : { ...route });
+  }
+  return [...routes.values()]
+    .sort((left, right) => compareSimulationSteps(right.lastTimelineStep ?? String(right.lastTick), left.lastTimelineStep ?? String(left.lastTick))
+      || strategicRouteKey(left).localeCompare(strategicRouteKey(right)))
+    .slice(0, MAX_STRATEGIC_ROUTE_SUMMARIES);
+};
+
+const recordStrategicRoutes = (archive: EventArchive, events: readonly WorldEvent[]): void => {
+  const routes = events.map(strategicRouteForEvent).filter((route): route is StrategicRouteSummary => Boolean(route));
+  if (routes.length === 0) return;
+  archive.strategicRoutes = retainStrategicRoutes([...(archive.strategicRoutes ?? []), ...routes]);
+};
+
 const isTradeEvent = (event: WorldEvent): boolean => event.kind === "organization-trade" || event.kind === "interregional-trade";
 
 const tradeAmount = (event: WorldEvent): number => {
@@ -364,6 +472,7 @@ const archiveEvents = (state: WorldState, events: readonly WorldEvent[]): void =
     }
   }
   recordEventMilestones(archive, events);
+  recordStrategicRoutes(archive, events);
   compactEventArchiveCounters(state);
   const latest = events.reduce((result, event) => compareEvents(result, event) < 0 ? event : result);
   if (compareSimulationSteps(latest.timelineStep ?? String(latest.tick), archive.archivedThroughTimelineStep ?? String(archive.archivedThroughTick ?? 0)) >= 0) {
@@ -426,6 +535,7 @@ export const compactEventArchiveIndexes = (state: WorldState): void => {
   }
   compactEventArchiveCounters(state);
   state.eventArchive.milestones = retainMilestones(state.eventArchive.milestones ?? []);
+  state.eventArchive.strategicRoutes = retainStrategicRoutes(state.eventArchive.strategicRoutes ?? []);
   state.eventArchive.historySamples = retainHistorySamples(state.eventArchive.historySamples ?? []);
   if (state.eventArchive.archivedSpeciesSummaries.length > MAX_ARCHIVED_SPECIES_SUMMARIES) {
     state.eventArchive.archivedSpeciesSummaries = retainArchivedSpeciesSummaries(state.eventArchive.archivedSpeciesSummaries);

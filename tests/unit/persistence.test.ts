@@ -302,6 +302,7 @@ describe("world persistence", () => {
     expect(restored.eventArchive.archivedSpeciesSummaries).toEqual([]);
     expect(restored.eventArchive.archivedOrganizationCount).toBe(0);
     expect(restored.eventArchive.archivedOrganizationSummaries).toEqual([]);
+    expect(restored.eventArchive.strategicRoutes).toEqual([]);
   });
 
   it("round-trips bounded extinct species history with exact archive time", () => {
@@ -399,6 +400,31 @@ describe("world persistence", () => {
     const restored = deserializeWorld(serializeWorld(world));
 
     expect(restored.eventArchive.historySamples).toEqual(world.eventArchive.historySamples);
+  });
+
+  it("round-trips bounded strategic route history with exact timeline fields", () => {
+    const world = createWorld(1_291, { width: 8, height: 8, formation: "formed" });
+    world.eventArchive.strategicRoutes = [{
+      kind: "migration",
+      fromId: "organization:city:origin",
+      toId: "organization:city:origin",
+      fromRegion: "region:2:2" as never,
+      toRegion: "region:2:3" as never,
+      cumulativeAmount: 42,
+      occurrenceCount: 3,
+      firstTick: 24,
+      firstTimelineStep: "9007199254740992",
+      firstTimelineDays: "9007199254740992",
+      firstYears: Number.MAX_SAFE_INTEGER / 365,
+      lastTick: Number.MAX_SAFE_INTEGER,
+      lastTimelineStep: "9007199254741092",
+      lastTimelineDays: "9007199254741092",
+      lastYears: Number.MAX_SAFE_INTEGER / 365,
+    }];
+
+    const restored = deserializeWorld(serializeWorld(world));
+
+    expect(restored.eventArchive.strategicRoutes).toEqual(world.eventArchive.strategicRoutes);
   });
 
   it("round-trips an exact timeline beyond JavaScript safe integers", () => {

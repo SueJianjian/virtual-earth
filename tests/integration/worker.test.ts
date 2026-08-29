@@ -441,6 +441,55 @@ describe("simulation worker runtime", () => {
     }));
   });
 
+  it("projects archived trade history after the hot event ledger no longer contains the route", () => {
+    const state = createWorld(149, { width: 8, height: 8, formation: "formed" });
+    const fromRegion = "region:1:2" as never;
+    const toRegion = "region:5:2" as never;
+    const source = createOrganization("city", fromRegion, []);
+    const destination = createOrganization("state", toRegion, []);
+    state.organizations = [source, destination];
+    state.events = [];
+    state.eventArchive.strategicRoutes = [{
+      kind: "trade",
+      fromId: source.id,
+      toId: destination.id,
+      fromRegion,
+      toRegion,
+      resourceId: "food",
+      cumulativeAmount: 18.5,
+      occurrenceCount: 7,
+      firstTick: 12,
+      firstTimelineStep: "12",
+      firstTimelineDays: "12",
+      firstYears: 12 / 365,
+      lastTick: 84,
+      lastTimelineStep: "84",
+      lastTimelineDays: "84",
+      lastYears: 84 / 365,
+    }];
+
+    const runtime = createSimulationRuntime(state);
+    const message = runtime.dispatch({ type: "pause" })[0];
+    if (message?.type !== "snapshot") throw new Error("Expected a snapshot");
+
+    expect(message.snapshot.supplyRoutes).toContainEqual(expect.objectContaining({
+      fromOrganizationId: source.id,
+      toOrganizationId: destination.id,
+      totalAmount: 18.5,
+      shipmentCount: 7,
+      archivedShipmentCount: 7,
+      lastTimelineStep: "84",
+    }));
+    expect(message.snapshot.sceneLinks).toContainEqual(expect.objectContaining({
+      fromId: source.id,
+      toId: destination.id,
+      fromRegion,
+      toRegion,
+      kind: "trade",
+      scope: "strategic",
+    }));
+  });
+
   it("projects persistent diplomacy and directional migration as strategic routes", () => {
     const state = createWorld(146, { width: 8, height: 8, formation: "formed" });
     const firstRegion = "region:1:2" as never;

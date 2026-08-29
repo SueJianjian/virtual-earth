@@ -1,11 +1,11 @@
 import { SAVE_SCHEMA_VERSION, isSaveEnvelope } from "./schema.ts";
-import type { ArchivedOrganizationSummary, ArchivedSpeciesSummary, ClimateCycleState, EcologicalRelationshipState, EventMilestone, Grid, PathogenState, PlanetFormationState, SpeciesRole, SubstanceState, WorldHistorySample, WorldState } from "../sim/types.ts";
+import type { ArchivedOrganizationSummary, ArchivedSpeciesSummary, ClimateCycleState, EcologicalRelationshipState, EventMilestone, Grid, PathogenState, PlanetFormationState, SpeciesRole, StrategicRouteSummary, SubstanceState, WorldHistorySample, WorldState } from "../sim/types.ts";
 import { completedPlanetFormationState } from "../sim/environment/formation.ts";
 import { ensureSpeciesIdentity, isSpeciesBlueprint } from "../sim/ecology/blueprints.ts";
 import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES, retainArchivedSpeciesSummaries } from "../sim/ecology/archive.ts";
 import { ensureCultureIdentity } from "../sim/culture/identity.ts";
 import { defaultGovernanceFor } from "../sim/society/organization.ts";
-import { createEventArchive, MAX_EVENT_MILESTONES, MAX_HISTORY_SAMPLES, retainHistorySamples } from "../sim/events/ledger.ts";
+import { createEventArchive, MAX_EVENT_MILESTONES, MAX_HISTORY_SAMPLES, MAX_STRATEGIC_ROUTE_SUMMARIES, retainHistorySamples, retainStrategicRoutes } from "../sim/events/ledger.ts";
 import { isSimulationTimeline, simulationDaysFromYears } from "../sim/time.ts";
 import { MAX_PATHOGENS, normalizeAgentHealth, normalizePathogenState } from "../sim/health/disease.ts";
 import { normalizeAgentGenetics, normalizeGeneticRecord } from "../sim/agents/genetics.ts";
@@ -139,6 +139,37 @@ const isEventMilestone = (value: unknown): value is EventMilestone => {
     && typeof details === "object"
     && !Array.isArray(details)
     && Object.values(details).every((detail) => typeof detail === "string" || typeof detail === "number" || typeof detail === "boolean");
+};
+
+const strategicRouteKinds = new Set<StrategicRouteSummary["kind"]>(["trade", "alliance", "migration", "border-conflict"]);
+const strategicRouteResources = new Set<NonNullable<StrategicRouteSummary["resourceId"]>>(["food", "materials", "energy"]);
+const isStrategicRouteSummary = (value: unknown): value is StrategicRouteSummary => {
+  if (!value || typeof value !== "object") return false;
+  const route = value as Partial<StrategicRouteSummary>;
+  return typeof route.kind === "string"
+    && strategicRouteKinds.has(route.kind as StrategicRouteSummary["kind"])
+    && typeof route.fromId === "string"
+    && typeof route.toId === "string"
+    && typeof route.fromRegion === "string"
+    && /^region:\d+:\d+$/.test(route.fromRegion)
+    && typeof route.toRegion === "string"
+    && /^region:\d+:\d+$/.test(route.toRegion)
+    && route.fromRegion !== route.toRegion
+    && (route.resourceId === undefined || strategicRouteResources.has(route.resourceId as NonNullable<StrategicRouteSummary["resourceId"]>))
+    && (route.kind !== "trade" || route.resourceId !== undefined)
+    && Number.isFinite(route.cumulativeAmount)
+    && (route.cumulativeAmount ?? -1) >= 0
+    && Number.isFinite(route.occurrenceCount)
+    && Number.isInteger(route.occurrenceCount)
+    && (route.occurrenceCount ?? 0) > 0
+    && Number.isFinite(route.firstTick)
+    && Number.isFinite(route.lastTick)
+    && validTimelineStep(route.firstTimelineStep)
+    && validTimelineStep(route.firstTimelineDays)
+    && validTimelineStep(route.lastTimelineStep)
+    && validTimelineStep(route.lastTimelineDays)
+    && (route.firstYears === undefined || Number.isFinite(route.firstYears))
+    && (route.lastYears === undefined || Number.isFinite(route.lastYears));
 };
 
 const isWorldHistorySample = (value: unknown): value is WorldHistorySample => {
@@ -416,6 +447,9 @@ const validateWorld = (value: unknown): WorldState => {
     milestones: Array.isArray(savedArchive?.milestones)
       ? savedArchive.milestones.filter(isEventMilestone).slice(-MAX_EVENT_MILESTONES)
       : defaultArchive.milestones,
+    strategicRoutes: Array.isArray(savedArchive?.strategicRoutes)
+      ? retainStrategicRoutes(savedArchive.strategicRoutes.filter(isStrategicRouteSummary).slice(0, MAX_STRATEGIC_ROUTE_SUMMARIES))
+      : [],
     historySamples: Array.isArray(savedArchive?.historySamples)
       ? retainHistorySamples(savedArchive.historySamples.filter(isWorldHistorySample).slice(-MAX_HISTORY_SAMPLES))
       : [],

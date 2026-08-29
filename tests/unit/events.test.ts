@@ -6,6 +6,7 @@ import {
   MAX_ARCHIVE_COUNTER_KEYS,
   MAX_EVENT_MILESTONES,
   MAX_HISTORY_SAMPLES,
+  MAX_STRATEGIC_ROUTE_SUMMARIES,
   appendEvents,
   appendExternalEvents,
   compactEventLedger,
@@ -192,9 +193,9 @@ describe("rule engine and event ledger", () => {
 
   it("keeps the canonical digest stable while streaming typed grids", () => {
     const state = createWorld(1, { width: 256, height: 256, formation: "formed" });
-    expect(worldDigest(state)).toBe("a8f1d56e");
+    expect(worldDigest(state)).toBe("6c480726");
     state.observation.focusRegionId = "region:1:1" as RegionId;
-    expect(worldDigest(state)).toBe("a8f1d56e");
+    expect(worldDigest(state)).toBe("6c480726");
   });
 
   it("applies dense patches and sparse changes in simulation-stage order", () => {
@@ -260,13 +261,13 @@ describe("rule engine and event ledger", () => {
       kind: index === 0 ? "add-water" : "interregional-trade",
       ruleId: index === 0 ? "user:add-water" : "society:interregional-supply-chain",
       source: index === 0 ? "user" as const : "natural" as const,
-      sourceIds: index === 0 ? [] : [organization.id],
+      sourceIds: index === 0 ? [] : [organization.id, "organization:city:destination"],
       probability: 1,
       roll: 0,
       evidence: { regionId: organization.regionId, amount: 1 },
       payload: index === 0
         ? { regionId: organization.regionId, duration: 10_000 }
-        : { fromRegion: organization.regionId, toRegion: "region:2:1", resourceId: "food", amount: 1, fromOrganizationId: organization.id },
+        : { fromRegion: organization.regionId, toRegion: "region:2:1", resourceId: "food", amount: 1, fromOrganizationId: organization.id, toOrganizationId: "organization:city:destination" },
     }));
     world.eventArchive = createEventArchive(world.events);
 
@@ -282,8 +283,53 @@ describe("rule engine and event ledger", () => {
     expect(world.eventArchive.organizationCounts[organization.id]).toBe(archived.length);
     expect(world.eventArchive.organizationFormationCounts).toEqual({});
     expect(world.eventArchive.tradeVolumeByResource.food).toBe(archived.length);
+    expect(world.eventArchive.strategicRoutes).toEqual([expect.objectContaining({
+      kind: "trade",
+      fromId: organization.id,
+      toId: "organization:city:destination",
+      cumulativeAmount: archived.length,
+      occurrenceCount: archived.length,
+      firstTick: 1,
+      lastTick: archived.length,
+    })]);
     expect(world.organizations[0]?.archivedHistoryCount).toBe(archived.length);
     expect(lifetimeTradeVolume(world)).toBe(EVENT_LOG_COMPACT_THRESHOLD);
+  });
+
+  it("bounds distinct strategic route history while retaining the newest routes", () => {
+    const world = createWorld(161, { width: 8, height: 8, formation: "formed" });
+    world.tick = EVENT_LOG_COMPACT_THRESHOLD + 1;
+    world.years = world.tick;
+    world.events = Array.from({ length: EVENT_LOG_COMPACT_THRESHOLD + 1 }, (_, index) => ({
+      id: `event:route-archive:${index}`,
+      tick: index,
+      timelineStep: String(index),
+      timelineDays: String(index),
+      years: index / 365,
+      kind: "interregional-trade",
+      ruleId: "society:interregional-supply-chain",
+      source: "natural" as const,
+      sourceIds: [`organization:source:${index}`, `organization:destination:${index}`],
+      probability: 1,
+      roll: 0,
+      evidence: { fromRegion: `region:${index % 8}:${Math.floor(index / 8) % 8}`, toRegion: `region:${(index + 1) % 8}:${Math.floor(index / 8) % 8}`, resourceId: "materials", amount: 0.25 },
+      payload: {
+        fromOrganizationId: `organization:source:${index}`,
+        toOrganizationId: `organization:destination:${index}`,
+        fromRegion: `region:${index % 8}:${Math.floor(index / 8) % 8}`,
+        toRegion: `region:${(index + 1) % 8}:${Math.floor(index / 8) % 8}`,
+        resourceId: "materials",
+        amount: 0.25,
+      },
+    }));
+    world.eventArchive = createEventArchive(world.events);
+
+    const archived = compactEventLedger(world);
+
+    expect(archived).toHaveLength(EVENT_LOG_COMPACT_THRESHOLD + 1 - EVENT_LOG_RETAIN_COUNT);
+    expect(world.eventArchive.strategicRoutes).toHaveLength(MAX_STRATEGIC_ROUTE_SUMMARIES);
+    expect(world.eventArchive.strategicRoutes[0]).toMatchObject({ fromId: `organization:source:${archived.length - 1}`, lastTimelineStep: String(archived.length - 1) });
+    expect(world.eventArchive.strategicRoutes.at(-1)).toMatchObject({ fromId: `organization:source:${archived.length - MAX_STRATEGIC_ROUTE_SUMMARIES}`, lastTimelineStep: String(archived.length - MAX_STRATEGIC_ROUTE_SUMMARIES) });
   });
 
   it("bounds long-lived user events and arbitrary archive keys", () => {

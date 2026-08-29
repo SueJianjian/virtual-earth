@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stepWorld } from "../../src/sim/engine.ts";
 import { createWorld, isFiniteWorld, worldDigest } from "../../src/sim/world.ts";
 import { isEntityHolderId } from "../../src/sim/resources.ts";
-import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS } from "../../src/sim/events/ledger.ts";
+import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS, MAX_STRATEGIC_ROUTE_SUMMARIES } from "../../src/sim/events/ledger.ts";
 import { EXTINCT_SPECIES_COMPACT_THRESHOLD, MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "../../src/sim/ecology/archive.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../../src/sim/ecology/interactions.ts";
 import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../../src/sim/environment/substances.ts";
@@ -29,6 +29,10 @@ describe("long-running worlds", () => {
     expect(state.orbital.solarFlux).toBeLessThanOrEqual(1.8);
     expect(state.events.length).toBeLessThanOrEqual(EVENT_LOG_MAX_COUNT);
     expect(state.eventArchive.milestones.length).toBeLessThanOrEqual(MAX_EVENT_MILESTONES);
+    expect(state.eventArchive.strategicRoutes.length).toBeLessThanOrEqual(MAX_STRATEGIC_ROUTE_SUMMARIES);
+    expect(state.eventArchive.strategicRoutes.every((route) => [route.cumulativeAmount, route.occurrenceCount, route.firstTick, route.lastTick].every((value) => Number.isFinite(value) && value >= 0)
+      && route.occurrenceCount > 0
+      && route.fromRegion !== route.toRegion)).toBe(true);
     expect(state.eventArchive.archivedSpeciesSummaries.length).toBeLessThanOrEqual(MAX_ARCHIVED_SPECIES_SUMMARIES);
     expect(state.eventArchive.archivedSpeciesSummaries.every((summary) => summary.lastKnownRegionIds.length <= MAX_ARCHIVED_SPECIES_REGIONS)).toBe(true);
     expect(state.eventArchive.milestones.every((milestone) => [

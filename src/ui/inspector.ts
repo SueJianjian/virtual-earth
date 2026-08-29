@@ -1,6 +1,6 @@
 import type { CellSelection } from "./map-canvas.ts";
 import { summarizeLineage } from "../sim/lod/lineage.ts";
-import type { AgentState, AggregateKnowledgeSummary, ArchivedOrganizationSummary, ArchivedSpeciesSummary, CultureIdentity, EcologicalRelationshipKind, EcologicalRelationshipState, EventMilestone, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, PathogenState, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SpeciesState, SubstanceState, WorldviewEntityState, WorldviewInteractionState } from "../sim/types.ts";
+import type { AgentState, AggregateKnowledgeSummary, ArchivedOrganizationSummary, ArchivedSpeciesSummary, CultureIdentity, EcologicalRelationshipKind, EcologicalRelationshipState, EventMilestone, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, PathogenState, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SpeciesState, StrategicRouteSummary, SubstanceState, WorldviewEntityState, WorldviewInteractionState } from "../sim/types.ts";
 import { governanceForOrganization } from "../sim/society/organization.ts";
 import { speciesBlueprintFor } from "../sim/ecology/blueprints.ts";
 import { facilityOperationalEffect, facilityWorkforceRequiredFor } from "../sim/society/facilities.ts";
@@ -567,16 +567,41 @@ const facilityDetailReport = (snapshot: WorldSnapshot, facilityId: string): stri
 const supplyChainReport = (snapshot: WorldSnapshot, organization: { id: string }, balances: Record<keyof typeof supplyResourceLabels, number>): string => {
   const routes = (snapshot.supplyRoutes ?? [])
     .filter((route) => route.fromOrganizationId === organization.id || route.toOrganizationId === organization.id)
-    .sort((left, right) => right.lastTick - left.lastTick || left.resourceId.localeCompare(right.resourceId));
+    .sort((left, right) => compareSimulationSteps(right.lastTimelineStep ?? String(right.lastTick), left.lastTimelineStep ?? String(left.lastTick)) || left.resourceId.localeCompare(right.resourceId));
+  const archivedShipments = routes.reduce((sum, route) => sum + (route.archivedShipmentCount ?? 0), 0);
   const inventory = Object.entries(supplyResourceLabels)
     .map(([resourceId, label]) => `<span>${label}库存 · ${formatNumber(balances[resourceId as keyof typeof supplyResourceLabels], 2)} 单位</span>`)
     .join("");
-  return `<section class="organization-governance supply-chain" aria-label="区域供应链"><div class="detail-heading"><strong>区域供应链</strong><span>${format(routes.length)} 条近期路线 · 依据实际供需结算</span></div><div class="detail-tags">${inventory}</div><ol class="worldview-list">${routes.length > 0 ? routes.slice(0, 10).map((route) => {
+  return `<section class="organization-governance supply-chain" aria-label="区域供应链"><div class="detail-heading"><strong>区域供应链</strong><span>${format(routes.length)} 条长期路线${archivedShipments > 0 ? ` · ${format(archivedShipments)} 批已归档` : ""}</span></div><div class="detail-tags">${inventory}</div><ol class="worldview-list">${routes.length > 0 ? routes.slice(0, 10).map((route) => {
     const incoming = route.toOrganizationId === organization.id;
     const counterparty = incoming ? route.fromOrganizationId : route.toOrganizationId;
     const region = incoming ? route.fromRegion : route.toRegion;
-    return `<li data-supply-resource="${route.resourceId}"><div><span>${incoming ? "输入" : "输出"} · ${supplyResourceLabels[route.resourceId]}</span><small>${format(route.shipmentCount)} 批</small></div><strong>${escapeHtml(counterparty.slice(-8))}</strong><p>累计 ${formatNumber(route.totalAmount, 2)} 单位 · ${escapeHtml(region)}</p><p>最近运输：${formatSimulationAge(route.lastYears ?? route.lastTick)}</p></li>`;
+    return `<li data-supply-resource="${route.resourceId}"><div><span>${incoming ? "输入" : "输出"} · ${supplyResourceLabels[route.resourceId]}</span><small>${format(route.shipmentCount)} 批</small></div><strong>${escapeHtml(counterparty.slice(-8))}</strong><p>累计 ${formatNumber(route.totalAmount, 2)} 单位 · ${escapeHtml(region)}${(route.archivedShipmentCount ?? 0) > 0 ? ` · 归档 ${format(route.archivedShipmentCount ?? 0)} 批` : ""}</p><p>最近运输：${route.lastTimelineDays ? formatSimulationAgeFromDays(route.lastTimelineDays) : formatSimulationAge(route.lastYears ?? route.lastTick)}</p></li>`;
   }).join("") : '<li class="worldview-empty">尚无跨区域运输记录</li>'}</ol></section>`;
+};
+const strategicRouteLabels: Record<StrategicRouteSummary["kind"], string> = {
+  trade: "贸易",
+  alliance: "联盟",
+  migration: "迁徙",
+  "border-conflict": "冲突",
+};
+const strategicRouteHistoryReport = (snapshot: WorldSnapshot, organization: { id: string }): string => {
+  const routes = (snapshot.eventArchive?.strategicRoutes ?? [])
+    .filter((route) => route.fromId === organization.id || route.toId === organization.id)
+    .sort((left, right) => compareSimulationSteps(right.lastTimelineStep ?? String(right.lastTick), left.lastTimelineStep ?? String(left.lastTick)));
+  if (routes.length === 0) return "";
+  return `<section class="organization-governance strategic-route-history" aria-label="长期战略路线"><div class="detail-heading"><strong>长期战略路线</strong><span>${format(routes.length)} 条归档脉络 · 事件压缩后继续保留</span></div><ol class="worldview-list">${routes.slice(0, 12).map((route) => {
+    const selfMigration = route.fromId === organization.id && route.toId === organization.id;
+    const outgoing = route.fromId === organization.id;
+    const counterparty = selfMigration ? organization.id : outgoing ? route.toId : route.fromId;
+    const region = outgoing ? route.toRegion : route.fromRegion;
+    const amount = route.kind === "trade" && route.resourceId
+      ? ` · ${supplyResourceLabels[route.resourceId]} ${formatNumber(route.cumulativeAmount, 2)} 单位`
+      : "";
+    const first = route.firstTimelineDays ? formatSimulationAgeFromDays(route.firstTimelineDays) : formatSimulationAge(route.firstYears ?? route.firstTick);
+    const last = route.lastTimelineDays ? formatSimulationAgeFromDays(route.lastTimelineDays) : formatSimulationAge(route.lastYears ?? route.lastTick);
+    return `<li data-strategic-route-kind="${route.kind}"><div><span>${strategicRouteLabels[route.kind]} · ${selfMigration ? "本组织迁徙" : outgoing ? "对外" : "来自外部"}</span><small>${format(route.occurrenceCount)} 次</small></div><strong>${escapeHtml(counterparty.slice(-12))}</strong><p>${escapeHtml(region)}${amount}</p><p>${first} 至 ${last}</p></li>`;
+  }).join("")}</ol></section>`;
 };
 const cultureSummaryForSnapshot = (snapshot: WorldSnapshot, cultureId: string): RegionCultureSummary | undefined =>
   snapshot.selectedRegion?.cultureSummary?.id === cultureId ? snapshot.selectedRegion.cultureSummary : undefined;
@@ -1011,9 +1036,10 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
   const childIds = organizationChildIds(organization);
   const status = "status" in organization ? organization.status : "active";
   const statusLabels = { active: "活跃", migrating: "迁徙中", fragmenting: "分裂中", collapsed: "已解体" } as const;
-  const archiveReport = isArchivedOrganization(organization)
+  let archiveReport = isArchivedOrganization(organization)
     ? `<section class="organization-governance organization-archive" aria-label="历史组织摘要"><div class="detail-heading"><strong>历史组织摘要</strong><span>${organization.archiveReason === "capacity" ? "因运行容量限制归档" : "因组织生命周期结束归档"}</span></div><dl class="detail-grid"><div><dt>归档时间</dt><dd>${organization.archivedTimelineDays ? formatSimulationAgeFromDays(organization.archivedTimelineDays) : formatSimulationAge(organization.archivedYears)}</dd></div><div><dt>归档状态</dt><dd>${statusLabels[organization.status]}</dd></div><div><dt>历史事件</dt><dd>${format(organization.historyCount)} 条</dd></div><div><dt>保留成员</dt><dd>${format(organization.memberIds.length)} / ${format(organization.memberCount)} 人</dd></div></dl></section>`
     : "";
+  archiveReport += strategicRouteHistoryReport(snapshot, organization);
   return `<div class="detail-report"><div class="detail-title"><strong>${organizationLabels[organization.type]}报告</strong><span>${escapeHtml(organization.id)}</span></div>${archiveReport}<dl class="detail-grid"><div><dt>成员</dt><dd>${format(memberCount)} 人</dd></div><div><dt>状态</dt><dd>${statusLabels[status]}</dd></div><div><dt>领土</dt><dd>${format(organization.territoryRegionIds.length)} 格</dd></div><div><dt>下属组织</dt><dd>${format(childIds.length)} 个</dd></div><div><dt>内部关系</dt><dd>${format(relationshipCount)} 条</dd></div><div><dt>食物资源</dt><dd>${formatResource(food).value} ${formatResource(food).unit}</dd></div><div><dt>建造材料</dt><dd>${formatNumber(materials, 1)} 材料单位</dd></div><div><dt>能源储备</dt><dd>${formatNumber(energy, 2)} 能源单位</dd></div><div><dt>谱系 / 知识</dt><dd>${familyLineage ? `${format(familyLineage.generationDepth)} 代 / ${format(familyLineage.knowledgeInheritanceCount)} 条` : "聚合统计"}</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div><div><dt>原创物质</dt><dd>${format(substances.length)} 种</dd></div><div><dt>病原体记录</dt><dd>${format(jurisdictionPathogenRecords.length)} 种</dd></div><div><dt>可追溯事件</dt><dd>${format(recentHistoryCount + archivedHistoryCount)} 条${archivedHistoryCount > 0 ? `（${format(archivedHistoryCount)} 条已归档）` : ""}</dd></div><div><dt>中心区域</dt><dd>${escapeHtml(organization.regionId)}</dd></div></dl><div class="detail-tags">${organization.territoryRegionIds.slice(0, 12).map((id) => `<span>${escapeHtml(id)}</span>`).join("") || "<span>暂无领土记录</span>"}</div>${organizationNavigationReport(snapshot, organization, memberIds, projectedMembers)}${publicHealthReport}${technologyReport}${technologyEffectsReport(technology)}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}${supplyChainReport(snapshot, organization, { food, materials, energy })}${governanceReport}</div>`;
 };
 

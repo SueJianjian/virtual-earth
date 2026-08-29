@@ -1114,6 +1114,26 @@ export type EventMilestone = {
   details: Record<string, number | string | boolean>;
 };
 
+export type StrategicRouteKind = "trade" | "alliance" | "migration" | "border-conflict";
+export type StrategicRouteSummary = {
+  kind: StrategicRouteKind;
+  fromId: string;
+  toId: string;
+  fromRegion: RegionId;
+  toRegion: RegionId;
+  resourceId?: "food" | "materials" | "energy";
+  cumulativeAmount: number;
+  occurrenceCount: number;
+  firstTick: number;
+  firstTimelineStep?: string;
+  firstTimelineDays?: string;
+  firstYears?: number;
+  lastTick: number;
+  lastTimelineStep?: string;
+  lastTimelineDays?: string;
+  lastYears?: number;
+};
+
 export type EventArchive = {
   totalEventCount: number;
   archivedEventCount: number;
@@ -1140,6 +1160,7 @@ export type EventArchive = {
   archivedOrganizationCount: number;
   archivedOrganizationSummaries: ArchivedOrganizationSummary[];
   milestones: EventMilestone[];
+  strategicRoutes: StrategicRouteSummary[];
   historySamples: WorldHistorySample[];
 };
 

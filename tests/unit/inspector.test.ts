@@ -407,8 +407,24 @@ describe("region lineage inspector", () => {
       resourceId: "energy",
       totalAmount: 1.5,
       shipmentCount: 3,
+      archivedShipmentCount: 2,
       lastTick: 12,
+      lastTimelineDays: "12",
       lastYears: 12,
+    }];
+    snapshot.eventArchive = createEventArchive();
+    snapshot.eventArchive.strategicRoutes = [{
+      kind: "migration",
+      fromId: stateOrganization.id,
+      toId: stateOrganization.id,
+      fromRegion: "region:1:1" as never,
+      toRegion: region,
+      cumulativeAmount: 14,
+      occurrenceCount: 2,
+      firstTick: 4,
+      firstTimelineDays: "4",
+      lastTick: 12,
+      lastTimelineDays: "12",
     }];
     snapshot.recentRegionEvents = [{
       id: "event:state-history",
@@ -475,6 +491,9 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("区域供应链");
     expect(element.innerHTML).toContain("输入 · 能源");
     expect(element.innerHTML).toContain("累计 1.5 单位");
+    expect(element.innerHTML).toContain("归档 2 批");
+    expect(element.innerHTML).toContain("长期战略路线");
+    expect(element.innerHTML).toContain('data-strategic-route-kind="migration"');
     expect(element.innerHTML).toContain("跨区域战争");
     expect(element.innerHTML).toContain("结果 repelled");
     expect(element.innerHTML).toContain("该组织在当前区域内最近 1 条");

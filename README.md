@@ -259,10 +259,12 @@ attempting to replay unbounded wall-clock debt.
 - Observation, focus and map layers are projections. They cannot change the
   authoritative world. Carbon and oxygen overlays plus local chemistry values
   make the planetary feedback cycle directly observable.
-- Persistent diplomacy and recent interregional events project into bounded
-  strategic routes. Trade, alliances, migration and conflict use distinct
-  animated arcs on the global globe and regional surface, while individual
-  zoom keeps only local kinship, care and teaching links visible.
+- Persistent diplomacy and both recent and archived interregional events
+  project into bounded strategic routes. Trade, alliances, migration and
+  conflict retain cumulative counts, amounts and exact first/latest times
+  after hot-ledger compaction, while fixed archive limits prevent route history
+  from growing with world age. Individual zoom still keeps only local kinship,
+  care and teaching links visible.
 - The substance map layer shows regional richness. Region and organization
   reports list local materials, while each substance report exposes composition,
   properties, formation route, provenance, discoverers and parent materials.

@@ -223,8 +223,8 @@ const expandTerritories = (state: WorldState, delta: WorldDelta, index: Territor
         sourceIds: [organization.id, peer.id],
         probability,
         roll,
-        evidence: { regionId: target.regionId, leftTerritory: territory.length, rightTerritory: territoryFor(peer).length, culturalCompatibility: culturalLink.compatibility, leftCulture: culturalLink.leftCultureName ?? "none", rightCulture: culturalLink.rightCultureName ?? "none", eligible: true },
-        payload: { regionId: target.regionId, leftOrganizationId: organization.id, rightOrganizationId: peer.id, culturalCompatibility: culturalLink.compatibility, leftCulture: culturalLink.leftCultureName ?? "none", rightCulture: culturalLink.rightCultureName ?? "none" },
+        evidence: { regionId: target.regionId, leftRegion: organization.regionId, rightRegion: peer.regionId, leftTerritory: territory.length, rightTerritory: territoryFor(peer).length, culturalCompatibility: culturalLink.compatibility, leftCulture: culturalLink.leftCultureName ?? "none", rightCulture: culturalLink.rightCultureName ?? "none", eligible: true },
+        payload: { regionId: target.regionId, leftOrganizationId: organization.id, rightOrganizationId: peer.id, fromRegion: organization.regionId, toRegion: peer.regionId, culturalCompatibility: culturalLink.compatibility, leftCulture: culturalLink.leftCultureName ?? "none", rightCulture: culturalLink.rightCultureName ?? "none" },
         source: "natural",
       });
       continue;

@@ -13,7 +13,7 @@ import { createWorldviewState } from "./worldview/registry.ts";
 import { completedPlanetFormationState, createPlanetFormationState, formedElevation, primordialDustElevation } from "./environment/formation.ts";
 import { createOrbitalState, isOrbitalState } from "./environment/orbit.ts";
 import { defaultGovernanceFor } from "./society/organization.ts";
-import { createEventArchive } from "./events/ledger.ts";
+import { createEventArchive, MAX_STRATEGIC_ROUTE_SUMMARIES } from "./events/ledger.ts";
 import { MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "./health/disease.ts";
 import { validAgentGenetics } from "./agents/genetics.ts";
 import { MAX_BELIEFS_PER_AGENT } from "./agents/lifecycle.ts";
@@ -343,6 +343,28 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       && validTimelineStep(summary.archivedTimelineDays));
   const finiteArchivedOrganizations = state.eventArchive.archivedOrganizationSummaries.length <= MAX_ARCHIVED_ORGANIZATION_SUMMARIES
     && state.eventArchive.archivedOrganizationSummaries.every(isArchivedOrganizationSummary);
+  const finiteStrategicRoutes = state.eventArchive.strategicRoutes.length <= MAX_STRATEGIC_ROUTE_SUMMARIES
+    && state.eventArchive.strategicRoutes.every((route) => [
+      route.cumulativeAmount,
+      route.occurrenceCount,
+      route.firstTick,
+      route.firstYears,
+      route.lastTick,
+      route.lastYears,
+    ].every((value) => value === undefined || Number.isFinite(value))
+      && route.cumulativeAmount >= 0
+      && Number.isInteger(route.occurrenceCount)
+      && route.occurrenceCount > 0
+      && route.fromId.length > 0
+      && route.toId.length > 0
+      && /^region:\d+:\d+$/.test(route.fromRegion)
+      && /^region:\d+:\d+$/.test(route.toRegion)
+      && route.fromRegion !== route.toRegion
+      && (route.kind !== "trade" || route.resourceId !== undefined)
+      && validTimelineStep(route.firstTimelineStep)
+      && validTimelineStep(route.firstTimelineDays)
+      && validTimelineStep(route.lastTimelineStep)
+      && validTimelineStep(route.lastTimelineDays));
   const worldviewEntitiesById = new Map(state.worldview.entities.map((entity) => [entity.id, entity]));
   const finiteWorldviews = state.worldview.practices.length <= MAX_WORLDVIEW_PRACTICES && state.worldview.practices.every((practice) => [
     practice.originTick,
@@ -438,7 +460,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     ].every(Number.isFinite));
     return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && finiteAgentRecords && finiteEcologyRecords;
   });
-  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteWorldviews && finiteLod;
+  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
 };
 
 export const regionIdForCell = (x: number, y: number): RegionId =>

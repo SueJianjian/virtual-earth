@@ -8,7 +8,7 @@ import type { OrganizationDirectoryEntry, RuntimeDiagnostics, SceneEntity, Scene
 import { DEFAULT_WORLDVIEW_PACK_IDS } from "../sim/worldview/index.ts";
 import { compareSimulationSteps, SIMULATED_YEARS_PER_DAY, timelineForWorld } from "../sim/time.ts";
 import { cultureIdentityFor } from "../sim/culture/identity.ts";
-import { eventOrganizationIds, eventRegionIds } from "../sim/events/ledger.ts";
+import { eventOrganizationIds, eventRegionIds, strategicRouteForEvent } from "../sim/events/ledger.ts";
 import { diseasePrevalenceForRegion } from "../sim/health/disease.ts";
 import { addPersistentTotal } from "../sim/numeric.ts";
 import { substanceReserveRatio } from "../sim/environment/substances.ts";
@@ -94,6 +94,7 @@ export const AUTOSAVE_INTERVAL_STEPS = 120;
 export const MAX_SCENE_DIPLOMATIC_LINKS = 96;
 export const MAX_SCENE_EVENT_LINKS = 256;
 export const MAX_SCENE_STRATEGIC_LINKS = 128;
+export const MAX_SUPPLY_ROUTES = 256;
 
 type EventHistorySource = WorldEvent | EventMilestone;
 type EventHistoryCandidate = { event: EventHistorySource; archived: boolean };
@@ -206,39 +207,92 @@ const recentRegionEventsFor = (state: WorldState, regionId: RegionId) => {
 
 const supplyRoutesFor = (state: WorldState): SupplyRoute[] => {
   const routes = new Map<string, SupplyRoute>();
+  const add = (route: SupplyRoute): void => {
+    const key = `${route.fromOrganizationId}|${route.toOrganizationId}|${route.fromRegion}|${route.toRegion}|${route.resourceId}`;
+    const existing = routes.get(key);
+    if (!existing) {
+      routes.set(key, route);
+      return;
+    }
+    const totalAmount = addPersistentTotal(existing.totalAmount, route.totalAmount);
+    existing.totalAmount = totalAmount >= Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : Math.round(totalAmount * 1_000_000) / 1_000_000;
+    existing.shipmentCount = addPersistentTotal(existing.shipmentCount, route.shipmentCount);
+    existing.archivedShipmentCount = addPersistentTotal(existing.archivedShipmentCount ?? 0, route.archivedShipmentCount ?? 0);
+    const existingFirst = existing.firstTimelineStep ?? String(existing.firstTick ?? existing.lastTick);
+    const routeFirst = route.firstTimelineStep ?? String(route.firstTick ?? route.lastTick);
+    if (compareSimulationSteps(routeFirst, existingFirst) < 0) {
+      existing.firstTick = route.firstTick ?? route.lastTick;
+      if (route.firstTimelineStep === undefined) delete existing.firstTimelineStep;
+      else existing.firstTimelineStep = route.firstTimelineStep;
+      if (route.firstTimelineDays === undefined) delete existing.firstTimelineDays;
+      else existing.firstTimelineDays = route.firstTimelineDays;
+      if (route.firstYears === undefined) delete existing.firstYears;
+      else existing.firstYears = route.firstYears;
+    }
+    const existingLast = existing.lastTimelineStep ?? String(existing.lastTick);
+    const routeLast = route.lastTimelineStep ?? String(route.lastTick);
+    if (compareSimulationSteps(routeLast, existingLast) > 0) {
+      existing.lastTick = route.lastTick;
+      if (route.lastTimelineStep === undefined) delete existing.lastTimelineStep;
+      else existing.lastTimelineStep = route.lastTimelineStep;
+      if (route.lastTimelineDays === undefined) delete existing.lastTimelineDays;
+      else existing.lastTimelineDays = route.lastTimelineDays;
+      if (route.lastYears === undefined) delete existing.lastYears;
+      else existing.lastYears = route.lastYears;
+    }
+  };
+  for (const route of state.eventArchive.strategicRoutes ?? []) {
+    if (route.kind !== "trade" || !route.resourceId) continue;
+    add({
+      fromOrganizationId: route.fromId,
+      toOrganizationId: route.toId,
+      fromRegion: route.fromRegion,
+      toRegion: route.toRegion,
+      resourceId: route.resourceId,
+      totalAmount: route.cumulativeAmount,
+      shipmentCount: route.occurrenceCount,
+      archivedShipmentCount: route.occurrenceCount,
+      firstTick: route.firstTick,
+      ...(route.firstTimelineStep === undefined ? {} : { firstTimelineStep: route.firstTimelineStep }),
+      ...(route.firstTimelineDays === undefined ? {} : { firstTimelineDays: route.firstTimelineDays }),
+      ...(route.firstYears === undefined ? {} : { firstYears: route.firstYears }),
+      lastTick: route.lastTick,
+      ...(route.lastTimelineStep === undefined ? {} : { lastTimelineStep: route.lastTimelineStep }),
+      ...(route.lastTimelineDays === undefined ? {} : { lastTimelineDays: route.lastTimelineDays }),
+      ...(route.lastYears === undefined ? {} : { lastYears: route.lastYears }),
+    });
+  }
   let shipmentCount = 0;
-  for (let index = state.events.length - 1; index >= 0 && shipmentCount < 256; index -= 1) {
+  for (let index = state.events.length - 1; index >= 0 && shipmentCount < MAX_SUPPLY_ROUTES; index -= 1) {
     const event = state.events[index];
     if (!event || event.kind !== "interregional-trade") continue;
-    const fromOrganizationId = typeof event.payload.fromOrganizationId === "string" ? event.payload.fromOrganizationId : event.sourceIds[0];
-    const toOrganizationId = typeof event.payload.toOrganizationId === "string" ? event.payload.toOrganizationId : event.sourceIds[1];
-    const fromRegion = event.payload.fromRegion;
-    const toRegion = event.payload.toRegion;
-    const resourceId = event.payload.resourceId;
-    const amount = Number(event.payload.amount ?? 0);
-    if (!fromOrganizationId || !toOrganizationId || typeof fromRegion !== "string" || typeof toRegion !== "string"
-      || !["food", "materials", "energy"].includes(String(resourceId)) || !Number.isFinite(amount) || amount <= 0) continue;
+    const summary = strategicRouteForEvent(event);
+    if (!summary || summary.kind !== "trade" || !summary.resourceId) continue;
     shipmentCount += 1;
-    const key = `${fromOrganizationId}|${toOrganizationId}|${resourceId}`;
-    const existing = routes.get(key);
-    if (existing) {
-      existing.totalAmount = Math.round((existing.totalAmount + amount) * 1_000_000) / 1_000_000;
-      existing.shipmentCount += 1;
-      continue;
-    }
-    routes.set(key, {
-      fromOrganizationId,
-      toOrganizationId,
-      fromRegion: fromRegion as SupplyRoute["fromRegion"],
-      toRegion: toRegion as SupplyRoute["toRegion"],
-      resourceId: resourceId as SupplyRoute["resourceId"],
-      totalAmount: amount,
+    add({
+      fromOrganizationId: summary.fromId,
+      toOrganizationId: summary.toId,
+      fromRegion: summary.fromRegion,
+      toRegion: summary.toRegion,
+      resourceId: summary.resourceId,
+      totalAmount: summary.cumulativeAmount,
       shipmentCount: 1,
+      archivedShipmentCount: 0,
+      firstTick: event.tick,
+      ...(event.timelineStep === undefined ? {} : { firstTimelineStep: event.timelineStep }),
+      ...(event.timelineDays === undefined ? {} : { firstTimelineDays: event.timelineDays }),
+      ...(event.years === undefined ? {} : { firstYears: event.years }),
       lastTick: event.tick,
+      ...(event.timelineStep === undefined ? {} : { lastTimelineStep: event.timelineStep }),
+      ...(event.timelineDays === undefined ? {} : { lastTimelineDays: event.timelineDays }),
       ...(event.years === undefined ? {} : { lastYears: event.years }),
     });
   }
-  return [...routes.values()].sort((left, right) => right.lastTick - left.lastTick || left.resourceId.localeCompare(right.resourceId) || left.fromOrganizationId.localeCompare(right.fromOrganizationId));
+  return [...routes.values()]
+    .sort((left, right) => compareSimulationSteps(right.lastTimelineStep ?? String(right.lastTick), left.lastTimelineStep ?? String(left.lastTick))
+      || left.resourceId.localeCompare(right.resourceId)
+      || left.fromOrganizationId.localeCompare(right.fromOrganizationId))
+    .slice(0, MAX_SUPPLY_ROUTES);
 };
 
 const organizationDirectoryFor = (state: WorldState): OrganizationDirectoryEntry[] => {
@@ -446,27 +500,40 @@ const sceneFor = (state: WorldState, projection?: WorldState["observation"]["pro
       if (strategicLinks.size >= MAX_SCENE_DIPLOMATIC_LINKS) break diplomaticLinks;
     }
   }
+  for (const route of (state.eventArchive.strategicRoutes ?? []).slice(0, MAX_SCENE_EVENT_LINKS)) {
+    const amountStrength = route.kind === "trade" ? Math.log1p(route.cumulativeAmount) / 8 : Math.log1p(route.occurrenceCount) / 5;
+    addStrategicLink({
+      fromId: route.fromId,
+      toId: route.toId,
+      fromRegion: route.fromRegion,
+      toRegion: route.toRegion,
+      kind: route.kind,
+      scope: "strategic",
+      strength: Math.max(0.12, Math.min(1, 0.24 + amountStrength)),
+    });
+  }
   const strategicEventKinds = new Set([
     "interregional-trade", "diplomatic-alliance", "border-conflict", "organization-war", "territory-transfer",
     "population-migration", "population-dispersal", "organization-migration", "war-displacement",
   ]);
   const asRegionId = (value: unknown): RegionId | undefined => typeof value === "string" && value.startsWith("region:") ? value as RegionId : undefined;
   for (const event of state.events.filter((candidate) => strategicEventKinds.has(candidate.kind)).slice(-MAX_SCENE_EVENT_LINKS)) {
-    const fromId = String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.payload.populationId ?? event.sourceIds[0] ?? "");
-    const toId = event.kind === "organization-migration"
+    const archivedShape = strategicRouteForEvent(event);
+    const fromId = archivedShape?.fromId ?? String(event.payload.fromOrganizationId ?? event.payload.leftOrganizationId ?? event.payload.populationId ?? event.sourceIds[0] ?? "");
+    const toId = archivedShape?.toId ?? (event.kind === "organization-migration"
       ? String(event.payload.toOrganizationId ?? event.payload.organizationId ?? event.payload.fromOrganizationId ?? event.sourceIds[0] ?? fromId)
-      : String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId);
-    const fromRegion = asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion)
+      : String(event.payload.toOrganizationId ?? event.payload.rightOrganizationId ?? event.payload.branchPopulationId ?? event.sourceIds[1] ?? fromId));
+    const fromRegion = archivedShape?.fromRegion ?? asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion ?? event.evidence.leftRegion)
       ?? entities.get(fromId)?.regionId
       ?? organizationLocations.get(fromId)?.regionId;
-    const toRegion = asRegionId(event.payload.toRegion ?? event.evidence.toRegion ?? event.evidence.rightRegion)
+    const toRegion = archivedShape?.toRegion ?? asRegionId(event.payload.toRegion ?? event.evidence.toRegion ?? event.evidence.rightRegion)
       ?? entities.get(toId)?.regionId
       ?? organizationLocations.get(toId)?.regionId;
     if (!fromId || !toId || !fromRegion || !toRegion) continue;
-    const kind = event.kind === "interregional-trade" ? "trade"
+    const kind = archivedShape?.kind ?? (event.kind === "interregional-trade" ? "trade"
       : event.kind === "diplomatic-alliance" ? "alliance"
         : event.kind === "population-migration" || event.kind === "population-dispersal" || event.kind === "organization-migration" || event.kind === "war-displacement" ? "migration"
-          : "border-conflict";
+          : "border-conflict");
     const strength = Number(event.payload.amount ?? event.evidence.amount ?? event.evidence.intensity
       ?? event.evidence.displaced ?? event.evidence.branchCount ?? 0.7);
     addStrategicLink({

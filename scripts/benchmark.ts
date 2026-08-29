@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { clearSimulationStages, listSimulationStages, registerSimulationStage, stepWorld } from "../src/sim/engine.ts";
 import { MAX_AGENT_MEMORY_IDS, MAX_BELIEFS_PER_AGENT, MAX_DETAILED_AGENTS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../src/sim/agents/lifecycle.ts";
-import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS } from "../src/sim/events/ledger.ts";
+import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS, MAX_STRATEGIC_ROUTE_SUMMARIES } from "../src/sim/events/ledger.ts";
 import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../src/sim/environment/substances.ts";
 import { MAX_POPULATION_RECORDS } from "../src/sim/ecology/archive.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../src/sim/ecology/interactions.ts";
@@ -109,6 +109,7 @@ const segmentSize = Math.max(1, Math.min(500, Math.ceil(steps / Math.min(4, step
 type CollectionCounts = {
   events: number;
   milestones: number;
+  strategicRoutes: number;
   populations: number;
   agents: number;
   relationships: number;
@@ -127,6 +128,7 @@ type CollectionCounts = {
 const collectionCounts = (): CollectionCounts => ({
   events: state.events.length,
   milestones: state.eventArchive.milestones.length,
+  strategicRoutes: state.eventArchive.strategicRoutes.length,
   populations: state.populations.length,
   agents: state.agents.length,
   relationships: state.relationships.length,
@@ -250,6 +252,15 @@ const health = {
     milestone.organizationIds.length,
   ].every((count) => count <= MAX_MILESTONE_RELATED_IDS)
     && [milestone.tick, milestone.years ?? 0, milestone.probability, milestone.roll].every(Number.isFinite)),
+  strategicRouteArchiveBounded: state.eventArchive.strategicRoutes.length <= MAX_STRATEGIC_ROUTE_SUMMARIES,
+  strategicRoutesHealthy: state.eventArchive.strategicRoutes.every((route) => [
+    route.cumulativeAmount,
+    route.occurrenceCount,
+    route.firstTick,
+    route.lastTick,
+  ].every((value) => Number.isFinite(value) && value >= 0)
+    && route.occurrenceCount > 0
+    && route.fromRegion !== route.toRegion),
   agentCountBounded: state.agents.length <= MAX_DETAILED_AGENTS,
   peakAgentCountBounded: peakAgents <= MAX_DETAILED_AGENTS,
   populationCountBounded: state.populations.length <= MAX_POPULATION_RECORDS,
@@ -370,6 +381,7 @@ console.log(JSON.stringify({
   pathogens: state.pathogens.length,
   events: state.events.length,
   milestones: state.eventArchive.milestones.length,
+  strategicRoutes: state.eventArchive.strategicRoutes.length,
   archivedEvents: state.eventArchive.archivedEventCount,
   archivedSpecies: state.eventArchive.archivedSpeciesCount,
   archivedKnowledge: state.eventArchive.archivedKnowledgeCount,

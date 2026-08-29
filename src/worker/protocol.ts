@@ -101,7 +101,14 @@ export type SupplyRoute = {
   resourceId: "food" | "materials" | "energy";
   totalAmount: number;
   shipmentCount: number;
+  archivedShipmentCount?: number;
+  firstTick?: number;
+  firstTimelineStep?: string;
+  firstTimelineDays?: string;
+  firstYears?: number;
   lastTick: number;
+  lastTimelineStep?: string;
+  lastTimelineDays?: string;
   lastYears?: number;
 };
 
