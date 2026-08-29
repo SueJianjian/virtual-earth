@@ -6,7 +6,7 @@ import {
   compactEventLedger,
   lifetimeTradeVolume,
   recordAppendedEvents,
-  retainHistorySamples,
+  appendHistorySample,
   synchronizeEventArchive,
 } from "./events/ledger.ts";
 import { stepEnvironment } from "./environment/index.ts";
@@ -38,6 +38,7 @@ import { isClimateCycleState } from "./environment/cycle.ts";
 import { isTectonicState } from "./environment/geology.ts";
 import { isAtmosphereState } from "./environment/atmosphere.ts";
 import { isOceanState } from "./environment/ocean.ts";
+import { recordOrganizationDevelopment } from "./society/development.ts";
 import type {
   EntityEffect,
   RuleContext,
@@ -105,10 +106,7 @@ const historySampleFor = (state: WorldState): WorldHistorySample => {
 };
 
 const recordHistorySample = (state: WorldState): void => {
-  state.eventArchive.historySamples = retainHistorySamples([
-    ...(state.eventArchive.historySamples ?? []),
-    historySampleFor(state),
-  ]);
+  appendHistorySample(state.eventArchive.historySamples, historySampleFor(state));
 };
 
 export const registerSimulationStage = (stage: SimulationStage): void => {
@@ -335,7 +333,6 @@ const applyEcologicalRelationshipEffects = (state: WorldState, effects: NonNulla
 };
 
 const applyResourceTransactions = (state: WorldState, transactions: WorldDelta["resourceTransactions"]): void => {
-  compactResourceRecords(state, { removeOrphanedHolders: false });
   const entryKey = (resourceId: string, regionId: string, holderId?: string): string =>
     `${resourceId}|${regionId}|${holderId ?? "world"}`;
   const entriesByKey = new Map<string, WorldState["resources"][number]>();
@@ -1013,7 +1010,67 @@ const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: rea
   }
 };
 
-const pruneTransientState = (state: WorldState): WorldDelta["eventDrafts"] => {
+const TRANSIENT_MAINTENANCE_INTERVAL = 64;
+
+const transientMaintenanceDue = (state: WorldState): boolean => {
+  if (state.tick < Number.MAX_SAFE_INTEGER) return state.tick % TRANSIENT_MAINTENANCE_INTERVAL === 0;
+  const timelineStep = state.timeline?.step;
+  if (!timelineStep || !/^\d+$/.test(timelineStep)) return true;
+  return Number(BigInt(timelineStep) % BigInt(TRANSIENT_MAINTENANCE_INTERVAL)) === 0;
+};
+
+const worldviewLifecycleNeedsMaintenance = (state: WorldState): boolean => {
+  if (state.worldview.entities.length === 0) return false;
+  const agentIds = new Set(state.agents.map((agent) => agent.id));
+  const validPractices = state.worldview.practices.filter((practice) => practice.status !== "failed" && agentIds.has(practice.practitionerId));
+  const practiceIdsByEntityKey = new Map<string, Set<string>>();
+  for (const practice of validPractices) {
+    const key = `${practice.packId}|${practice.regionId}|${practice.phenomenonId}`;
+    const ids = practiceIdsByEntityKey.get(key) ?? new Set<string>();
+    ids.add(practice.practitionerId);
+    practiceIdsByEntityKey.set(key, ids);
+  }
+  for (const entity of state.worldview.entities) {
+    if ((entity.memberIds ?? []).some((memberId) => !agentIds.has(memberId))) return true;
+    const expected = entity.sourcePhenomenonId
+      ? practiceIdsByEntityKey.get(`${entity.packId}|${entity.regionId}|${entity.sourcePhenomenonId}`) ?? new Set<string>()
+      : entity.kind === "sect"
+        ? practiceIdsByEntityKey.get(`${entity.packId}|${entity.regionId}|`) ?? new Set<string>()
+        : undefined;
+    if (expected) {
+      const currentMembers = new Set((entity.memberIds ?? []).map(String));
+      if ([...expected].some((memberId) => !currentMembers.has(memberId))) return true;
+    }
+  }
+  return false;
+};
+
+const requiresTransientMaintenance = (state: WorldState, delta: WorldDelta): boolean => {
+  // Relationship updates only refresh attributes on existing endpoints. They
+  // cannot leave a dangling reference, so defer their global reconciliation
+  // to the bounded maintenance interval. Creating or removing a relationship
+  // still needs an immediate pass to preserve the runtime invariants.
+  if (delta.relationshipEffects.some((effect) => effect.operation !== "update")) return true;
+  if (delta.entityEffects.some((effect) =>
+    (effect.collection === "species"
+      || effect.collection === "populations"
+      || effect.collection === "agents"
+      || effect.collection === "organizations"
+      || effect.collection === "facilities")
+    && (effect.operation === "create" || effect.operation === "remove"),
+  )) return true;
+  // Worldview lifecycle reconciliation is only needed after worldview data
+  // changes; periodic maintenance still repairs older or externally loaded
+  // states.
+  if (!delta.worldviewEffects.some((effect) => effect.kind !== "resource-transaction")) return false;
+  return worldviewLifecycleNeedsMaintenance(state);
+};
+
+const pruneTransientState = (state: WorldState, delta: WorldDelta): WorldDelta["eventDrafts"] => {
+  // Most ticks only update already-canonical records. Defer whole-world
+  // reconciliation until a structural change or a bounded maintenance tick.
+  // The stage deltas still carry immediate entity and relationship updates.
+  if (!requiresTransientMaintenance(state, delta) && !transientMaintenanceDue(state)) return [];
   compactPopulationRecords(state);
   compactExtinctSpecies(state);
   const populationIds = new Set(state.populations.map((population) => population.id));
@@ -1203,7 +1260,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   }
   synchronizeEventArchive(next.eventArchive, next.events);
   applyDelta(next, merged, orderedDeltas);
-  appendItems(merged.eventDrafts, pruneTransientState(next));
+  appendItems(merged.eventDrafts, pruneTransientState(next, merged));
   const [, nextRandom] = nextRandomValue(previous.random);
   next.random = nextRandom;
   next.timeline = nextTimeline;
@@ -1215,6 +1272,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
   const emittedNatural = appendEventsInPlace(next.events, merged.eventDrafts, next.tick, next.years, nextTimeline.step, nextTimeline.days);
   const emittedEvents = [...emittedExternal, ...emittedNatural];
   recordAppendedEvents(next.eventArchive, emittedEvents);
+  recordOrganizationDevelopment(next, emittedEvents);
   if (wholeYearsCrossed(0, input.elapsedYears, currentTimeline.days) > 0) recordHistorySample(next);
   const archivedEvents = compactEventLedger(next);
   const removedOrganization = merged.entityEffects.some((effect) => effect.collection === "organizations" && effect.operation === "remove");

@@ -56,12 +56,13 @@ const evaluateHazard = (
   threshold: number,
   annualProbability: number,
   elapsedYears: number,
+  simulationStep: string,
   evidence: Record<string, number | string | boolean>,
 ): NaturalHazard | undefined => {
   if (score < threshold) return undefined;
   const probability = probabilityAcross(annualProbability, elapsedYears);
   const regionId = regionForIndex(state, index);
-  const [roll] = randomFloat(forkRandom(state.random, `natural-hazard:${kind}:${regionId}:${simulationStepForWorld(state)}`));
+  const [roll] = randomFloat(forkRandom(state.random, `natural-hazard:${kind}:${regionId}:${simulationStep}`));
   if (roll >= probability) return undefined;
   return {
     kind,
@@ -107,6 +108,20 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
   const samplingScale = REFERENCE_HAZARD_CELL_COUNT / Math.max(1, cellCount);
   const width = elevation.width;
   const height = elevation.height;
+  const elevationValues = elevation.values;
+  const temperatureValues = temperature.values;
+  const humidityValues = humidity.values;
+  const waterValues = water.values;
+  const nutrientValues = nutrients.values;
+  const plateIndices = state.tectonics.plateIndex.values;
+  const boundaryStress = state.tectonics.boundaryStress.values;
+  const boundaryActivity = state.tectonics.boundaryActivity.values;
+  const atmosphereEstablished = state.atmosphere.updateCount > 0;
+  const precipitation = state.atmosphere.precipitation.values;
+  const pressure = state.atmosphere.pressure.values;
+  const windX = state.atmosphere.windX.values;
+  const windY = state.atmosphere.windY.values;
+  const simulationStep = simulationStepForWorld(state);
   const sampleScale = round(samplingScale);
   const retained: NaturalHazard[] = [];
   for (let index = 0; index < cellCount; index += 1) {
@@ -117,35 +132,35 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
     const south = y + 1 < height ? index + width : index;
     const west = rowStart + (x + width - 1) % width;
     const east = rowStart + (x + 1) % width;
-    const elevationValue = clamp(elevation.values[index] ?? 0);
+    const elevationValue = clamp(elevationValues[index] ?? 0);
     const localMean = (
-      (elevation.values[north] ?? elevationValue)
-      + (elevation.values[south] ?? elevationValue)
-      + (elevation.values[west] ?? elevationValue)
-      + (elevation.values[east] ?? elevationValue)
+      (elevationValues[north] ?? elevationValue)
+      + (elevationValues[south] ?? elevationValue)
+      + (elevationValues[west] ?? elevationValue)
+      + (elevationValues[east] ?? elevationValue)
     ) / 4;
     const relief = clamp(Math.abs(elevationValue - localMean) * 9);
-    const localPlateIndex = Math.trunc(state.tectonics.plateIndex.values[index] ?? 0);
-    const peerPlateIndex = [north, south, west, east]
-      .map((neighbor) => Math.trunc(state.tectonics.plateIndex.values[neighbor] ?? localPlateIndex))
-      .find((candidate) => candidate !== localPlateIndex);
+    const localPlateIndex = Math.trunc(plateIndices[index] ?? 0);
+    let peerPlateIndex = Math.trunc(plateIndices[north] ?? localPlateIndex);
+    if (peerPlateIndex === localPlateIndex) peerPlateIndex = Math.trunc(plateIndices[south] ?? localPlateIndex);
+    if (peerPlateIndex === localPlateIndex) peerPlateIndex = Math.trunc(plateIndices[west] ?? localPlateIndex);
+    if (peerPlateIndex === localPlateIndex) peerPlateIndex = Math.trunc(plateIndices[east] ?? localPlateIndex);
     const plate = state.tectonics.plates[localPlateIndex];
-    const peerPlate = peerPlateIndex === undefined ? undefined : state.tectonics.plates[peerPlateIndex];
-    const stress = clamp(state.tectonics.boundaryStress.values[index] ?? 0);
-    const activity = Math.max(-1, Math.min(1, state.tectonics.boundaryActivity.values[index] ?? 0));
+    const peerPlate = peerPlateIndex === localPlateIndex ? undefined : state.tectonics.plates[peerPlateIndex];
+    const stress = clamp(boundaryStress[index] ?? 0);
+    const activity = Math.max(-1, Math.min(1, boundaryActivity[index] ?? 0));
     const boundaryType = stress < 0.01 ? "interior" : activity >= 0.12 ? "convergent" : activity <= -0.12 ? "divergent" : "transform";
-    const temperatureValue = clamp(temperature.values[index] ?? 0);
-    const humidityValue = clamp(humidity.values[index] ?? 0);
-    const atmosphereEstablished = state.atmosphere.updateCount > 0;
+    const temperatureValue = clamp(temperatureValues[index] ?? 0);
+    const humidityValue = clamp(humidityValues[index] ?? 0);
     const precipitationValue = atmosphereEstablished
-      ? clamp(state.atmosphere.precipitation.values[index] ?? 0)
+      ? clamp(precipitation[index] ?? 0)
       : humidityValue;
-    const pressureValue = atmosphereEstablished ? clamp(state.atmosphere.pressure.values[index] ?? 0.5) : 0.5;
+    const pressureValue = atmosphereEstablished ? clamp(pressure[index] ?? 0.5) : 0.5;
     const windSpeed = atmosphereEstablished
-      ? clamp(Math.hypot(state.atmosphere.windX.values[index] ?? 0, state.atmosphere.windY.values[index] ?? 0))
+      ? clamp(Math.hypot(windX[index] ?? 0, windY[index] ?? 0))
       : 0;
-    const waterValue = clamp(water.values[index] ?? 0);
-    const nutrientsValue = clamp(nutrients.values[index] ?? 0);
+    const waterValue = clamp(waterValues[index] ?? 0);
+    const nutrientsValue = clamp(nutrientValues[index] ?? 0);
     const volcanicScore = clamp(stress * 0.62 + Math.abs(activity) * 0.16 + elevationValue * 0.12 + relief * 0.1);
     const earthquakeScore = clamp(stress * 0.8 + relief * 0.2);
     const heat = clamp((temperatureValue - 0.6) / 0.4);
@@ -171,19 +186,19 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
       }
       : undefined;
     if (common && volcanicScore >= 0.73) {
-      const candidate = evaluateHazard(state, index, "volcano", volcanicScore, 0.73, (0.00035 + Math.max(0, volcanicScore - 0.73) * 0.0022) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
+      const candidate = evaluateHazard(state, index, "volcano", volcanicScore, 0.73, (0.00035 + Math.max(0, volcanicScore - 0.73) * 0.0022) * samplingScale, elapsedYears, simulationStep, { ...common, tectonicStress: round(stress), relief: round(relief) });
       if (candidate) retainHazard(retained, candidate);
     }
     if (common && earthquakeScore >= 0.78) {
-      const candidate = evaluateHazard(state, index, "earthquake", earthquakeScore, 0.78, (0.00028 + Math.max(0, earthquakeScore - 0.78) * 0.0018) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
+      const candidate = evaluateHazard(state, index, "earthquake", earthquakeScore, 0.78, (0.00028 + Math.max(0, earthquakeScore - 0.78) * 0.0018) * samplingScale, elapsedYears, simulationStep, { ...common, tectonicStress: round(stress), relief: round(relief) });
       if (candidate) retainHazard(retained, candidate);
     }
     if (common && droughtScore >= 0.74) {
-      const candidate = evaluateHazard(state, index, "drought", droughtScore, 0.74, (0.00065 + Math.max(0, droughtScore - 0.74) * 0.0024) * samplingScale, elapsedYears, { ...common, heat: round(heat), aridity: round(aridity) });
+      const candidate = evaluateHazard(state, index, "drought", droughtScore, 0.74, (0.00065 + Math.max(0, droughtScore - 0.74) * 0.0024) * samplingScale, elapsedYears, simulationStep, { ...common, heat: round(heat), aridity: round(aridity) });
       if (candidate) retainHazard(retained, candidate);
     }
     if (common && floodScore >= 0.78) {
-      const candidate = evaluateHazard(state, index, "flood", floodScore, 0.78, (0.00055 + Math.max(0, floodScore - 0.78) * 0.002) * samplingScale, elapsedYears, { ...common, wetness: round(wetness), basin: round(1 - elevationValue) });
+      const candidate = evaluateHazard(state, index, "flood", floodScore, 0.78, (0.00055 + Math.max(0, floodScore - 0.78) * 0.002) * samplingScale, elapsedYears, simulationStep, { ...common, wetness: round(wetness), basin: round(1 - elevationValue) });
       if (candidate) retainHazard(retained, candidate);
     }
   }

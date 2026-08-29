@@ -7,7 +7,7 @@ import { MAX_POPULATION_RECORDS } from "../src/sim/ecology/archive.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../src/sim/ecology/interactions.ts";
 import { MAX_BELIEFS_PER_CULTURE, MAX_CULTURE_RECORDS, MAX_KNOWLEDGE_PER_AGENT, MAX_KNOWLEDGE_PER_CULTURE, MAX_KNOWLEDGE_RECORDS } from "../src/sim/culture/archive.ts";
 import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../src/sim/worldview/archive.ts";
-import { createWorld, isFiniteWorld, worldDigest } from "../src/sim/world.ts";
+import { createWorld, finiteWorldChecks, worldDigest } from "../src/sim/world.ts";
 import { initializeEnvironment } from "../src/sim/environment/index.ts";
 import { MAX_IMMUNITY_IDS_PER_AGENT, MAX_INFECTIONS_PER_AGENT, MAX_PATHOGENS, MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "../src/sim/health/disease.ts";
 import { MAX_FACILITIES_PER_REGION } from "../src/sim/society/facilities.ts";
@@ -250,7 +250,10 @@ const archiveCounters = [
   ...Object.values(state.eventArchive.organizationCounts),
 ];
 const health = {
-  finite: isFiniteWorld(state),
+  finite: Object.values(finiteWorldChecks(state)).every(Boolean),
+  finiteFailures: Object.entries(finiteWorldChecks(state))
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name),
   tectonicsHealthy: isTectonicState(state.tectonics, width, height)
     && state.tectonics.plates.length >= MIN_TECTONIC_PLATES
     && state.tectonics.plates.length <= MAX_TECTONIC_PLATES,

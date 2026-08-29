@@ -14,6 +14,7 @@ import type {
 import { culturalCompatibility, cultureIdentityFor } from "../../culture/identity.ts";
 import { knowledgeDiffusionRoutes } from "../../culture/innovation.ts";
 import { regionIdForWorldview } from "../rules.ts";
+import { compareSimulationSteps } from "../../time.ts";
 
 export const ORIGINAL_EMERGENCE_PACK_ID = "emergence.original-worldview";
 
@@ -331,7 +332,10 @@ const practiceBeginRule = causalRule("original-practice-begin", 0.22, (context) 
 const practiceTrainingRule = causalRule("original-practice-training", 1, (context) => {
   const practices = practicesOf(context)
     .filter((practice) => practice.status === "active")
-    .sort((left, right) => left.lastTrainedTick - right.lastTrainedTick || left.id.localeCompare(right.id));
+    .sort((left, right) => compareSimulationSteps(
+      left.lastTrainedTimelineStep ?? String(left.lastTrainedTick),
+      right.lastTrainedTimelineStep ?? String(right.lastTrainedTick),
+    ) || left.id.localeCompare(right.id));
   const practice = practices[0];
   const principle = practice ? context.state.worldview.phenomena.find((record) => record.id === practice.phenomenonId && record.epistemicStatus === "verified") : undefined;
   const practitioner = practice ? context.state.agents.find((agent) => agent.id === practice.practitionerId) : undefined;
@@ -344,7 +348,10 @@ const practiceTrainingRule = causalRule("original-practice-training", 1, (contex
 }, (context, evidence) => {
   const practice = practicesOf(context)
     .filter((candidate) => candidate.status === "active")
-    .sort((left, right) => left.lastTrainedTick - right.lastTrainedTick || left.id.localeCompare(right.id))[0]!;
+    .sort((left, right) => compareSimulationSteps(
+      left.lastTrainedTimelineStep ?? String(left.lastTrainedTick),
+      right.lastTrainedTimelineStep ?? String(right.lastTrainedTick),
+    ) || left.id.localeCompare(right.id))[0]!;
   const practitioner = context.state.agents.find((agent) => agent.id === practice.practitionerId)!;
   const principle = context.state.worldview.phenomena.find((record) => record.id === practice.phenomenonId)!;
   const ambient = ambientEnergy(context, principle);
@@ -389,7 +396,10 @@ const practiceInstitutionRule = causalRule("original-practice-institution", 0.24
   const agents = new Set(context.state.agents.map((agent) => agent.id));
   const practices = practicesOf(context)
     .filter((practice) => practice.phenomenonId === principle?.id && practice.status !== "failed" && agents.has(practice.practitionerId))
-    .sort((left, right) => left.originTick - right.originTick || left.id.localeCompare(right.id));
+    .sort((left, right) => compareSimulationSteps(
+      left.originTimelineStep ?? String(left.originTick),
+      right.originTimelineStep ?? String(right.originTick),
+    ) || left.id.localeCompare(right.id));
   const teacherLinks = practices.filter((practice) => practice.teacherId && agents.has(practice.teacherId)).length;
   const averageAttunement = practices.reduce((sum, practice) => sum + practice.attunement, 0) / Math.max(1, practices.length);
   const sponsors = new Set(practices.map((practice) => practice.organizationId).filter((id): id is OrganizationId => Boolean(id)));
@@ -412,7 +422,10 @@ const practiceInstitutionRule = causalRule("original-practice-institution", 0.24
   const agents = new Set(context.state.agents.map((agent) => agent.id));
   const practices = practicesOf(context)
     .filter((practice) => practice.phenomenonId === principle.id && practice.status !== "failed" && agents.has(practice.practitionerId))
-    .sort((left, right) => left.originTick - right.originTick || right.attunement - left.attunement || left.id.localeCompare(right.id));
+    .sort((left, right) => compareSimulationSteps(
+      left.originTimelineStep ?? String(left.originTick),
+      right.originTimelineStep ?? String(right.originTick),
+    ) || right.attunement - left.attunement || left.id.localeCompare(right.id));
   const founder = practices.find((practice) => !practice.teacherId) ?? practices[0]!;
   const sponsorCounts = new Map<OrganizationId, number>();
   for (const practice of practices) {

@@ -21,6 +21,7 @@ import { MAX_FACILITY_RECORDS } from "./society/facilities.ts";
 import { MAX_RESOURCE_RECORDS } from "./resources.ts";
 import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "./ecology/archive.ts";
 import { isArchivedOrganizationSummary, MAX_ARCHIVED_ORGANIZATION_SUMMARIES } from "./society/archive.ts";
+import { isOrganizationDevelopmentSummary, MAX_ORGANIZATION_DEVELOPMENT_RESOURCE_KEYS, MAX_ORGANIZATION_DEVELOPMENT_MILESTONES, MAX_ORGANIZATION_DEVELOPMENT_SUMMARIES } from "./society/development.ts";
 import { isSimulationTimeline } from "./time.ts";
 import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
 import { MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PRACTICES } from "./worldview/archive.ts";
@@ -33,6 +34,7 @@ const DEFAULT_WIDTH = 96;
 const DEFAULT_HEIGHT = 48;
 const MIN_GRID_SIZE = 8;
 const MAX_GRID_SIZE = 256;
+const isExactTimelineStep = (value: unknown): boolean => typeof value === "string" && /^(0|[1-9]\d*)$/.test(value);
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value));
@@ -203,7 +205,7 @@ export const assertBlankWorld = (state: WorldState): void => {
   }
 };
 
-export const isFiniteWorld = (state: WorldState): boolean => {
+export const finiteWorldChecks = (state: WorldState): Record<string, boolean> => {
   const finiteClock = state.simulationDays === undefined
     || (Number.isSafeInteger(state.simulationDays) && state.simulationDays >= 0 && state.simulationDays <= Number.MAX_SAFE_INTEGER);
   const exactTimeline = state.timeline === undefined || isSimulationTimeline(state.timeline);
@@ -365,6 +367,11 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       && validTimelineStep(summary.archivedTimelineDays));
   const finiteArchivedOrganizations = state.eventArchive.archivedOrganizationSummaries.length <= MAX_ARCHIVED_ORGANIZATION_SUMMARIES
     && state.eventArchive.archivedOrganizationSummaries.every(isArchivedOrganizationSummary);
+  const finiteOrganizationDevelopment = Object.keys(state.eventArchive.organizationDevelopment).length <= MAX_ORGANIZATION_DEVELOPMENT_SUMMARIES
+    && Object.entries(state.eventArchive.organizationDevelopment).every(([id, summary]) => id === summary.id
+      && isOrganizationDevelopmentSummary(summary)
+      && summary.milestoneIds.length <= MAX_ORGANIZATION_DEVELOPMENT_MILESTONES
+      && Object.keys(summary.tradeVolumeByResource).length <= MAX_ORGANIZATION_DEVELOPMENT_RESOURCE_KEYS);
   const finiteStrategicRoutes = state.eventArchive.strategicRoutes.length <= MAX_STRATEGIC_ROUTE_SUMMARIES
     && state.eventArchive.strategicRoutes.every((route) => [
       route.cumulativeAmount,
@@ -480,10 +487,45 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       relationship.cumulativeImpact,
       relationship.lastImpact,
     ].every(Number.isFinite));
-    return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && finiteAgentRecords && finiteEcologyRecords;
+    const exactLodSteps = [
+      summary.versionStep,
+      culture?.lastChangeTimelineStep,
+      society?.lastChangeTimelineStep,
+      ...(culture?.knowledge ?? []).map((knowledge) => knowledge.originTimelineStep),
+    ].every((step) => step === undefined || isExactTimelineStep(step));
+    return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && exactLodSteps && finiteAgentRecords && finiteEcologyRecords;
   });
-  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteTectonics && finiteAtmosphere && finiteOcean && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
+  return {
+    finiteClock,
+    exactTimeline,
+    finiteOrbital,
+    finiteClimateCycle,
+    finiteTectonics,
+    finiteAtmosphere,
+    finiteOcean,
+    finiteGrids,
+    finiteFormation: formationValues.every(Number.isFinite),
+    finiteSubstances,
+    finitePathogens,
+    finiteRelationships,
+    finiteSpecies,
+    finiteKnowledge,
+    finiteCultures,
+    finiteEcologicalRelationships,
+    finiteResources,
+    finiteFacilities,
+    finiteHistorySamples,
+    finiteArchivedSpecies,
+    finiteArchivedOrganizations,
+    finiteOrganizationDevelopment,
+    finiteStrategicRoutes,
+    finiteWorldviews,
+    finiteLod,
+  };
 };
+
+export const isFiniteWorld = (state: WorldState): boolean =>
+  Object.values(finiteWorldChecks(state)).every(Boolean);
 
 export const regionIdForCell = (x: number, y: number): RegionId =>
   `region:${x}:${y}` as RegionId;

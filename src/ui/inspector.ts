@@ -410,6 +410,38 @@ const objectHistoryReport = (snapshot: WorldSnapshot, detail: InspectorDetail): 
 };
 const organizationName = (organization: { id: string; type: OrganizationType }): string => `${organizationLabels[organization.type]} · ${organization.id.slice(-8)}`;
 const detailLink = (level: DetailLevel, id: string, label: string, regionId?: RegionId): string => `<button type="button" class="detail-link" data-detail-link data-detail-level="${level}" data-detail-id="${escapeHtml(id)}"${regionId ? ` data-detail-region="${escapeHtml(regionId)}"` : ""}>${escapeHtml(label)}</button>`;
+type MapFocusLod = "region" | "settlement" | "individual";
+type MapFocusTarget = { regionId: RegionId; lod: MapFocusLod };
+const mapFocusLodForDetail = (level: DetailLevel): MapFocusLod => {
+  if (level === "agent") return "individual";
+  if (["population", "facility", "family", "clan", "tribe", "settlement", "worldview"].includes(level)) return "settlement";
+  return "region";
+};
+const mapFocusTargetForDetail = (snapshot: WorldSnapshot, selection: CellSelection, detail: InspectorDetail): MapFocusTarget | undefined => {
+  if (detail.level === "region") return { regionId: selection.regionId, lod: "region" };
+  if (!detail.id) return undefined;
+  const regionId = detail.level === "agent"
+    ? snapshot.projection?.agents.find((agent) => agent.id === detail.id)?.regionId
+    : detail.level === "population"
+      ? snapshot.populations?.find((population) => population.id === detail.id)?.regionId
+      : detail.level === "species"
+        ? allSpeciesForSnapshot(snapshot).find((species) => species.id === detail.id)?.originRegionId
+        : detail.level === "culture"
+          ? snapshot.cultures?.find((culture) => culture.id === detail.id)?.regionId
+          : detail.level === "facility"
+            ? snapshot.facilities?.find((facility) => facility.id === detail.id)?.regionId
+            : detail.level === "substance"
+              ? snapshot.substances?.find((substance) => substance.id === detail.id)?.regionId
+              : detail.level === "pathogen"
+                ? snapshot.pathogens?.find((pathogen) => pathogen.id === detail.id)?.regionId
+                : detail.level === "worldview"
+                  ? snapshot.worldviewEntities?.find((entity) => entity.id === detail.id)?.regionId
+                  : organizationForSnapshot(snapshot, detail.id)?.regionId;
+  return regionId ? { regionId, lod: mapFocusLodForDetail(detail.level) } : undefined;
+};
+const mapFocusControl = (target: MapFocusTarget | undefined): string => target
+  ? `<button type="button" class="detail-map-focus" data-map-focus data-map-focus-region="${escapeHtml(target.regionId)}" data-map-focus-lod="${target.lod}" aria-label="定位到地图">定位到地图</button>`
+  : "";
 type HistoryTarget = { level: DetailLevel; id: string; label: string; regionId?: RegionId };
 const historyTargetFor = (snapshot: WorldSnapshot, id: string): HistoryTarget | undefined => {
   if (id.startsWith("agent:")) {
@@ -536,6 +568,16 @@ const facilityStatusLabels: Record<FacilityState["status"], string> = {
   damaged: "受损",
   abandoned: "已废弃",
 };
+const formatTimelineStep = (timelineStep: string | undefined, tick: number): string => {
+  if (timelineStep === undefined) return format(tick);
+  try {
+    return new Intl.NumberFormat("zh-CN").format(BigInt(timelineStep));
+  } catch {
+    return format(tick);
+  }
+};
+const facilityStep = (timelineStep: string | undefined, tick: number): string =>
+  `演化步 ${formatTimelineStep(timelineStep, tick)}`;
 const facilityAssetsReport = (facilities: FacilityState[]): string => {
   const ordered = [...facilities].sort((left, right) => Number(left.status === "abandoned") - Number(right.status === "abandoned") || right.level - left.level || left.id.localeCompare(right.id));
   const activeCount = ordered.filter((facility) => facility.status === "active" || facility.status === "damaged").length;
@@ -554,7 +596,7 @@ const facilityAssetsReport = (facilities: FacilityState[]): string => {
     };
     return labels[facility.type];
   };
-  return `<section class="organization-governance facility-assets" aria-label="资产记录"><div class="detail-heading"><strong>资产记录</strong><span>${format(activeCount)} 项在役 · 累计投入 ${formatNumber(totalInvestment, 1)} 材料单位</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map((facility) => `<li data-facility-status="${facility.status}"><div><span>${knowledgeDomainLabels[facility.type]}设施 · ${facility.level} 级</span><small>${facilityStatusLabels[facility.status]}</small></div><strong>${escapeHtml(facility.id.slice(-8))}</strong><p>耐久 ${formatPercent(facility.condition).value}% · 编制 ${format(facility.workforceIds.length)}/${format(facility.workforceRequired ?? facilityWorkforceRequiredFor(facility.type))} 人 · 岗位效率 ${formatPercent(facility.workforceEfficiency ?? 1).value}%</p><p>材料投入 ${formatNumber(facility.materialInvested, 1)} 单位 · 运行贡献：${contribution(facility)}</p><p>${facility.builtTick >= 0 ? `建成于演化步 ${format(facility.builtTick)}` : `规划于演化步 ${format(facility.plannedTick)}`} · 最近维护 ${format(facility.lastMaintainedTick)} · 所有者 ${escapeHtml(facility.ownerOrganizationId.slice(-8))}</p></li>`).join("") : '<li class="worldview-empty">尚无已规划或已建成设施</li>'}</ol></section>`;
+  return `<section class="organization-governance facility-assets" aria-label="资产记录"><div class="detail-heading"><strong>资产记录</strong><span>${format(activeCount)} 项在役 · 累计投入 ${formatNumber(totalInvestment, 1)} 材料单位</span></div><ol class="worldview-list">${ordered.length > 0 ? ordered.map((facility) => `<li data-facility-status="${facility.status}"><div><span>${knowledgeDomainLabels[facility.type]}设施 · ${facility.level} 级</span><small>${facilityStatusLabels[facility.status]}</small></div><strong>${escapeHtml(facility.id.slice(-8))}</strong><p>耐久 ${formatPercent(facility.condition).value}% · 编制 ${format(facility.workforceIds.length)}/${format(facility.workforceRequired ?? facilityWorkforceRequiredFor(facility.type))} 人 · 岗位效率 ${formatPercent(facility.workforceEfficiency ?? 1).value}%</p><p>材料投入 ${formatNumber(facility.materialInvested, 1)} 单位 · 运行贡献：${contribution(facility)}</p><p>${facility.builtTick >= 0 ? `建成于 ${facilityStep(facility.builtTimelineStep, facility.builtTick)}` : `规划于 ${facilityStep(facility.plannedTimelineStep, facility.plannedTick)}`} · 最近维护 ${facilityStep(facility.lastMaintainedTimelineStep, facility.lastMaintainedTick)} · 所有者 ${escapeHtml(facility.ownerOrganizationId.slice(-8))}</p></li>`).join("") : '<li class="worldview-empty">尚无已规划或已建成设施</li>'}</ol></section>`;
 };
 const facilityDetailReport = (snapshot: WorldSnapshot, facilityId: string): string => {
   const facility = snapshot.facilities?.find((candidate) => candidate.id === facilityId);
@@ -562,7 +604,7 @@ const facilityDetailReport = (snapshot: WorldSnapshot, facilityId: string): stri
   const owner = facility.ownerOrganizationId ? organizationForSnapshot(snapshot, facility.ownerOrganizationId) : undefined;
   const effect = facilityOperationalEffect(facility);
   const requiredWorkforce = facility.workforceRequired ?? facilityWorkforceRequiredFor(facility.type);
-  return `<div class="detail-report"><div class="detail-title"><strong>设施报告</strong><span>${escapeHtml(facility.id)}</span></div><dl class="detail-grid"><div><dt>设施类型</dt><dd>${knowledgeDomainLabels[facility.type]}</dd></div><div><dt>生命周期状态</dt><dd>${facilityStatusLabels[facility.status]}</dd></div><div><dt>设施等级</dt><dd>${format(facility.level)} 级</dd></div><div><dt>耐久度</dt><dd>${formatPercent(facility.condition).value}%</dd></div><div><dt>建成时间</dt><dd>${facility.builtTick >= 0 ? `演化步 ${format(facility.builtTick)}` : "尚未建成"}</dd></div><div><dt>最近维护</dt><dd>演化步 ${format(facility.lastMaintainedTick)}</dd></div><div><dt>劳动力</dt><dd>${format(facility.workforceIds.length)} / ${format(requiredWorkforce)} 人</dd></div><div><dt>岗位效率</dt><dd>${formatPercent(facility.workforceEfficiency ?? 1).value}%</dd></div><div><dt>材料投入</dt><dd>${formatNumber(facility.materialInvested, 1)} 材料单位</dd></div><div><dt>所有者</dt><dd>${owner ? escapeHtml(organizationName(owner)) : escapeHtml(facility.ownerOrganizationId)}</dd></div></dl><section class="organization-governance" aria-label="设施运行效果"><div class="detail-heading"><strong>设施运行效果</strong><span>当前状态、维护和劳动力共同决定实际贡献</span></div><div class="detail-tags"><span>运行贡献 ${formatPercent(effect).value}%</span><span>${effect > 0 ? "正在影响当地生产与公共能力" : "当前不产生运行贡献"}</span><span>最近事件 演化步 ${format(facility.lastIncidentTick)}</span></div></section></div>`;
+  return `<div class="detail-report"><div class="detail-title"><strong>设施报告</strong><span>${escapeHtml(facility.id)}</span></div><dl class="detail-grid"><div><dt>设施类型</dt><dd>${knowledgeDomainLabels[facility.type]}</dd></div><div><dt>生命周期状态</dt><dd>${facilityStatusLabels[facility.status]}</dd></div><div><dt>设施等级</dt><dd>${format(facility.level)} 级</dd></div><div><dt>耐久度</dt><dd>${formatPercent(facility.condition).value}%</dd></div><div><dt>建成时间</dt><dd>${facility.builtTick >= 0 ? facilityStep(facility.builtTimelineStep, facility.builtTick) : "尚未建成"}</dd></div><div><dt>最近维护</dt><dd>${facilityStep(facility.lastMaintainedTimelineStep, facility.lastMaintainedTick)}</dd></div><div><dt>劳动力</dt><dd>${format(facility.workforceIds.length)} / ${format(requiredWorkforce)} 人</dd></div><div><dt>岗位效率</dt><dd>${formatPercent(facility.workforceEfficiency ?? 1).value}%</dd></div><div><dt>材料投入</dt><dd>${formatNumber(facility.materialInvested, 1)} 材料单位</dd></div><div><dt>所有者</dt><dd>${owner ? escapeHtml(organizationName(owner)) : escapeHtml(facility.ownerOrganizationId)}</dd></div></dl><section class="organization-governance" aria-label="设施运行效果"><div class="detail-heading"><strong>设施运行效果</strong><span>当前状态、维护和劳动力共同决定实际贡献</span></div><div class="detail-tags"><span>运行贡献 ${formatPercent(effect).value}%</span><span>${effect > 0 ? "正在影响当地生产与公共能力" : "当前不产生运行贡献"}</span><span>最近事件 ${facilityStep(facility.lastIncidentTimelineStep, facility.lastIncidentTick)}</span></div></section></div>`;
 };
 const supplyChainReport = (snapshot: WorldSnapshot, organization: { id: string }, balances: Record<keyof typeof supplyResourceLabels, number>): string => {
   const routes = (snapshot.supplyRoutes ?? [])
@@ -603,6 +645,32 @@ const strategicRouteHistoryReport = (snapshot: WorldSnapshot, organization: { id
     return `<li data-strategic-route-kind="${route.kind}"><div><span>${strategicRouteLabels[route.kind]} · ${selfMigration ? "本组织迁徙" : outgoing ? "对外" : "来自外部"}</span><small>${format(route.occurrenceCount)} 次</small></div><strong>${escapeHtml(counterparty.slice(-12))}</strong><p>${escapeHtml(region)}${amount}</p><p>${first} 至 ${last}</p></li>`;
   }).join("")}</ol></section>`;
 };
+const organizationDevelopmentReport = (snapshot: WorldSnapshot, organization: { id: string }): string => {
+  const summary = snapshot.eventArchive?.organizationDevelopment?.[organization.id];
+  if (!summary) return "";
+  const activityTime = (timelineDays: string | undefined, years: number | undefined, tick: number): string =>
+    timelineDays === undefined ? formatSimulationAge(years ?? tick) : formatSimulationAgeFromDays(timelineDays);
+  const firstActivity = activityTime(summary.firstActivityTimelineDays, summary.firstActivityYears, summary.firstActivityTick);
+  const latestActivity = activityTime(summary.latestActivityTimelineDays, summary.latestActivityYears, summary.latestActivityTick);
+  const milestoneIds = new Set(summary.milestoneIds);
+  const milestones = (snapshot.eventArchive?.milestones ?? [])
+    .filter((milestone) => milestoneIds.has(milestone.id))
+    .sort((left, right) => compareSimulationSteps(right.timelineStep ?? String(right.tick), left.timelineStep ?? String(left.tick)) || right.id.localeCompare(left.id));
+  const tradeResources = Object.entries(summary.tradeVolumeByResource)
+    .filter(([, amount]) => amount > 0)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const facilityLifecycle: Array<[string, number]> = [
+    ["规划", summary.facilityPlannedCount],
+    ["建成", summary.facilityConstructedCount],
+    ["升级", summary.facilityUpgradedCount],
+    ["受损", summary.facilityDamagedCount],
+    ["维护", summary.facilityMaintainedCount],
+    ["废弃", summary.facilityAbandonedCount],
+    ["退役", summary.facilityRetiredCount],
+  ];
+  const visibleFacilityLifecycle = facilityLifecycle.filter(([, count]) => count > 0);
+  return `<section class="organization-governance organization-development" data-organization-development="${escapeHtml(organization.id)}" aria-label="长期发展档案"><div class="detail-heading"><strong>长期发展档案</strong><span>有界累计统计，事件压缩后仍保留发展脉络</span></div><dl class="detail-grid"><div><dt>首次活动</dt><dd>${firstActivity}</dd></div><div><dt>最近活动</dt><dd>${latestActivity}</dd></div><div><dt>累计关联事件</dt><dd>${format(summary.eventCount)} 条</dd></div><div><dt>成员 / 峰值</dt><dd>${format(summary.memberCount)} / ${format(summary.peakMemberCount)} 人</dd></div><div><dt>领土 / 峰值</dt><dd>${format(summary.territoryCount)} / ${format(summary.peakTerritoryCount)} 格</dd></div><div><dt>形成 / 分裂 / 解体</dt><dd>${format(summary.formationCount)} / ${format(summary.splitCount)} / ${format(summary.dissolutionCount)} 次</dd></div><div><dt>迁徙 / 扩张</dt><dd>${format(summary.migrationCount)} / ${format(summary.expansionCount)} 次</dd></div><div><dt>冲突 / 战争</dt><dd>${format(summary.conflictCount)} / ${format(summary.warCount)} 次</dd></div><div><dt>联盟 / 领土转移</dt><dd>${format(summary.allianceCount)} / ${format(summary.territoryTransferCount)} 次</dd></div><div><dt>贸易</dt><dd>${format(summary.tradeCount)} 次 · ${formatNumber(summary.tradeVolume, 2)} 单位</dd></div><div><dt>设施生命周期</dt><dd>${visibleFacilityLifecycle.length > 0 ? visibleFacilityLifecycle.map(([label, count]) => `${label} ${format(count)}`).join(" · ") : "尚无设施活动"}</dd></div><div><dt>保留里程碑</dt><dd>${format(summary.milestoneIds.length)} 条</dd></div></dl><div class="detail-tags">${tradeResources.length > 0 ? tradeResources.map(([resourceId, amount]) => `<span>${escapeHtml(supplyResourceLabels[resourceId as keyof typeof supplyResourceLabels] ?? resourceId)}贸易 · ${formatNumber(amount, 2)} 单位</span>`).join("") : "<span>尚无已累计贸易资源</span>"}</div>${milestones.length > 0 ? `<ol class="worldview-list organization-development-milestones">${milestones.slice(0, 8).map((milestone) => `<li data-event-kind="${escapeHtml(milestone.kind)}"><div><span>${escapeHtml(regionEventLabels[milestone.kind] ?? milestone.kind)}</span><small>${milestone.timelineDays === undefined ? formatSimulationAge(milestone.years ?? milestone.tick) : formatSimulationAgeFromDays(milestone.timelineDays)}</small></div><strong>${historyEventContext(milestone)}</strong>${historyRelatedLinks(snapshot, milestone, new Set([organization.id]))}</li>`).join("")}</ol>` : ""}</section>`;
+};
 const cultureSummaryForSnapshot = (snapshot: WorldSnapshot, cultureId: string): RegionCultureSummary | undefined =>
   snapshot.selectedRegion?.cultureSummary?.id === cultureId ? snapshot.selectedRegion.cultureSummary : undefined;
 const cultureIdentityForSnapshot = (snapshot: WorldSnapshot, cultureId: string): CultureIdentity | undefined => {
@@ -635,7 +703,7 @@ const cultureDetailReport = (cultureId: string, identity: CultureIdentity, summa
       <div><dt>象征</dt><dd>${escapeHtml(identity.symbol)}</dd></div>
       <div><dt>创新签名</dt><dd>${escapeHtml(identity.noveltySignature)}</dd></div>
       <div><dt>母文化</dt><dd>${identity.parentCultureIds?.length ? identity.parentCultureIds.map(escapeHtml).join("、") : "本地原生文化"}</dd></div>
-      ${summary ? `<div><dt>文化记忆</dt><dd>${formatPercent(summary.memoryStrength).value}%</dd></div><div><dt>传承效率</dt><dd>${formatPercent(summary.transmissionRate).value}%</dd></div><div><dt>知识创新</dt><dd>${format(summary.innovationCount)} 项</dd></div><div><dt>信念记录</dt><dd>${format(summary.beliefCount)} 条</dd></div><div><dt>最近变化</dt><dd>${formatSimulationAge(summary.lastChangeTick)}</dd></div>` : ""}
+      ${summary ? `<div><dt>文化记忆</dt><dd>${formatPercent(summary.memoryStrength).value}%</dd></div><div><dt>传承效率</dt><dd>${formatPercent(summary.transmissionRate).value}%</dd></div><div><dt>知识创新</dt><dd>${format(summary.innovationCount)} 项</dd></div><div><dt>信念记录</dt><dd>${format(summary.beliefCount)} 条</dd></div><div><dt>最近变化</dt><dd>${summary.lastChangeTimelineStep ? `演化步 ${escapeHtml(summary.lastChangeTimelineStep)}` : formatSimulationAge(summary.lastChangeTick)}</dd></div>` : ""}
     </dl>
     <section class="organization-governance" aria-label="文化价值">
       <div class="detail-heading"><strong>文化价值</strong><span>会影响组织形成、治理、联盟与冲突</span></div>
@@ -658,7 +726,7 @@ const aggregateSocietyReport = (society: RegionSocietySummary, ecologicalPopulat
     .sort(([, left], [, right]) => right - left)
     .map(([type, count]) => `<span>${organizationLabels[type as OrganizationType]} ${format(count)} 个</span>`)
     .join("");
-  return `<section class="organization-governance aggregate-society" aria-label="社会演化"><div class="detail-heading"><strong>社会演化</strong><span>聚合模型持续记录文化、组织与公共能力</span></div><dl class="detail-grid"><div><dt>生态总量</dt><dd>${format(ecologicalPopulation)} 个体</dd></div><div><dt>社会人口</dt><dd>${format(socialPopulation)} 人</dd></div><div><dt>组织承载</dt><dd>${format(society.organizationCapacity)} 人</dd></div><div><dt>基础设施</dt><dd>${formatPercent(society.infrastructureLevel).value}%</dd></div><div><dt>凝聚力</dt><dd>${formatPercent(society.cohesion).value}%</dd></div><div><dt>稳定度</dt><dd>${formatPercent(society.stability).value}%</dd></div><div><dt>合法性</dt><dd>${formatPercent(society.legitimacy).value}%</dd></div><div><dt>公共资源</dt><dd>${formatPercent(society.publicGoods).value}%</dd></div><div><dt>军力</dt><dd>${formatPercent(society.military).value}%</dd></div><div><dt>贸易累计</dt><dd>${formatNumber(society.tradeVolume, 2)} 单位</dd></div><div><dt>冲突压力</dt><dd>${formatPercent(society.conflictPressure).value}%</dd></div><div><dt>最近变化</dt><dd>${formatSimulationAge(society.lastChangeTick)}</dd></div></dl><div class="detail-tags">${organizations || "<span>尚未形成稳定组织</span>"}</div></section>`;
+  return `<section class="organization-governance aggregate-society" aria-label="社会演化"><div class="detail-heading"><strong>社会演化</strong><span>聚合模型持续记录文化、组织与公共能力</span></div><dl class="detail-grid"><div><dt>生态总量</dt><dd>${format(ecologicalPopulation)} 个体</dd></div><div><dt>社会人口</dt><dd>${format(socialPopulation)} 人</dd></div><div><dt>组织承载</dt><dd>${format(society.organizationCapacity)} 人</dd></div><div><dt>基础设施</dt><dd>${formatPercent(society.infrastructureLevel).value}%</dd></div><div><dt>凝聚力</dt><dd>${formatPercent(society.cohesion).value}%</dd></div><div><dt>稳定度</dt><dd>${formatPercent(society.stability).value}%</dd></div><div><dt>合法性</dt><dd>${formatPercent(society.legitimacy).value}%</dd></div><div><dt>公共资源</dt><dd>${formatPercent(society.publicGoods).value}%</dd></div><div><dt>军力</dt><dd>${formatPercent(society.military).value}%</dd></div><div><dt>贸易累计</dt><dd>${formatNumber(society.tradeVolume, 2)} 单位</dd></div><div><dt>冲突压力</dt><dd>${formatPercent(society.conflictPressure).value}%</dd></div><div><dt>最近变化</dt><dd>${society.lastChangeTimelineStep ? `演化步 ${escapeHtml(society.lastChangeTimelineStep)}` : formatSimulationAge(society.lastChangeTick)}</dd></div></dl><div class="detail-tags">${organizations || "<span>尚未形成稳定组织</span>"}</div></section>`;
 };
 const observationMetric = (label: string, formatted: FormattedMetric, note?: string): string => `
   <div class="observation-row">
@@ -1140,7 +1208,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     ? `<section class="organization-governance organization-archive" aria-label="历史组织摘要"><div class="detail-heading"><strong>历史组织摘要</strong><span>${organization.archiveReason === "capacity" ? "因运行容量限制归档" : "因组织生命周期结束归档"}</span></div><dl class="detail-grid"><div><dt>归档时间</dt><dd>${organization.archivedTimelineDays ? formatSimulationAgeFromDays(organization.archivedTimelineDays) : formatSimulationAge(organization.archivedYears)}</dd></div><div><dt>归档状态</dt><dd>${statusLabels[organization.status]}</dd></div><div><dt>历史事件</dt><dd>${format(organization.historyCount)} 条</dd></div><div><dt>保留成员</dt><dd>${format(organization.memberIds.length)} / ${format(organization.memberCount)} 人</dd></div></dl></section>`
     : "";
   archiveReport += strategicRouteHistoryReport(snapshot, organization);
-  return `<div class="detail-report"><div class="detail-title"><strong>${organizationLabels[organization.type]}报告</strong><span>${escapeHtml(organization.id)}</span></div>${archiveReport}<dl class="detail-grid"><div><dt>成员</dt><dd>${format(memberCount)} 人</dd></div><div><dt>状态</dt><dd>${statusLabels[status]}</dd></div><div><dt>领土</dt><dd>${format(organization.territoryRegionIds.length)} 格</dd></div><div><dt>下属组织</dt><dd>${format(childIds.length)} 个</dd></div><div><dt>内部关系</dt><dd>${format(relationshipCount)} 条</dd></div><div><dt>食物资源</dt><dd>${formatResource(food).value} ${formatResource(food).unit}</dd></div><div><dt>建造材料</dt><dd>${formatNumber(materials, 1)} 材料单位</dd></div><div><dt>能源储备</dt><dd>${formatNumber(energy, 2)} 能源单位</dd></div><div><dt>谱系 / 知识</dt><dd>${familyLineage ? `${format(familyLineage.generationDepth)} 代 / ${format(familyLineage.knowledgeInheritanceCount)} 条` : "聚合统计"}</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div><div><dt>原创物质</dt><dd>${format(substances.length)} 种</dd></div><div><dt>病原体记录</dt><dd>${format(jurisdictionPathogenRecords.length)} 种</dd></div><div><dt>可追溯事件</dt><dd>${format(recentHistoryCount + archivedHistoryCount)} 条${archivedHistoryCount > 0 ? `（${format(archivedHistoryCount)} 条已归档）` : ""}</dd></div><div><dt>中心区域</dt><dd>${escapeHtml(organization.regionId)}</dd></div></dl><div class="detail-tags">${organization.territoryRegionIds.slice(0, 12).map((id) => `<span>${escapeHtml(id)}</span>`).join("") || "<span>暂无领土记录</span>"}</div>${organizationNavigationReport(snapshot, organization, memberIds, projectedMembers)}${publicHealthReport}${technologyReport}${technologyEffectsReport(technology)}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}${supplyChainReport(snapshot, organization, { food, materials, energy })}${governanceReport}</div>`;
+  return `<div class="detail-report"><div class="detail-title"><strong>${organizationLabels[organization.type]}报告</strong><span>${escapeHtml(organization.id)}</span></div>${archiveReport}<dl class="detail-grid"><div><dt>成员</dt><dd>${format(memberCount)} 人</dd></div><div><dt>状态</dt><dd>${statusLabels[status]}</dd></div><div><dt>领土</dt><dd>${format(organization.territoryRegionIds.length)} 格</dd></div><div><dt>下属组织</dt><dd>${format(childIds.length)} 个</dd></div><div><dt>内部关系</dt><dd>${format(relationshipCount)} 条</dd></div><div><dt>食物资源</dt><dd>${formatResource(food).value} ${formatResource(food).unit}</dd></div><div><dt>建造材料</dt><dd>${formatNumber(materials, 1)} 材料单位</dd></div><div><dt>能源储备</dt><dd>${formatNumber(energy, 2)} 能源单位</dd></div><div><dt>谱系 / 知识</dt><dd>${familyLineage ? `${format(familyLineage.generationDepth)} 代 / ${format(familyLineage.knowledgeInheritanceCount)} 条` : "聚合统计"}</dd></div><div><dt>原创技术</dt><dd>${format(innovations.length)} 项</dd></div><div><dt>原创物质</dt><dd>${format(substances.length)} 种</dd></div><div><dt>病原体记录</dt><dd>${format(jurisdictionPathogenRecords.length)} 种</dd></div><div><dt>可追溯事件</dt><dd>${format(recentHistoryCount + archivedHistoryCount)} 条${archivedHistoryCount > 0 ? `（${format(archivedHistoryCount)} 条已归档）` : ""}</dd></div><div><dt>中心区域</dt><dd>${escapeHtml(organization.regionId)}</dd></div></dl><div class="detail-tags">${organization.territoryRegionIds.slice(0, 12).map((id) => `<span>${escapeHtml(id)}</span>`).join("") || "<span>暂无领土记录</span>"}</div>${organizationDevelopmentReport(snapshot, organization)}${organizationNavigationReport(snapshot, organization, memberIds, projectedMembers)}${publicHealthReport}${technologyReport}${technologyEffectsReport(technology)}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}${supplyChainReport(snapshot, organization, { food, materials, energy })}${governanceReport}</div>`;
 };
 
 const pathogenRegionalSpreadReport = (snapshot: WorldSnapshot, detail: InspectorDetail): string => {
@@ -1211,6 +1279,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     ? Math.hypot(atmosphere.windX.values[selection.index] ?? 0, atmosphere.windY.values[selection.index] ?? 0)
     : undefined;
   const ocean = snapshot.ocean;
+  const mapFocusTarget = mapFocusTargetForDetail(snapshot, selection, detail);
   element.innerHTML = `
     <div class="inspector-head"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
     <section class="observation-group" aria-label="区域地表">
@@ -1324,7 +1393,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     <section class="detail-section" aria-label="层级详情">
       <div class="detail-heading"><strong>层级详情报告</strong><span>可查看当前区域的社会实体</span></div>
       <nav class="detail-tabs" aria-label="详情层级">${detailLevels.map((level) => `<button type="button" data-detail-level="${level}" class="detail-tab${detail.level === level ? " active" : ""}">${detailLevelLabel(level)}</button>`).join("")}</nav>
-      <select class="detail-target" data-detail-target aria-label="选择详情对象">${targetOptions}</select>
+      <div class="detail-target-row"><select class="detail-target" data-detail-target aria-label="选择详情对象">${targetOptions}</select>${mapFocusControl(mapFocusTarget)}</div>
       <div class="detail-report-container">${detailReport(snapshot, detail, lineage)}${detail.level === "region" ? "" : ecologicalRelationshipReport(snapshot, snapshot.focusRegionId, detail.level === "species" ? detail.id : undefined)}${pathogenRegionalSpreadReport(snapshot, detail)}${entityHistory}</div>
     </section>
   `;

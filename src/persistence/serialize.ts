@@ -13,6 +13,7 @@ import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../sim/ecology/interactions.ts";
 import { compactResourceRecords } from "../sim/resources.ts";
 import { compactFacilityRecords } from "../sim/society/facilities.ts";
 import { isArchivedOrganizationSummary, MAX_ARCHIVED_ORGANIZATION_SUMMARIES, retainArchivedOrganizationSummaries } from "../sim/society/archive.ts";
+import { normalizeOrganizationDevelopment } from "../sim/society/development.ts";
 import { addPersistentTotal, boundedPersistentTotal } from "../sim/numeric.ts";
 import { MAX_SUBSTANCE_RESERVE, normalizeSubstanceReserve } from "../sim/environment/substances.ts";
 import { createOrbitalState, isOrbitalState } from "../sim/environment/orbit.ts";
@@ -31,6 +32,13 @@ const encode = (value: unknown): unknown => {
     }, {});
   }
   return value;
+};
+
+const normalizedTimelineStep = (value: unknown, fallback: unknown): string => {
+  if (typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) return value;
+  if (typeof fallback === "string" && /^(0|[1-9]\d*)$/.test(fallback)) return fallback;
+  if (typeof fallback === "number" && Number.isSafeInteger(fallback) && fallback >= 0) return String(fallback);
+  return "0";
 };
 
 const decode = (value: unknown): unknown => {
@@ -390,8 +398,23 @@ const validateWorld = (value: unknown): WorldState => {
       governance: { ...defaultGovernanceFor(organization.type), ...(organization.governance ?? {}) },
       diplomacy: organization.diplomacy && typeof organization.diplomacy === "object" ? organization.diplomacy : {},
     }));
+    const cultureSummary = partial.cultureSummary === undefined ? undefined : {
+      ...partial.cultureSummary,
+      lastChangeTimelineStep: normalizedTimelineStep(
+        partial.cultureSummary.lastChangeTimelineStep,
+        partial.versionStep ?? partial.cultureSummary.lastChangeTick ?? partial.version,
+      ),
+    };
+    const societySummary = partial.societySummary === undefined ? undefined : {
+      ...partial.societySummary,
+      lastChangeTimelineStep: normalizedTimelineStep(
+        partial.societySummary.lastChangeTimelineStep,
+        partial.versionStep ?? partial.societySummary.lastChangeTick ?? partial.version,
+      ),
+    };
     return {
       ...summary,
+      versionStep: normalizedTimelineStep(partial.versionStep, partial.version),
       organizations,
       agentIds,
       agentRecords,
@@ -406,6 +429,8 @@ const validateWorld = (value: unknown): WorldState => {
       healthSummary: partial.healthSummary && [partial.healthSummary.infectedCount, partial.healthSummary.immuneCount, partial.healthSummary.prevalence, partial.healthSummary.meanVitality].every(Number.isFinite)
         ? partial.healthSummary
         : { activePathogenIds: [], infectedCount: 0, immuneCount: 0, prevalence: 0, meanVitality: 1 },
+      ...(cultureSummary === undefined ? {} : { cultureSummary }),
+      ...(societySummary === undefined ? {} : { societySummary }),
     };
   });
   const focusRegionId = world.observation && typeof world.observation === "object" && typeof (world.observation as { focusRegionId?: unknown }).focusRegionId === "string"
@@ -487,6 +512,10 @@ const validateWorld = (value: unknown): WorldState => {
         .map(normalizeArchivedOrganizationSummary)
         .slice(-MAX_ARCHIVED_ORGANIZATION_SUMMARIES))
       : [],
+    organizationDevelopment: normalizeOrganizationDevelopment(
+      savedArchive?.organizationDevelopment,
+      new Set(organizations.map((organization) => organization.id)),
+    ),
     milestones: Array.isArray(savedArchive?.milestones)
       ? savedArchive.milestones.filter(isEventMilestone).slice(-MAX_EVENT_MILESTONES)
       : defaultArchive.milestones,

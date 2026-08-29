@@ -7,12 +7,16 @@ import {
   advanceSimulationYears,
   exactSimulationDaysForWorld,
   MAX_SIMULATION_YEARS,
+  nextSimulationStep,
+  nextSimulationTick,
   REAL_MILLISECONDS_PER_SIMULATED_DAY,
   SIMULATED_YEARS_PER_DAY,
   simulationDaysFromYears,
   simulationDaysFromWorld,
   simulationAgeFromYears,
   projectedYearsAfterStep,
+  simulationStepDistance,
+  simulationStepModulo,
   timelineProjection,
   wholeYearsCrossed,
 } from "../../src/sim/time.ts";
@@ -56,6 +60,27 @@ describe("simulation time scale", () => {
     expect(() => advanceSimulationDays(MAX_SIMULATION_DAYS, SIMULATED_YEARS_PER_DAY)).toThrow("precision");
   });
 
+  it("uses the exact timeline for regular next-step projections", () => {
+    const world = {
+      tick: 42,
+      years: 42,
+      simulationDays: 42 * DAYS_PER_YEAR,
+      timeline: { step: "42", days: String(42 * DAYS_PER_YEAR) },
+    };
+
+    expect(nextSimulationStep(world)).toBe("43");
+    expect(nextSimulationTick(world)).toBe(43);
+  });
+
+  it("uses numeric fast paths without changing exact step distance or modulo results", () => {
+    expect(simulationStepDistance("42", "37")).toBe(5);
+    expect(simulationStepDistance("37", "42")).toBe(0);
+    expect(simulationStepDistance("42", "2", 4)).toBe(4);
+    expect(simulationStepModulo("42", 12)).toBe(6);
+    expect(simulationStepDistance(String(BigInt(Number.MAX_SAFE_INTEGER) + 42n), String(BigInt(Number.MAX_SAFE_INTEGER) + 2n))).toBe(40);
+    expect(simulationStepModulo(String(BigInt(Number.MAX_SAFE_INTEGER) + 42n), 12)).toBe(Number((BigInt(Number.MAX_SAFE_INTEGER) + 42n) % 12n));
+  });
+
   it("keeps advancing with an exact clock after compatibility projections saturate", () => {
     const timeline = advanceSimulationTimeline({
       step: String(Number.MAX_SAFE_INTEGER),
@@ -71,6 +96,8 @@ describe("simulation time scale", () => {
       simulationDays: MAX_SIMULATION_DAYS,
       years: MAX_SIMULATION_YEARS,
     });
+    expect(nextSimulationStep({ tick: Number.MAX_SAFE_INTEGER, years: 0, timeline })).toBe(String(BigInt(Number.MAX_SAFE_INTEGER) + 2n));
+    expect(nextSimulationTick({ tick: Number.MAX_SAFE_INTEGER, years: 0, timeline })).toBe(Number.MAX_SAFE_INTEGER);
     expect(wholeYearsCrossed(0, SIMULATED_YEARS_PER_DAY, timeline.days)).toBe(0);
   });
 

@@ -18,7 +18,7 @@ import type {
   WorldEventDraft,
   WorldState,
 } from "../types.ts";
-import { nextSimulationTick, projectedYearsAfterStep, simulationStepForWorld } from "../time.ts";
+import { compareSimulationSteps, nextSimulationTick, projectedYearsAfterStep, simulationStepForWorld } from "../time.ts";
 
 export const MAX_AGGREGATE_ORGANIZATIONS = 4_096;
 export const MAX_AGGREGATE_COUNTER = 1_000_000_000;
@@ -32,6 +32,13 @@ const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.mi
 const finite = (value: number, fallback = 0): number => Number.isFinite(value) ? value : fallback;
 const boundedCounter = (value: number): number => Math.max(0, Math.min(MAX_AGGREGATE_COUNTER, Math.floor(finite(value))));
 const rounded = (value: number): number => Math.round(clamp(finite(value)) * 1_000_000) / 1_000_000;
+const exactStep = (value: unknown, fallback: string): string =>
+  typeof value === "string" && /^(0|[1-9]\d*)$/.test(value) ? value : fallback;
+const latestStep = (left: string, right: string): string => compareSimulationSteps(left, right) >= 0 ? left : right;
+const stepBefore = (step: string): string => {
+  const value = BigInt(step);
+  return value > 0n ? (value - 1n).toString() : "0";
+};
 
 const environmentFor = (state: WorldState, regionId: RegionId) => {
   const match = /^region:(\d+):(\d+)$/.exec(regionId);
@@ -114,7 +121,7 @@ const identityFor = (
 };
 
 const knowledgeSort = (left: AggregateKnowledgeSummary, right: AggregateKnowledgeSummary): number =>
-  (right.originTick - left.originTick)
+  compareSimulationSteps(right.originTimelineStep ?? String(right.originTick), left.originTimelineStep ?? String(left.originTick))
   || (right.credibility - left.credibility)
   || left.id.localeCompare(right.id);
 
@@ -128,7 +135,7 @@ const boundedKnowledge = (knowledge: readonly AggregateKnowledgeSummary[]): Aggr
       transmissionCost: clamp(finite(item.transmissionCost, 0.5)),
       forgettingRate: clamp(finite(item.forgettingRate, 0.02)),
       originTick: Math.max(0, Math.floor(finite(item.originTick))),
-      ...(item.originTimelineStep === undefined ? {} : { originTimelineStep: item.originTimelineStep }),
+      originTimelineStep: exactStep(item.originTimelineStep, String(Math.max(0, Math.floor(finite(item.originTick))))),
       originYears: Math.max(0, finite(item.originYears)),
       parentIds: [...new Set((Array.isArray(item.parentIds) ? item.parentIds : []).filter((id) => typeof id === "string"))],
     });
@@ -176,6 +183,7 @@ export const initialAggregateCulture = (state: WorldState, regionId: RegionId, s
     memoryStrength: clamp(0.12 + Math.log1p(Math.max(0, socialPopulation)) * 0.04),
     innovationCount: 0,
     lastChangeTick: state.tick,
+    lastChangeTimelineStep: simulationStepForWorld(state),
   };
 };
 
@@ -190,6 +198,7 @@ export const initialAggregateSociety = (previous: RegionSummary): RegionSocietyS
     conflictPressure: 0,
     infrastructureLevel: 0,
     lastChangeTick: previous.version,
+    lastChangeTimelineStep: previous.versionStep ?? String(previous.version),
   };
 };
 
@@ -258,6 +267,7 @@ export const evolveAggregateRegion = (
     conflictPressure: clamp(finite(priorSociety.conflictPressure)),
     infrastructureLevel: clamp(finite(priorSociety.infrastructureLevel)),
     lastChangeTick: Math.max(0, Math.floor(finite(priorSociety.lastChangeTick, state.tick))),
+    lastChangeTimelineStep: exactStep(priorSociety.lastChangeTimelineStep, previous.versionStep ?? String(priorSociety.lastChangeTick)),
   };
   const events: WorldEventDraft[] = [];
   const totalPopulation = Math.max(0, finite(population));
@@ -291,6 +301,8 @@ export const evolveAggregateRegion = (
   society.tradeVolume = Math.min(MAX_AGGREGATE_COUNTER, Math.max(0, finite(society.tradeVolume) + recentTrade + (society.organizationCounts.city + society.organizationCounts.state * 2) * foodSecurity * 0.025));
 
   const culture = structuredClone(priorCulture);
+  culture.lastChangeTick = Math.max(0, Math.floor(finite(culture.lastChangeTick, state.tick)));
+  culture.lastChangeTimelineStep = exactStep(culture.lastChangeTimelineStep, previous.versionStep ?? String(culture.lastChangeTick));
   culture.knowledge = boundedKnowledge(culture.knowledge);
   culture.beliefCount = boundedCounter(culture.beliefCount);
   culture.innovationCount = boundedCounter(culture.innovationCount);
@@ -344,6 +356,7 @@ export const evolveAggregateRegion = (
       forgettingRate: clamp(0.035 - culture.memoryStrength * 0.02, 0.001, 0.04),
       originRegionId: regionId,
       originTick: nextSimulationTick(state),
+      originTimelineStep: simulationStep,
       originYears: projectedYearsAfterStep(state, 1),
       parentIds,
     };
@@ -391,6 +404,7 @@ export const evolveAggregateRegion = (
     if (roll >= probability) continue;
     society.organizationCounts[type] = Math.min(MAX_AGGREGATE_ORGANIZATIONS, current + 1);
     society.lastChangeTick = state.tick;
+    society.lastChangeTimelineStep = simulationStep;
     events.push(event("aggregate-organization-formation", `lod:aggregate-organization-${type}`, regionId, culture.id, probability, roll, { type, previousCount: current, count: society.organizationCounts[type], socialPopulation, foodSecurity, cultureKnowledge: culture.knowledge.length }, { type, count: society.organizationCounts[type], aggregate: true }));
   }
 
@@ -406,6 +420,7 @@ export const evolveAggregateRegion = (
         const previousCount = society.organizationCounts[type];
         society.organizationCounts[type] -= 1;
         society.lastChangeTick = state.tick;
+        society.lastChangeTimelineStep = simulationStep;
         events.push(event("aggregate-organization-dissolution", "lod:aggregate-organization-dissolution", regionId, culture.id, probability, roll, { type, previousCount, count: society.organizationCounts[type], stress, foodSecurity }, { type, count: society.organizationCounts[type], aggregate: true }));
       }
     }
@@ -413,7 +428,14 @@ export const evolveAggregateRegion = (
 
   society.organizationCapacity = Math.min(MAX_AGGREGATE_COUNTER, organizationTypes.reduce((sum, type) => sum + society.organizationCounts[type] * Math.max(minimumMembersFor(type), Math.floor(socialPopulation / Math.max(1, society.organizationCounts[type]))), 0));
   society.lastChangeTick = Math.max(society.lastChangeTick, meaningfulCultureChange ? state.tick : previous.societySummary?.lastChangeTick ?? state.tick);
+  society.lastChangeTimelineStep = latestStep(
+    exactStep(society.lastChangeTimelineStep, previous.versionStep ?? String(society.lastChangeTick)),
+    meaningfulCultureChange ? simulationStep : exactStep(previous.societySummary?.lastChangeTimelineStep, previous.versionStep ?? String(previous.societySummary?.lastChangeTick ?? state.tick)),
+  );
   culture.lastChangeTick = meaningfulCultureChange ? state.tick : Math.max(culture.lastChangeTick, state.tick - 1);
+  culture.lastChangeTimelineStep = meaningfulCultureChange
+    ? simulationStep
+    : latestStep(exactStep(culture.lastChangeTimelineStep, previous.versionStep ?? String(culture.lastChangeTick)), stepBefore(simulationStep));
   return { socialPopulation, culture, society, events };
 };
 

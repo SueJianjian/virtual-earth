@@ -3,6 +3,7 @@ import type { AgentHealthState, AgentState, EntityEffect, EntityId, PathogenKind
 import { technologyProfilesForState } from "../culture/technology.ts";
 import { facilityEffectProfilesForState } from "../society/facilities.ts";
 import { addPersistentTotal } from "../numeric.ts";
+import { eventsForTimelineStep } from "../events/index.ts";
 import { compareSimulationSteps, nextSimulationStep, nextSimulationTick, projectedYearsAfterStep, simulationStepForWorld } from "../time.ts";
 
 export const MAX_PATHOGENS = 128;
@@ -20,6 +21,9 @@ const statusRank: Record<PathogenState["status"], number> = { outbreak: 3, endem
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const annualProbability = (rate: number, years: number): number => 1 - Math.pow(1 - clamp(rate), Math.max(0, years));
 const statusForPrevalence = (prevalence: number): PathogenState["status"] => prevalence >= 0.2 ? "outbreak" : prevalence > 0.001 ? "endemic" : "dormant";
+const compareInfectionsForRetention = (left: AgentHealthState["infections"][number], right: AgentHealthState["infections"][number]): number =>
+  compareSimulationSteps(right.infectedTimelineStep ?? String(right.infectedTick), left.infectedTimelineStep ?? String(left.infectedTick))
+  || left.pathogenId.localeCompare(right.pathogenId);
 
 const compareRegionalOutbreaks = (left: PathogenRegionalOutbreakState, right: PathogenRegionalOutbreakState): number =>
   statusRank[right.status] - statusRank[left.status]
@@ -152,7 +156,7 @@ export const normalizeAgentHealth = (agent: AgentState, validPathogenIds?: Reado
       && Number.isFinite(infection.infectedTick)
       && (infection.infectedTimelineStep === undefined || /^(0|[1-9]\d*)$/.test(infection.infectedTimelineStep))
       && Number.isFinite(infection.severity))
-    .sort((left, right) => compareSimulationSteps(right.infectedTimelineStep ?? String(right.infectedTick), left.infectedTimelineStep ?? String(left.infectedTick)) || left.pathogenId.localeCompare(right.pathogenId))
+    .sort(compareInfectionsForRetention)
     .filter((infection, index, values) => values.findIndex((candidate) => candidate.pathogenId === infection.pathogenId) === index)
     .slice(0, MAX_INFECTIONS_PER_AGENT)
     .map((infection) => ({ ...infection, severity: clamp(infection.severity) }));
@@ -302,7 +306,10 @@ const upsertRegionalOutbreak = (
   if (pathogen.regionalOutbreaks.length >= MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN) {
     const removable = pathogen.regionalOutbreaks
       .filter((outbreak) => outbreak.regionId !== pathogen.regionId && outbreak.status === "dormant")
-      .sort((left, right) => left.lastActiveTick - right.lastActiveTick || left.regionId.localeCompare(right.regionId))[0];
+      .sort((left, right) => compareSimulationSteps(
+        left.lastActiveTimelineStep ?? String(left.lastActiveTick),
+        right.lastActiveTimelineStep ?? String(right.lastActiveTick),
+      ) || left.regionId.localeCompare(right.regionId))[0];
     if (!removable) return undefined;
     pathogen.regionalOutbreaks = pathogen.regionalOutbreaks.filter((outbreak) => outbreak !== removable);
   }
@@ -326,8 +333,9 @@ const asRegionId = (value: unknown): RegionId | undefined => typeof value === "s
 
 const regionalContactsForCurrentTick = (state: WorldState): RegionalContact[] => {
   const contacts = new Map<string, RegionalContact>();
-  for (const event of state.events) {
-    if ((event.timelineStep ?? String(event.tick)) !== simulationStepForWorld(state) || !contactEventKinds.has(event.kind)) continue;
+  const currentStep = simulationStepForWorld(state);
+  for (const event of eventsForTimelineStep(state.events, currentStep)) {
+    if (!contactEventKinds.has(event.kind)) continue;
     const fromRegion = asRegionId(event.payload.fromRegion ?? event.evidence.fromRegion);
     const toRegion = asRegionId(event.payload.toRegion ?? event.evidence.toRegion);
     if (!fromRegion || !toRegion || fromRegion === toRegion) continue;
@@ -372,6 +380,7 @@ export const stepAgentHealth = (
     members.push(agent);
     agentsByRegionSpecies.set(key, members);
   }
+  for (const members of agentsByRegionSpecies.values()) members.sort((left, right) => left.id.localeCompare(right.id));
 
   const events: WorldEventDraft[] = [];
   const caseIncrements = new Map<string, number>();
@@ -422,17 +431,39 @@ export const stepAgentHealth = (
       infectedByPathogenRegion.set(regionalKey, regional);
     }
   }
+  const outbreakByPathogenRegion = new Map<string, PathogenRegionalOutbreakState>();
+  for (const pathogen of pathogens.values()) {
+    for (const outbreak of pathogen.regionalOutbreaks) {
+      outbreakByPathogenRegion.set(outbreakKey(pathogen.id, outbreak.regionId), outbreak);
+    }
+  }
+  const outbreakForRegion = (pathogen: PathogenState, regionId: RegionId): PathogenRegionalOutbreakState | undefined =>
+    outbreakByPathogenRegion.get(outbreakKey(pathogen.id, regionId));
+  const upsertOutbreak = (
+    pathogen: PathogenState,
+    regionId: RegionId,
+    prevalence: number,
+  ): PathogenRegionalOutbreakState | undefined => {
+    const outbreak = upsertRegionalOutbreak(pathogen, regionId, prevalence, nextSimulationTick(state), nextSimulationStep(state));
+    if (outbreak) {
+      for (const [key, candidate] of outbreakByPathogenRegion) {
+        if (key.startsWith(`${pathogen.id}|`) && !pathogen.regionalOutbreaks.includes(candidate)) outbreakByPathogenRegion.delete(key);
+      }
+      outbreakByPathogenRegion.set(outbreakKey(pathogen.id, regionId), outbreak);
+    }
+    return outbreak;
+  };
   for (const [key, infectedIds] of infectedByPathogenRegion) {
     const separator = key.indexOf("|");
     const pathogen = pathogens.get(key.slice(0, separator));
     const regionId = key.slice(separator + 1) as RegionId;
-    const existingOutbreak = pathogen ? pathogenOutbreakForRegion(pathogen, regionId) : undefined;
+    const existingOutbreak = pathogen ? outbreakForRegion(pathogen, regionId) : undefined;
     if (!pathogen || (existingOutbreak && existingOutbreak.prevalence > 0)) continue;
     const localHosts = agentsByRegionSpecies.get(`${regionId}|${pathogen.hostSpeciesId}`)?.length
       ?? ecologicalHostsByRegionSpecies.get(`${regionId}|${pathogen.hostSpeciesId}`)
       ?? 0;
     const source = [...pathogen.regionalOutbreaks].filter((outbreak) => outbreak.status !== "dormant").sort(compareRegionalOutbreaks)[0];
-    const outbreak = upsertRegionalOutbreak(pathogen, regionId, infectedIds.size / Math.max(1, localHosts), nextSimulationTick(state), nextSimulationStep(state));
+    const outbreak = upsertOutbreak(pathogen, regionId, infectedIds.size / Math.max(1, localHosts));
     if (!outbreak) continue;
     events.push({
       kind: "disease-regional-spread",
@@ -481,8 +512,9 @@ export const stepAgentHealth = (
     const key = outbreakKey(pathogen.id, regionId);
     if (activePathogenRegionKeys.has(key)) return;
     const active = activePathogensByRegion.get(regionId) ?? [];
-    active.push(pathogen);
-    active.sort((left, right) => left.id.localeCompare(right.id));
+    let insertionIndex = active.length;
+    while (insertionIndex > 0 && active[insertionIndex - 1]!.id.localeCompare(pathogen.id) > 0) insertionIndex -= 1;
+    active.splice(insertionIndex, 0, pathogen);
     activePathogensByRegion.set(regionId, active);
     activePathogenRegionKeys.add(key);
   };
@@ -493,7 +525,7 @@ export const stepAgentHealth = (
   }
   for (const contact of regionalContacts) {
     for (const pathogen of activePathogensByRegion.get(contact.fromRegion) ?? []) {
-      const sourceOutbreak = pathogenOutbreakForRegion(pathogen, contact.fromRegion);
+      const sourceOutbreak = outbreakForRegion(pathogen, contact.fromRegion);
       if (!sourceOutbreak || sourceOutbreak.status === "dormant" || sourceOutbreak.prevalence <= 0) continue;
       const targetKey = `${contact.toRegion}|${pathogen.hostSpeciesId}`;
       const targetAgents = agentsByRegionSpecies.get(targetKey) ?? [];
@@ -503,7 +535,7 @@ export const stepAgentHealth = (
       const routeRate = pathogen.transmission * sourceOutbreak.prevalence * contact.intensity * 0.46 * (1 - medicine * 0.72);
       const probability = annualProbability(routeRate, years);
       let seeded = false;
-      for (const agent of [...targetAgents].sort((left, right) => left.id.localeCompare(right.id))) {
+      for (const agent of targetAgents) {
         if (agent.health?.infections.some((infection) => infection.pathogenId === pathogen.id) || agent.health?.immunityIds.includes(pathogen.id)) continue;
         const resistance = clamp(agent.traits.diseaseResistance ?? 0.5);
         const agentProbability = annualProbability(routeRate * (1 - resistance * 0.62), years);
@@ -526,7 +558,7 @@ export const stepAgentHealth = (
         const [roll] = randomFloat(forkRandom(state.random, `disease-route:${contact.eventId}:${pathogen.id}:${simulationStepForWorld(state)}`));
         if (roll < probability) {
           const seededPrevalence = clamp(Math.max(0.002, sourceOutbreak.prevalence * contact.intensity * 0.12));
-          const outbreak = upsertRegionalOutbreak(pathogen, contact.toRegion, seededPrevalence, nextSimulationTick(state), nextSimulationStep(state));
+          const outbreak = upsertOutbreak(pathogen, contact.toRegion, seededPrevalence);
           if (outbreak) {
             caseIncrements.set(pathogen.id, (caseIncrements.get(pathogen.id) ?? 0) + seededPrevalence * aggregateHosts);
             addActivePathogen(contact.toRegion, pathogen);
@@ -558,10 +590,10 @@ export const stepAgentHealth = (
       pathogensByRegionSpecies.set(key, local);
     }
   }
-  for (const local of pathogensByRegionSpecies.values()) local.sort((left, right) => left.id.localeCompare(right.id));
   const mortalityRiskByAgent = new Map<EntityId, number>();
   const recoveryIncrements = new Map<string, number>();
-  for (const agent of [...agents.values()].sort((left, right) => left.id.localeCompare(right.id))) {
+  const orderedAgents = [...agents.values()].sort((left, right) => left.id.localeCompare(right.id));
+  for (const agent of orderedAgents) {
     const speciesId = hostSpeciesForAgent(agent, populationSpecies);
     if (!speciesId || !agent.health) continue;
     const medicine = medicineForRegion(agent.regionId);
@@ -583,11 +615,11 @@ export const stepAgentHealth = (
 
     for (const pathogen of pathogensByRegionSpecies.get(`${agent.regionId}|${speciesId}`) ?? []) {
       if (retained.length >= MAX_INFECTIONS_PER_AGENT) break;
-      if (pathogen.hostSpeciesId !== speciesId || pathogenOutbreakForRegion(pathogen, agent.regionId)?.status === "dormant") continue;
+      if (pathogen.hostSpeciesId !== speciesId || outbreakForRegion(pathogen, agent.regionId)?.status === "dormant") continue;
       if (retained.some((infection) => infection.pathogenId === pathogen.id) || immunity.has(pathogen.id)) continue;
       const infected = infectedByPathogenRegion.get(outbreakKey(pathogen.id, agent.regionId));
       const localHosts = agentsByRegionSpecies.get(`${agent.regionId}|${speciesId}`)?.length ?? 1;
-      const regional = pathogenOutbreakForRegion(pathogen, agent.regionId);
+      const regional = outbreakForRegion(pathogen, agent.regionId);
       const prevalence = Math.max((infected?.size ?? 0) / Math.max(1, localHosts), regional?.prevalence ?? 0);
       let infectedContacts = 0;
       if (infected) {
@@ -608,7 +640,7 @@ export const stepAgentHealth = (
     const burden = retained.reduce((sum, infection) => sum + infection.severity, 0);
     agent.health = {
       vitality: clamp(agent.health.vitality + years * (retained.length === 0 ? 0.045 + medicine * 0.025 : -burden * 0.09 + medicine * 0.035)),
-      infections: retained,
+      infections: retained.sort(compareInfectionsForRetention),
       immunityIds: [...immunity].sort().slice(-MAX_IMMUNITY_IDS_PER_AGENT),
     };
     mortalityRiskByAgent.set(agent.id, clamp(burden * (1 - medicine * 0.68) * (1 - resistance * 0.42) * 0.045 + (1 - agent.health.vitality) * 0.018, 0, 0.72));

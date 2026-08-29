@@ -1,4 +1,5 @@
 import { addPersistentTotal } from "../numeric.ts";
+import { eventsForOrganization } from "../events/index.ts";
 import { compareSimulationSteps } from "../time.ts";
 import type { ArchivedOrganizationSummary, DiplomaticStance, OrganizationArchiveReason, OrganizationState, OrganizationSummary, OrganizationType, RegionId, WorldState } from "../types.ts";
 
@@ -160,7 +161,8 @@ const organizationMentionedByEvent = (organizationId: string, event: WorldState[
 
 const organizationHistoryCount = (state: WorldState, organization: OrganizationState | OrganizationSummary): number => {
   const archivedEventCount = state.eventArchive.organizationCounts[organization.id] ?? 0;
-  const hotEventCount = state.events.reduce((count, event) => count + (organizationMentionedByEvent(organization.id, event) ? 1 : 0), 0);
+  const hotEventCount = eventsForOrganization(state.events, organization.id)
+    .reduce((count, event) => count + (organizationMentionedByEvent(organization.id, event) ? 1 : 0), 0);
   const existingCount = "historyIds" in organization
     ? organization.historyIds.length + (organization.archivedHistoryCount ?? 0)
     : (organization.archivedHistoryCount ?? 0);

@@ -410,6 +410,18 @@ describe("environment simulation", () => {
     expect(floodWater.every((value) => value >= 0 && value <= 1)).toBe(true);
   });
 
+  it("keeps natural-hazard sampling deterministic beyond numeric timeline precision", () => {
+    const state = createWorld(993, { width: 8, height: 8, formation: "formed" });
+    state.timeline = { step: "9007199254740992", days: "3287627727985462080" };
+    state.fields.elevation.values.fill(0.05);
+    state.fields.temperature.values.fill(0.95);
+    state.fields.humidity.values.fill(0.04);
+    state.fields.water.values.fill(0.04);
+    state.fields.nutrients.values.fill(0.4);
+
+    expect(naturalHazardDelta(state, 10_000)).toEqual(naturalHazardDelta(structuredClone(state), 10_000));
+  });
+
   it("keeps accumulating hazard probability beyond the old duration cap", () => {
     const state = createWorld(991, { width: 32, height: 8, formation: "formed" });
     state.fields.elevation.values.fill(0.05);

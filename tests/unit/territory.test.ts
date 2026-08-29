@@ -295,4 +295,66 @@ describe("cross-region territories", () => {
     expect(displaced.every((agentId) => winner?.memberIds.includes(agentId as never))).toBe(true);
     expect(displaced.every((agentId) => !loser?.memberIds.includes(agentId as never))).toBe(true);
   });
+
+  it("transfers an absorbed state's assets before its lifecycle cleanup", () => {
+    const tick = 11;
+    const state = territorialWorld(3_100 + tick);
+    state.tick = tick;
+    const leftPopulation = state.populations[0]!;
+    const rightPopulation = state.populations[1]!;
+    const species = state.species[0]!;
+    const leftReinforcements = Array.from({ length: 16 }, (_, index) => createAgent(leftPopulation, species, 80 + index, `absorption:left:${tick}`));
+    const rightReinforcements = Array.from({ length: 16 }, (_, index) => createAgent(rightPopulation, species, 96 + index, `absorption:right:${tick}`));
+    state.agents.push(...leftReinforcements, ...rightReinforcements);
+    const winner = createOrganization("state", "region:2:2" as never, [...state.agents.slice(0, 40), ...leftReinforcements].map((agent) => agent.id));
+    const loser = createOrganization("state", "region:3:2" as never, [...state.agents.slice(40, 80), ...rightReinforcements].map((agent) => agent.id));
+    winner.diplomacy = { [loser.id]: "rival" };
+    loser.diplomacy = { [winner.id]: "rival" };
+    winner.governance = { ...governanceForOrganization(winner), military: 0.98, stability: 0.94, cohesion: 0.92, lastConflictTick: -1 };
+    loser.governance = { ...governanceForOrganization(loser), military: 0.02, stability: 0.1, cohesion: 0.16, lastConflictTick: -1 };
+    state.organizations = [winner, loser];
+    state.resources = [
+      { id: "resource:absorption:winner-food", resourceId: "food", regionId: winner.regionId, holderId: winner.id, amount: 10, cap: 20, originEventId: "test" },
+      { id: "resource:absorption:food", resourceId: "food", regionId: loser.regionId, holderId: loser.id, amount: 6, cap: 10, originEventId: "test" },
+      { id: "resource:absorption:materials", resourceId: "materials", regionId: loser.regionId, holderId: loser.id, amount: 4, cap: 10, originEventId: "test" },
+    ];
+    state.facilities = [{
+      id: "facility:absorption:construction",
+      type: "construction",
+      regionId: loser.regionId,
+      ownerOrganizationId: loser.id,
+      level: 1,
+      condition: 0.94,
+      status: "active",
+      workforceIds: state.agents.slice(40, 43).map((agent) => agent.id),
+      workforceRequired: 3,
+      workforceEfficiency: 1,
+      materialInvested: 3,
+      plannedTick: 0,
+      builtTick: 0,
+      lastMaintainedTick: 0,
+      lastIncidentTick: 0,
+    }];
+    const result = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false });
+    const war = result.events.find((event) => event.kind === "organization-war");
+    const outcome = { state, result, war, winner, loser };
+
+    const winnerId = String(outcome.war?.payload.winnerOrganizationId);
+    const loserId = String(outcome.war?.payload.loserOrganizationId);
+    expect(outcome.war).toMatchObject({
+      evidence: expect.objectContaining({ inheritedResourceAmount: 10, inheritedResourceTypes: 2, inheritedFacilities: 1 }),
+      payload: expect.objectContaining({ inheritedAssets: { resourceAmount: 10, resourceTypes: ["food", "materials"], facilityCount: 1 } }),
+    });
+    expect(outcome.result.state.resources.filter((resource) => resource.holderId === loserId).every((resource) => resource.amount === 0)).toBe(true);
+    expect(outcome.result.state.resources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ resourceId: "food", regionId: "region:3:2", holderId: winnerId, amount: 6 }),
+      expect.objectContaining({ resourceId: "materials", regionId: "region:3:2", holderId: winnerId, amount: 4 }),
+    ]));
+    expect(outcome.result.state.facilities.find((facility) => facility.id === "facility:absorption:construction")).toMatchObject({ ownerOrganizationId: winnerId, status: expect.not.stringMatching(/abandoned/) });
+
+    const afterCleanup = stepWorld(outcome.result.state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false });
+    expect(afterCleanup.state.organizations.some((organization) => organization.id === loserId)).toBe(false);
+    expect(afterCleanup.state.resources.filter((resource) => resource.holderId === loserId).every((resource) => resource.amount === 0)).toBe(true);
+    expect(afterCleanup.state.facilities.find((facility) => facility.id === "facility:absorption:construction")).toMatchObject({ ownerOrganizationId: winnerId });
+  });
 });

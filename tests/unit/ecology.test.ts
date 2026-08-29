@@ -132,6 +132,37 @@ describe("emergent ecology", () => {
     expect(next.populations[0]?.count ?? 0).toBeLessThan(100);
   });
 
+  it("limits terrestrial consumer growth to local producer populations", () => {
+    const consumerCountFor = (producerRegionId: string): number => {
+      const state = initializeEnvironment(createWorld(405, { width: 8, height: 8, formation: "formed" }));
+      const producer = {
+        id: "species:regional-food-producer" as never,
+        role: "producer" as const,
+        traits: { energyUse: 0.2, reproduction: 0.2, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 0.1, cognitivePotential: 0 },
+      };
+      const consumer = {
+        id: "species:regional-food-consumer" as never,
+        role: "consumer" as const,
+        traits: { energyUse: 0.9, reproduction: 0.9, temperatureOptimum: 0.5, humidityOptimum: 0.5, mobility: 0.1, cognitivePotential: 0 },
+      };
+      state.fields.temperature.values.fill(0.75);
+      state.fields.humidity.values.fill(0.5);
+      state.species = [producer, consumer];
+      state.populations = [
+        { id: "population:regional-food-producer" as never, speciesId: producer.id, regionId: producerRegionId as never, count: 1_000, energy: 1 },
+        { id: "population:regional-food-consumer" as never, speciesId: consumer.id, regionId: "region:0:0" as never, count: 100, energy: 1 },
+      ];
+
+      const update = stepEcology(state, ecologyContext(state)).entityEffects.find((effect) =>
+        effect.collection === "populations" && effect.operation === "update" && effect.id === "population:regional-food-consumer",
+      );
+      return update?.collection === "populations" ? update.value?.count ?? 0 : 0;
+    };
+
+    expect(consumerCountFor("region:0:0")).toBeGreaterThan(100);
+    expect(consumerCountFor("region:1:0")).toBeLessThan(100);
+  });
+
   it("records producer food as an auditable environment transaction", () => {
     const state = initializeEnvironment(createWorld(5, { width: 8, height: 8 }));
     const species = {
@@ -202,6 +233,43 @@ describe("emergent ecology", () => {
     const event = outcomes.flatMap((delta) => delta.eventDrafts).find((candidate) => candidate.kind === "population-migration");
     expect(event?.evidence).toMatchObject({ fromRegion: "region:0:0", toRegion: "region:1:0" });
     expect(event?.roll).toBeGreaterThanOrEqual(0);
+  });
+
+  it("settles migration effects and producer food in the destination region", () => {
+    const outcome = Array.from({ length: 64 }, (_, seed) => {
+      const state = initializeEnvironment(createWorld(600 + seed, { width: 8, height: 8 }));
+      const species = {
+        id: `species:settlement-migrant:${seed}` as never,
+        role: "producer" as const,
+        traits: { energyUse: 0.1, reproduction: 0.2, temperatureOptimum: 1, humidityOptimum: 1, mobility: 1, cognitivePotential: 0 },
+      };
+      state.fields.temperature.values.fill(0);
+      state.fields.humidity.values.fill(0);
+      state.fields.nutrients.values.fill(1);
+      state.fields.temperature.values[1] = 1;
+      state.fields.humidity.values[1] = 1;
+      state.species = [species];
+      state.populations = [{ id: `population:settlement-migrant:${seed}` as never, speciesId: species.id, regionId: "region:0:0" as never, count: 100, energy: 1 }];
+      const delta = stepEcology(state, ecologyContext(state));
+      return { delta, migration: delta.eventDrafts.find((event) => event.kind === "population-migration") };
+    }).find(({ migration }) => migration?.payload.toRegion === "region:1:0");
+
+    expect(outcome).toBeDefined();
+    expect(outcome?.delta.entityEffects).toContainEqual(expect.objectContaining({
+      collection: "populations",
+      operation: "update",
+      value: expect.objectContaining({ regionId: "region:1:0" }),
+    }));
+    expect(outcome?.delta.fieldChanges).toContainEqual(expect.objectContaining({
+      field: "biomass",
+      index: 1,
+      causeRuleId: "ecology:primary-production",
+    }));
+    expect(outcome?.delta.resourceTransactions).toContainEqual(expect.objectContaining({
+      resourceId: "food",
+      regionId: "region:1:0",
+      causeRuleId: "ecology:producer-food",
+    }));
   });
 
   it("can migrate toward food even when the adjacent habitat is not better", () => {

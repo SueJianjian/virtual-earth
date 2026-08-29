@@ -40,6 +40,13 @@ const exactStep = (value: string | number, label = "Simulation step"): bigint =>
   return exactInteger(value, label);
 };
 
+const safeStepNumber = (value: string | number): number | undefined => {
+  if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (!DECIMAL_INTEGER.test(value)) return undefined;
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) ? numberValue : undefined;
+};
+
 const projectedInteger = (value: bigint): number => {
   const numberValue = Number(value);
   return Number.isSafeInteger(numberValue) ? numberValue : Number.MAX_SAFE_INTEGER;
@@ -120,20 +127,39 @@ export const nextSimulationStep = (world: {
   years: number;
   simulationDays?: number;
   timeline?: SimulationTimeline;
-}): string => (exactStep(simulationStepForWorld(world), "World timeline step") + 1n).toString();
+}): string => {
+  const step = timelineForWorld(world).step;
+  const numericStep = Number(step);
+  // The exact decimal timeline remains authoritative. Most normal simulation
+  // steps are still representable as safe integers, where Number avoids a
+  // repeated BigInt parse for every event created in the same year.
+  if (Number.isSafeInteger(numericStep) && numericStep < Number.MAX_SAFE_INTEGER) return String(numericStep + 1);
+  return (exactInteger(step, "World timeline step") + 1n).toString();
+};
 
 export const nextSimulationTick = (world: {
   tick: number;
   years: number;
   simulationDays?: number;
   timeline?: SimulationTimeline;
-}): number => projectedInteger(exactStep(nextSimulationStep(world), "World timeline step"));
+}): number => {
+  const numericStep = Number(timelineForWorld(world).step);
+  return Number.isSafeInteger(numericStep) && numericStep < Number.MAX_SAFE_INTEGER
+    ? numericStep + 1
+    : Number.MAX_SAFE_INTEGER;
+};
 
 export const simulationStepDistance = (
   newer: string | number,
   older: string | number,
   cap = Number.MAX_SAFE_INTEGER,
 ): number => {
+  const newerNumber = safeStepNumber(newer);
+  const olderNumber = safeStepNumber(older);
+  if (newerNumber !== undefined && olderNumber !== undefined && Number.isSafeInteger(cap) && cap >= 0) {
+    const distance = newerNumber - olderNumber;
+    return distance <= 0 ? 0 : Math.min(cap, distance);
+  }
   try {
     const distance = exactStep(newer, "Simulation step") - exactStep(older, "Simulation step");
     if (distance <= 0n) return 0;
@@ -145,6 +171,8 @@ export const simulationStepDistance = (
 
 export const simulationStepModulo = (step: string | number, modulus: number): number => {
   if (!Number.isSafeInteger(modulus) || modulus <= 0) throw new RangeError("Step modulus must be a positive integer");
+  const numericStep = safeStepNumber(step);
+  if (numericStep !== undefined) return numericStep % modulus;
   return Number(exactStep(step, "Simulation step") % BigInt(modulus));
 };
 

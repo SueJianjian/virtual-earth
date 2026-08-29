@@ -8,6 +8,7 @@ import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZo
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
 export type RenderQuality = 480 | 720 | 1080;
 export type SceneEntitySelection = { id: string; kind: SceneEntity["kind"] };
+export type MapFocusLod = "region" | "settlement" | "individual";
 
 const renderDimensions: Record<RenderQuality, { width: number; height: number }> = {
   480: { width: 854, height: 480 },
@@ -17,6 +18,11 @@ const renderDimensions: Record<RenderQuality, { width: number; height: number }>
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
 const clampZoom = (value: number): number => clamp(value, 0.6, MAX_MAP_ZOOM);
+const focusZoomForLod = (lod: MapFocusLod): number => ({
+  region: 4,
+  settlement: 12,
+  individual: 24,
+})[lod];
 const radians = (degrees: number): number => degrees * Math.PI / 180;
 const degrees = (value: number): number => value * 180 / Math.PI;
 const normalizeYaw = (value: number): number => ((value % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
@@ -1476,6 +1482,19 @@ export const createMapCanvas = (
       panWorldX = 0;
       panWorldZ = 0;
       if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
+      updateSelectionMarker();
+      scheduleRender();
+    },
+    focusSelection: (next: CellSelection, lod: MapFocusLod) => {
+      const changed = selection?.regionId !== next.regionId;
+      const previousLod = mapSceneLodForZoom(zoom);
+      selection = next;
+      panWorldX = 0;
+      panWorldZ = 0;
+      updateZoom(focusZoomForLod(lod));
+      if (changed && previousLod === mapSceneLodForZoom(zoom) && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
+        rebuildTerrain();
+      }
       updateSelectionMarker();
       scheduleRender();
     },

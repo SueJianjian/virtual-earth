@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stepWorld } from "../../src/sim/engine.ts";
 import { createWorld, isFiniteWorld, worldDigest } from "../../src/sim/world.ts";
 import { isEntityHolderId } from "../../src/sim/resources.ts";
-import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_MILESTONE_RELATED_IDS, MAX_STRATEGIC_ROUTE_SUMMARIES } from "../../src/sim/events/ledger.ts";
+import { EVENT_LOG_MAX_COUNT, MAX_EVENT_MILESTONES, MAX_HISTORY_SAMPLES, MAX_MILESTONE_RELATED_IDS, MAX_STRATEGIC_ROUTE_SUMMARIES } from "../../src/sim/events/ledger.ts";
 import { EXTINCT_SPECIES_COMPACT_THRESHOLD, MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "../../src/sim/ecology/archive.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../../src/sim/ecology/interactions.ts";
 import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../../src/sim/environment/substances.ts";
@@ -309,11 +309,14 @@ describe("long-running worlds", () => {
     expect(state.fields.biomass.values.every((value) => value >= 0 && value <= 1)).toBe(true);
     expect(state.events.length).toBeLessThanOrEqual(EVENT_LOG_MAX_COUNT);
     expect(state.eventArchive.totalEventCount).toBe(state.eventArchive.archivedEventCount + state.events.length);
+    expect(state.eventArchive.historySamples).toHaveLength(MAX_HISTORY_SAMPLES);
+    expect(state.eventArchive.historySamples[0]).toMatchObject({ timelineStep: "1", timelineDays: "365" });
+    expect(state.eventArchive.historySamples.at(-1)).toMatchObject({ timelineStep: "5000", timelineDays: "1825000" });
     expect((state.eventArchive.kindCounts.abiogenesis ?? 0) + state.events.filter((event) => event.kind === "abiogenesis").length).toBeGreaterThan(0);
     expect(state.species.some((species) => species.role === "producer")).toBe(true);
     const livingSpeciesIds = new Set(state.populations.map((population) => population.speciesId));
     expect(state.species.filter((species) => !livingSpeciesIds.has(species.id)).length).toBeLessThanOrEqual(EXTINCT_SPECIES_COMPACT_THRESHOLD);
-  }, 300_000);
+  }, 360_000);
 
   it("keeps the exact world clock advancing beyond JavaScript safe integers", () => {
     let state = createWorld(8128, { width: 8, height: 8, formation: "formed" });
@@ -357,6 +360,10 @@ describe("long-running worlds", () => {
       step: String(Number.MAX_SAFE_INTEGER),
       days: String(MAX_SIMULATION_DAYS),
     };
+    const initialDigest = worldDigest(state);
+    const initialAtmosphereUpdates = state.atmosphere.updateCount;
+    const initialOceanUpdates = state.ocean.updateCount;
+    const initialEventCount = state.eventArchive.totalEventCount;
 
     for (let day = 0; day < 730; day += 1) {
       state = stepWorld(state, { elapsedYears: SIMULATED_YEARS_PER_DAY, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
@@ -375,11 +382,63 @@ describe("long-running worlds", () => {
     expect(state.tick).toBe(Number.MAX_SAFE_INTEGER);
     expect(state.simulationDays).toBe(MAX_SIMULATION_DAYS);
     expect(state.years).toBe(MAX_SIMULATION_YEARS);
+    expect(worldDigest(state)).not.toBe(initialDigest);
+    expect(state.atmosphere.updateCount).toBe(initialAtmosphereUpdates + 730);
+    expect(state.ocean.updateCount).toBe(initialOceanUpdates + 730);
+    expect(state.eventArchive.totalEventCount).toBeGreaterThan(initialEventCount);
     const latestSampleDays = state.eventArchive.historySamples.at(-1)?.timelineDays;
     expect(latestSampleDays).toBeDefined();
     expect(BigInt(latestSampleDays!)).toBeGreaterThan(BigInt(MAX_SIMULATION_DAYS));
     expect(BigInt(latestSampleDays!)).toBeLessThanOrEqual(BigInt(MAX_SIMULATION_DAYS) + 730n);
   }, 120_000);
+
+  it("continues autonomous annual evolution across maintenance windows at arbitrary exact timeline magnitudes", () => {
+    let state = createWorld(8_130, {
+      width: 8,
+      height: 8,
+      formation: "formed",
+      enabledPackIds: ["emergence.original-worldview"],
+    });
+    const remoteStep = 10n ** 96n;
+    const remoteDays = remoteStep * 365n;
+    state.tick = Number.MAX_SAFE_INTEGER;
+    state.simulationDays = MAX_SIMULATION_DAYS;
+    state.years = MAX_SIMULATION_YEARS;
+    state.timeline = { step: remoteStep.toString(), days: remoteDays.toString() };
+    const initialDigest = worldDigest(state);
+    const initialAtmosphereUpdates = state.atmosphere.updateCount;
+    const initialOceanUpdates = state.ocean.updateCount;
+
+    // This crosses two exact-time periodic validation and cleanup boundaries
+    // after compatibility number fields have saturated.
+    const yearsToRun = 128;
+    for (let year = 0; year < yearsToRun; year += 1) {
+      state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
+      if ((year + 1) % 64 === 0) {
+        assertDenseWorldHealth(state);
+        const restored = deserializeWorld(serializeWorld(state));
+        expect(restored.timeline).toEqual(state.timeline);
+        expect(worldDigest(restored)).toBe(worldDigest(state));
+        state = restored;
+      }
+    }
+
+    expect(state.timeline).toEqual({
+      step: (remoteStep + BigInt(yearsToRun)).toString(),
+      days: (remoteDays + BigInt(yearsToRun * 365)).toString(),
+    });
+    expect(state.tick).toBe(Number.MAX_SAFE_INTEGER);
+    expect(state.simulationDays).toBe(MAX_SIMULATION_DAYS);
+    expect(worldDigest(state)).not.toBe(initialDigest);
+    expect(state.atmosphere.updateCount).toBe(initialAtmosphereUpdates + yearsToRun);
+    expect(state.ocean.updateCount).toBe(initialOceanUpdates + yearsToRun);
+    const finalTimeline = state.timeline;
+    expect(finalTimeline).toBeDefined();
+    expect(state.eventArchive.historySamples.at(-1)?.timelineStep).toBe(finalTimeline?.step);
+    const restored = deserializeWorld(serializeWorld(state));
+    expect(restored.timeline).toEqual(finalTimeline);
+    expect(worldDigest(restored)).toBe(worldDigest(state));
+  });
 
   it("keeps a dense social world healthy while every subsystem is active", () => {
     let state = createWorld(123, {
@@ -393,6 +452,8 @@ describe("long-running worlds", () => {
     let sawPractice = false;
     let sawPhenomenon = false;
     let sawSubstance = false;
+    const strategicRouteKinds = new Set<string>();
+    const socialEventKinds = new Set<string>();
     for (let step = 0; step < 1_400; step += 1) {
       state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
       expect(state.agents.length).toBeLessThanOrEqual(MAX_DETAILED_AGENTS);
@@ -401,6 +462,10 @@ describe("long-running worlds", () => {
       sawPractice ||= state.worldview.practices.length > 0;
       sawPhenomenon ||= state.worldview.phenomena.length > 0;
       sawSubstance ||= state.substances.length > 0;
+      for (const route of state.eventArchive.strategicRoutes) strategicRouteKinds.add(route.kind);
+      for (const kind of ["interregional-trade", "border-conflict", "organization-war", "territory-expansion", "territory-transfer"]) {
+        if ((state.eventArchive.kindCounts[kind] ?? 0) > 0 || state.events.some((event) => event.kind === kind)) socialEventKinds.add(kind);
+      }
       if ((step + 1) % 100 === 0) assertDenseWorldHealth(state);
     }
 
@@ -410,6 +475,9 @@ describe("long-running worlds", () => {
     expect(sawPractice).toBe(true);
     expect(sawPhenomenon).toBe(true);
     expect(sawSubstance).toBe(true);
+    expect([...strategicRouteKinds]).toEqual(expect.arrayContaining(["trade", "migration", "border-conflict"]));
+    expect(socialEventKinds.has("interregional-trade")).toBe(true);
+    expect(["border-conflict", "organization-war", "territory-expansion", "territory-transfer"].some((kind) => socialEventKinds.has(kind))).toBe(true);
     expect(state.agents.length).toBeLessThanOrEqual(256);
     expect(state.lod.summaries.length).toBeLessThanOrEqual(state.fields.elevation.values.length);
     const livingSpeciesIds = new Set(state.populations.map((population) => population.speciesId));

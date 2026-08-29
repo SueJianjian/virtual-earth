@@ -1,5 +1,6 @@
 import type { CultureState, KnowledgeDomain, KnowledgeState, WorldState } from "../types.ts";
 import { addPersistentTotal } from "../numeric.ts";
+import { compareSimulationSteps } from "../time.ts";
 
 export const MAX_KNOWLEDGE_RECORDS = 2_048;
 export const MAX_KNOWLEDGE_PER_CULTURE = 48;
@@ -11,7 +12,10 @@ const domains: KnowledgeDomain[] = ["subsistence", "construction", "navigation",
 
 const compareKnowledge = (left: KnowledgeState, right: KnowledgeState): number =>
   Number(Boolean(right.domain)) - Number(Boolean(left.domain))
-  || (right.originYears ?? -1) - (left.originYears ?? -1)
+  || compareSimulationSteps(
+    right.originTimelineStep ?? String(right.originTick ?? 0),
+    left.originTimelineStep ?? String(left.originTick ?? 0),
+  )
   || right.credibility - left.credibility
   || left.id.localeCompare(right.id);
 
@@ -38,13 +42,16 @@ const retainedIdsForHolder = (
 
 const beliefIdsForCulture = (
   ids: readonly string[],
-  phenomenaById: ReadonlyMap<string, { originTick: number }>,
+  phenomenaById: ReadonlyMap<string, { originTick: number; originTimelineStep?: string }>,
 ): string[] => [...new Set(ids)]
   .sort((left, right) => {
     const leftPhenomenon = left.startsWith("belief:") ? phenomenaById.get(left.slice("belief:".length)) : undefined;
     const rightPhenomenon = right.startsWith("belief:") ? phenomenaById.get(right.slice("belief:".length)) : undefined;
     return Number(Boolean(rightPhenomenon)) - Number(Boolean(leftPhenomenon))
-      || (rightPhenomenon?.originTick ?? -1) - (leftPhenomenon?.originTick ?? -1)
+      || compareSimulationSteps(
+        rightPhenomenon?.originTimelineStep ?? String(rightPhenomenon?.originTick ?? 0),
+        leftPhenomenon?.originTimelineStep ?? String(leftPhenomenon?.originTick ?? 0),
+      )
       || left.localeCompare(right);
   })
   .slice(0, MAX_BELIEFS_PER_CULTURE);
@@ -74,7 +81,10 @@ export const compactCultureRecords = (state: WorldState): number => {
       + Number(summarizedRegions.has(culture.regionId)) * 2
       + Math.min(1, culture.knowledgeIds.length) + Math.min(1, culture.beliefIds.length);
     return activity(right) - activity(left)
-      || (right.identity?.originTick ?? -1) - (left.identity?.originTick ?? -1)
+      || compareSimulationSteps(
+        right.identity?.originTimelineStep ?? String(right.identity?.originTick ?? 0),
+        left.identity?.originTimelineStep ?? String(left.identity?.originTick ?? 0),
+      )
       || left.id.localeCompare(right.id);
   });
   const retainedIds = new Set(ordered.slice(0, MAX_CULTURE_RECORDS).map((culture) => culture.id));

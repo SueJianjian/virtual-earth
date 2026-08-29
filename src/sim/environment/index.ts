@@ -8,6 +8,7 @@ import { stepSubstances } from "./substances.ts";
 import { applyNaturalHazardWaterEffects, naturalHazardDelta } from "./hazards.ts";
 import { OCEAN_MILESTONE_THRESHOLD, PREBIOTIC_ORGANICS_THRESHOLD } from "./thresholds.ts";
 import { technologyProfilesForState } from "../culture/technology.ts";
+import { eventsForKind, eventsForSource } from "../events/index.ts";
 import { isWorldEventActive } from "../events/ledger.ts";
 import { advanceSimulationTimeline, nextSimulationStep, projectedYearsAfterStep, simulationDaysFromYears, timelineForWorld } from "../time.ts";
 import { advanceClimateCycle } from "./cycle.ts";
@@ -55,7 +56,7 @@ const fractionAtLeast = (values: Float32Array, threshold: number): number => {
 const milestoneRecorded = (state: WorldState, kind: WorldEvent["kind"]): boolean =>
   (state.eventArchive.kindCounts[kind] ?? 0) > 0
   || state.eventArchive.milestones.some((milestone) => milestone.kind === kind)
-  || state.events.some((event) => event.kind === kind);
+  || eventsForKind(state.events, kind).length > 0;
 
 const addEnvironmentalMilestones = (
   state: WorldState,
@@ -125,7 +126,7 @@ const activeUserEvents = (state: WorldState, incoming: WorldEvent[]): WorldEvent
     }
     if (incomingIds.has(event.id) || isWorldEventActive(event, state.timeline?.step ?? String(state.tick))) active.push(event);
   };
-  for (const event of state.events) consider(event);
+  for (const event of eventsForSource(state.events, "user")) consider(event);
   for (const event of incoming) consider(event);
   return active;
 };

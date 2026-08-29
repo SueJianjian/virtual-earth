@@ -18,9 +18,18 @@ const appendItems = <T>(target: T[], source: readonly T[]): void => {
   for (const item of source) target.push(item);
 };
 
-const agentsAfter = (state: WorldState, delta: WorldDelta): WorldState["agents"] => {
+const hasEntityEffect = (delta: WorldDelta, effectStart: number, collection: WorldDelta["entityEffects"][number]["collection"]): boolean => {
+  for (let index = effectStart; index < delta.entityEffects.length; index += 1) {
+    if (delta.entityEffects[index]?.collection === collection) return true;
+  }
+  return false;
+};
+
+const agentsAfter = (state: Pick<WorldState, "agents">, delta: WorldDelta, effectStart = 0): WorldState["agents"] => {
+  if (!hasEntityEffect(delta, effectStart, "agents")) return state.agents;
   const agents = new Map(state.agents.map((agent) => [agent.id, agent]));
-  for (const effect of delta.entityEffects) {
+  for (let index = effectStart; index < delta.entityEffects.length; index += 1) {
+    const effect = delta.entityEffects[index]!;
     if (effect.collection !== "agents") continue;
     if (effect.operation === "remove") agents.delete(effect.id);
     else if (effect.value) agents.set(effect.id, effect.value);
@@ -28,9 +37,11 @@ const agentsAfter = (state: WorldState, delta: WorldDelta): WorldState["agents"]
   return [...agents.values()];
 };
 
-const organizationsAfter = (state: WorldState, delta: WorldDelta): WorldState["organizations"] => {
+const organizationsAfter = (state: Pick<WorldState, "organizations">, delta: WorldDelta, effectStart = 0): WorldState["organizations"] => {
+  if (!hasEntityEffect(delta, effectStart, "organizations")) return state.organizations;
   const organizations = new Map(state.organizations.map((organization) => [organization.id, organization]));
-  for (const effect of delta.entityEffects) {
+  for (let index = effectStart; index < delta.entityEffects.length; index += 1) {
+    const effect = delta.entityEffects[index]!;
     if (effect.collection !== "organizations") continue;
     if (effect.operation === "remove") organizations.delete(effect.id);
     else if (effect.value) organizations.set(effect.id, effect.value);
@@ -38,9 +49,11 @@ const organizationsAfter = (state: WorldState, delta: WorldDelta): WorldState["o
   return [...organizations.values()];
 };
 
-const facilitiesAfter = (state: WorldState, delta: WorldDelta): WorldState["facilities"] => {
+const facilitiesAfter = (state: Pick<WorldState, "facilities">, delta: WorldDelta, effectStart = 0): WorldState["facilities"] => {
+  if (!hasEntityEffect(delta, effectStart, "facilities")) return state.facilities;
   const facilities = new Map(state.facilities.map((facility) => [facility.id, facility]));
-  for (const effect of delta.entityEffects) {
+  for (let index = effectStart; index < delta.entityEffects.length; index += 1) {
+    const effect = delta.entityEffects[index]!;
     if (effect.collection !== "facilities") continue;
     if (effect.operation === "remove") facilities.delete(effect.id);
     else if (effect.value) facilities.set(effect.id, effect.value);
@@ -48,9 +61,11 @@ const facilitiesAfter = (state: WorldState, delta: WorldDelta): WorldState["faci
   return [...facilities.values()];
 };
 
-const populationsAfter = (state: WorldState, delta: EcologyDelta): WorldState["populations"] => {
+const populationsAfter = (state: Pick<WorldState, "populations">, delta: EcologyDelta, effectStart = 0): WorldState["populations"] => {
+  if (!hasEntityEffect(delta, effectStart, "populations")) return state.populations;
   const populations = new Map(state.populations.map((population) => [population.id, population]));
-  for (const effect of delta.entityEffects) {
+  for (let index = effectStart; index < delta.entityEffects.length; index += 1) {
+    const effect = delta.entityEffects[index]!;
     if (effect.collection !== "populations") continue;
     if (effect.operation === "remove") populations.delete(effect.id);
     else if (effect.value) populations.set(effect.id, effect.value);
@@ -59,6 +74,7 @@ const populationsAfter = (state: WorldState, delta: EcologyDelta): WorldState["p
 };
 
 const relationshipsAfter = (state: WorldState, delta: AgentsDelta): WorldState["relationships"] => {
+  if (delta.relationshipEffects.length === 0) return state.relationships;
   const relationships = new Map(state.relationships.map((relationship) => [relationship.id, relationship]));
   for (const effect of delta.relationshipEffects) {
     if (effect.operation === "remove") relationships.delete(effect.relationship.id);
@@ -298,16 +314,18 @@ export const stepSociety = (state: WorldState, culture: CultureDelta, agents: Ag
   const governanceIndex = createGovernanceIndex(socialState);
   for (const organization of state.organizations.filter((organization) => organization.status !== "collapsed")) merge(delta, governOrganization(socialState, organization, governanceIndex, foodIndex));
   const governedOrganizations = organizationsAfter(socialState, delta);
+  const territoryEffectStart = delta.entityEffects.length;
   merge(delta, stepTerritories({ ...socialState, organizations: governedOrganizations }, foodIndex));
-  const territorialOrganizations = organizationsAfter(socialState, delta);
+  const territorialOrganizations = organizationsAfter({ organizations: governedOrganizations }, delta, territoryEffectStart);
+  const territorialAgents = agentsAfter({ agents: currentAgents }, delta, territoryEffectStart);
   const activeOrganizations = territorialOrganizations.filter((organization) => organization.status === "active");
   const facilityState = {
     ...socialState,
-    agents: agentsAfter(socialState, delta),
+    agents: territorialAgents,
     organizations: territorialOrganizations,
-    facilities: facilitiesAfter(socialState, delta),
+    facilities: facilitiesAfter(socialState, delta, territoryEffectStart),
   };
-  merge(delta, stepFacilities(facilityState, [...facilityState.events, ...externalEvents]));
+  merge(delta, stepFacilities(facilityState, externalEvents.length > 0 ? [...facilityState.events, ...externalEvents] : facilityState.events));
   addEconomy(socialState, delta, activeOrganizations);
   addConflicts(socialState, delta, activeOrganizations);
   merge(delta, stepSupplyChains({ ...socialState, organizations: activeOrganizations }, delta.resourceTransactions));

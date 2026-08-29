@@ -6,9 +6,11 @@ import {
 } from "../environment/substances.ts";
 import { forkRandom, hashString, randomFloat } from "../random.ts";
 import { compareSimulationSteps, nextSimulationStep, nextSimulationTick, simulationStepDistance, simulationStepForWorld } from "../time.ts";
+import { eventsForRegionAndOrganizations } from "../events/index.ts";
 import type {
   FacilityState,
   KnowledgeDomain,
+  EntityId,
   OrganizationId,
   OrganizationType,
   RegionId,
@@ -72,6 +74,17 @@ type WorkforceAssignment = {
   ids: FacilityState["workforceIds"];
   efficiency: number;
   required: number;
+};
+
+type WorkforceCandidate = {
+  id: EntityId;
+  score: number;
+  retained: boolean;
+};
+
+type NaturalReserveCandidates = {
+  materials: SubstanceState[];
+  energy: SubstanceState[];
 };
 
 const emptyDelta = (): WorldDelta => ({
@@ -288,6 +301,11 @@ const primaryOwnersByRegion = (owners: FacilityOwner[]): Map<RegionId, FacilityO
 const resourceKey = (resourceId: string, regionId: RegionId, holderId?: string): string =>
   `${resourceId}|${regionId}|${holderId ?? "world"}`;
 
+const naturalReserveScore = (substance: SubstanceState, purpose: "materials" | "energy"): number =>
+  purpose === "materials"
+    ? substance.properties.hardness * 0.55 + substance.properties.stability * 0.45
+    : substance.properties.energyPotential * 0.55 + substance.properties.conductivity * 0.45;
+
 const professionSkillKey = (type: KnowledgeDomain): string => `profession:${type}`;
 
 const workerRecordsFor = (state: WorldState): ReadonlyMap<string, WorkerRecord> => {
@@ -349,8 +367,44 @@ const workforceAssignmentsFor = (
     const cached = scores?.[type];
     if (cached !== undefined) return cached;
     const score = workerScore(workers.get(id), type);
-    workerScores.set(id, { ...scores, [type]: score });
+    if (scores) scores[type] = score;
+    else workerScores.set(id, { [type]: score });
     return score;
+  };
+  const eligibleWorkerIds = new Map<OrganizationId, EntityId[]>();
+  const eligibleWorkerIdsFor = (owner: FacilityOwner): readonly EntityId[] => {
+    const key = owner.id;
+    const cached = eligibleWorkerIds.get(key);
+    if (cached) return cached;
+    const eligible = [...new Set(owner.memberIds)]
+      .filter((id) => {
+        const worker = workers.get(id);
+        return (worker?.regionId === undefined || worker.regionId === owner.regionId) && (worker?.age === undefined || worker.age >= 14);
+      });
+    eligibleWorkerIds.set(key, eligible);
+    return eligible;
+  };
+  const compareCandidates = (left: WorkforceCandidate, right: WorkforceCandidate): number => {
+    const difference = (right.score + Number(right.retained) * 0.03) - (left.score + Number(left.retained) * 0.03);
+    return difference || left.id.localeCompare(right.id);
+  };
+  const topCandidatesFor = (
+    owner: FacilityOwner,
+    entry: { type: KnowledgeDomain; existingIds: Set<string> },
+    available: ReadonlySet<string>,
+    required: number,
+  ): WorkforceCandidate[] => {
+    const candidates: WorkforceCandidate[] = [];
+    for (const id of eligibleWorkerIdsFor(owner)) {
+      if (!available.has(id) || globallyAssigned.has(id)) continue;
+      const candidate: WorkforceCandidate = { id, score: scoreFor(id, entry.type), retained: entry.existingIds.has(id) };
+      let position = 0;
+      while (position < candidates.length && compareCandidates(candidates[position]!, candidate) <= 0) position += 1;
+      if (position >= required && candidates.length >= required) continue;
+      candidates.splice(position, 0, candidate);
+      if (candidates.length > required) candidates.pop();
+    }
+    return candidates;
   };
   const orderedOwners = [...facilitiesByOwner.entries()].sort(([left], [right]) => {
     const leftOwner = ownersById.get(left);
@@ -363,15 +417,7 @@ const workforceAssignmentsFor = (
     const available = new Set(owner.memberIds);
     for (const entry of entries.sort((left, right) => left.priority - right.priority || domains.indexOf(left.type) - domains.indexOf(right.type) || left.id.localeCompare(right.id))) {
       const required = workforceRequired[entry.type];
-      const candidates = [...available]
-        .filter((id) => !globallyAssigned.has(id))
-        .filter((id) => {
-          const worker = workers.get(id);
-          return (worker?.regionId === undefined || worker.regionId === owner.regionId) && (worker?.age === undefined || worker.age >= 14);
-        })
-        .map((id) => ({ id, score: scoreFor(id, entry.type), retained: entry.existingIds.has(id) }))
-        .sort((left, right) => (right.score + Number(right.retained) * 0.03) - (left.score + Number(left.retained) * 0.03) || left.id.localeCompare(right.id))
-        .slice(0, required);
+      const candidates = topCandidatesFor(owner, entry, available, required);
       for (const candidate of candidates) {
         available.delete(candidate.id);
         globallyAssigned.add(candidate.id);
@@ -405,8 +451,9 @@ const incidentSeverity = (facility: FacilityState, events: readonly WorldEvent[]
   // Events are kept in chronological order. A facility records the latest
   // inspected tick, so old history can be skipped without rebuilding an
   // index for the entire retained event ledger on every simulated year.
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
+  const relevantEvents = eventsForRegionAndOrganizations(events, facility.regionId, [facility.ownerOrganizationId]);
+  for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
+    const event = relevantEvents[index];
     if (!event) continue;
     const eventStep = event.timelineStep ?? String(event.tick);
     if (compareSimulationSteps(eventStep, inspectedThrough) <= 0 || compareSimulationSteps(eventStep, plannedThrough) < 0) break;
@@ -471,7 +518,7 @@ const consumeMaterials = (
   });
 };
 
-export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] = state.events): SocietyDelta => {
+export const stepFacilities = (state: WorldState, incidentEvents: readonly WorldEvent[] = state.events): SocietyDelta => {
   const delta = emptyDelta();
   const currentStep = simulationStepForWorld(state);
   const currentTick = state.tick;
@@ -485,12 +532,25 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
   const owners = ownerRecords(state);
   const ownersById = new Map(owners.map((owner) => [owner.id, owner]));
   const primaryOwners = primaryOwnersByRegion(owners);
+  const orderedPrimaryOwners = [...primaryOwners.values()].sort((left, right) => left.id.localeCompare(right.id));
   const technology = technologyProfilesForState(state);
   const facilityEffects = facilityEffectProfilesForState(state);
   const substanceEffects = substanceEffectProfilesForState(state);
   const workforceAssignments = workforceAssignmentsFor(state, owners, primaryOwners, technology);
   const plannedBalances = new Map<OrganizationId, number>();
   const reserveUpdates = new Map<string, SubstanceState>();
+  const reserveCandidatesByRegion = new Map<RegionId, NaturalReserveCandidates>();
+  for (const substance of state.substances) {
+    if (substance.status !== "known" || substance.formation === "engineered" || substance.remainingReserve <= 0) continue;
+    const candidates = reserveCandidatesByRegion.get(substance.regionId) ?? { materials: [], energy: [] };
+    candidates.materials.push(substance);
+    candidates.energy.push(substance);
+    reserveCandidatesByRegion.set(substance.regionId, candidates);
+  }
+  for (const candidates of reserveCandidatesByRegion.values()) {
+    candidates.materials.sort((left, right) => naturalReserveScore(right, "materials") - naturalReserveScore(left, "materials") || left.id.localeCompare(right.id));
+    candidates.energy.sort((left, right) => naturalReserveScore(right, "energy") - naturalReserveScore(left, "energy") || left.id.localeCompare(right.id));
+  }
   const extractNaturalReserve = (
     regionId: RegionId,
     purpose: "materials" | "energy",
@@ -499,20 +559,11 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
   ): number => {
     let requested = Math.max(0, requestedAmount);
     let extractedTotal = 0;
-    const candidates = state.substances
-      .filter((substance) => substance.regionId === regionId
-        && substance.status === "known"
-        && substance.formation !== "engineered"
-        && (reserveUpdates.get(substance.id)?.remainingReserve ?? substance.remainingReserve) > 0)
-      .sort((left, right) => {
-        const score = (substance: SubstanceState): number => purpose === "materials"
-          ? substance.properties.hardness * 0.55 + substance.properties.stability * 0.45
-          : substance.properties.energyPotential * 0.55 + substance.properties.conductivity * 0.45;
-        return score(right) - score(left) || left.id.localeCompare(right.id);
-      });
+    const candidates = reserveCandidatesByRegion.get(regionId)?.[purpose] ?? [];
     for (const original of candidates) {
       if (requested <= 0.000000001) break;
       const current = reserveUpdates.get(original.id) ?? original;
+      if (current.remainingReserve <= 0) continue;
       const extraction = extractSubstanceReserve(
         current,
         requested,
@@ -550,7 +601,7 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
     return extractedTotal;
   };
 
-  for (const owner of [...primaryOwners.values()].sort((left, right) => left.id.localeCompare(right.id))) {
+  for (const owner of orderedPrimaryOwners) {
     const profile = technology.get(owner.regionId);
     if (!profile || profile.construction <= 0 || owner.memberIds.length < workforceRequired.construction) continue;
     const [xText, yText] = owner.regionId.replace("region:", "").split(":");
@@ -597,7 +648,7 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
     plannedBalances.set(owner.id, materialBalanceFor(owner.regionId, owner.id));
   }
 
-  for (const owner of [...primaryOwners.values()].sort((left, right) => left.id.localeCompare(right.id))) {
+  for (const owner of orderedPrimaryOwners) {
     const profile = technology.get(owner.regionId);
     const localFacilities = facilityEffects.get(owner.regionId) ?? emptyEffectProfile();
     const localSubstances = substanceEffects.get(owner.regionId);
@@ -647,7 +698,7 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
       .filter((facility) => facility.status !== "abandoned")
       .map((facility) => `${facility.regionId}:${facility.type}`),
   );
-  for (const owner of [...primaryOwners.values()].sort((left, right) => left.id.localeCompare(right.id))) {
+  for (const owner of orderedPrimaryOwners) {
     const profile = technology.get(owner.regionId);
     if (!profile || profile.construction <= 0) continue;
     for (const type of domains) {
@@ -694,8 +745,17 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
       continue;
     }
     const owner = ownersById.get(current.ownerOrganizationId);
-    let facility = structuredClone(current);
+    let facility = current;
+    let copied = false;
+    const editableFacility = (): FacilityState => {
+      if (!copied) {
+        facility = { ...current, workforceIds: [...current.workforceIds] };
+        copied = true;
+      }
+      return facility;
+    };
     if (!owner) {
+      editableFacility();
       facility.status = "abandoned";
       facility.abandonedTick = currentTick;
       facility.abandonedTimelineStep = currentStep;
@@ -704,20 +764,26 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
       delta.entityEffects.push({ collection: "facilities", operation: "update", id: facility.id, value: facility });
       continue;
     }
-    const previousWorkforce = new Set(facility.workforceIds);
+    const previousWorkforce = new Set(current.workforceIds);
     const assignment = workforceAssignments.get(facility.id) ?? { ids: [], efficiency: 0, required: workforceRequired[facility.type] };
-    facility.workforceIds = assignment.ids;
-    facility.workforceRequired = assignment.required;
-    facility.workforceEfficiency = assignment.efficiency;
-    const availableWorkforce = facility.workforceIds.length;
+    const workforceChanged = current.workforceIds.length !== assignment.ids.length || assignment.ids.some((id) => !previousWorkforce.has(id));
+    const workforceDataChanged = workforceChanged
+      || current.workforceRequired !== assignment.required
+      || current.workforceEfficiency !== assignment.efficiency;
+    if (workforceDataChanged) {
+      editableFacility();
+      facility.workforceIds = assignment.ids;
+      facility.workforceRequired = assignment.required;
+      facility.workforceEfficiency = assignment.efficiency;
+    }
+    const availableWorkforce = assignment.ids.length;
     const requiredWorkforce = assignment.required;
-    const workforceChanged = facility.workforceIds.length !== previousWorkforce.size || facility.workforceIds.some((id) => !previousWorkforce.has(id));
     if (workforceChanged) {
       lifecycleEvent(delta, facility, "facility-workforce-changed", "society:facility-workforce", {
         previousWorkforce: previousWorkforce.size,
         workforce: availableWorkforce,
         workforceRequired: requiredWorkforce,
-        workforceEfficiency: rounded(facility.workforceEfficiency),
+        workforceEfficiency: rounded(assignment.efficiency),
       });
     }
     let available = plannedBalances.get(owner.id) ?? materialBalanceFor(owner.regionId, owner.id);
@@ -729,22 +795,21 @@ export const stepFacilities = (state: WorldState, incidentEvents: WorldEvent[] =
         consumeMaterials(delta, state, facility, cost, "construction");
         available -= cost;
         plannedBalances.set(owner.id, available);
-        facility = {
-          ...facility,
-          condition: 1,
-          status: "active",
-          materialInvested: rounded(cost),
-          builtTick: currentTick,
-          builtTimelineStep: currentStep,
-          lastMaintainedTick: currentTick,
-          lastMaintainedTimelineStep: currentStep,
-        };
+        editableFacility();
+        facility.condition = 1;
+        facility.status = "active";
+        facility.materialInvested = rounded(cost);
+        facility.builtTick = currentTick;
+        facility.builtTimelineStep = currentStep;
+        facility.lastMaintainedTick = currentTick;
+        facility.lastMaintainedTimelineStep = currentStep;
         lifecycleEvent(delta, facility, "facility-constructed", "society:facility-construction", { materialCost: cost, workforce: availableWorkforce });
       }
-      delta.entityEffects.push({ collection: "facilities", operation: "update", id: facility.id, value: facility });
+      if (copied) delta.entityEffects.push({ collection: "facilities", operation: "update", id: facility.id, value: facility });
       continue;
     }
 
+    editableFacility();
     facility.condition = clamp(facility.condition - (availableWorkforce < requiredWorkforce ? 0.018 : 0.006));
     const incident = incidentSeverity(facility, incidentEvents);
     facility.lastInspectedEventTick = Math.max(currentTick, incident.lastTick);

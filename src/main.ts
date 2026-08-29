@@ -2,7 +2,7 @@ import "./styles.css";
 import { createWorkerClient } from "./worker/client.ts";
 import type { WorkerMessage, WorldSnapshot } from "./worker/protocol.ts";
 import type { WorldEvent } from "./sim/types.ts";
-import { createMapCanvas, type CellSelection, type SceneEntitySelection } from "./ui/map-canvas.ts";
+import { createMapCanvas, type CellSelection, type MapFocusLod, type SceneEntitySelection } from "./ui/map-canvas.ts";
 import { mapSceneLodForZoom, mapSceneLodLabel } from "./ui/map-lod.ts";
 import { layerLabels, type MapLayer } from "./ui/layers.ts";
 import { renderStatusPanel, phaseForSnapshot } from "./ui/status-panel.ts";
@@ -220,6 +220,22 @@ renderInspector(inspector, emptySnapshot);
 renderTimeline(timeline, []);
 
 inspector.addEventListener("click", (event) => {
+  const focus = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-map-focus]");
+  if (focus && snapshot) {
+    const regionId = focus.dataset.mapFocusRegion;
+    const lod = focus.dataset.mapFocusLod as MapFocusLod | undefined;
+    const match = regionId ? /^region:(\d+):(\d+)$/.exec(regionId) : undefined;
+    if (!match || !lod || !["region", "settlement", "individual"].includes(lod)) return;
+    const x = Number(match[1]);
+    const y = Number(match[2]);
+    const grid = snapshot.fields.elevation;
+    if (x < 0 || y < 0 || x >= grid.width || y >= grid.height) return;
+    selection = { x, y, index: y * grid.width + x, regionId: regionId as never };
+    map.focusSelection(selection, lod);
+    client.send({ type: "focusRegion", regionId: selection.regionId });
+    renderInspector(inspector, snapshot, selection, detail);
+    return;
+  }
   const link = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-detail-link]");
   if (link && snapshot) {
     const level = link.dataset.detailLevel as InspectorDetail["level"];

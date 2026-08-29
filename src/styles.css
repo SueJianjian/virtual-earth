@@ -209,7 +209,10 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .detail-tabs { display: flex; width: 100%; max-width: 100%; min-width: 0; gap: 3px; padding-bottom: 9px; overflow-x: auto; overscroll-behavior-x: contain; }
 .detail-tab { flex: 0 0 auto; min-height: 27px; padding: 0 8px; border: 1px solid var(--line); background: #20261f; color: var(--muted); font-size: 9px; cursor: pointer; }
 .detail-tab:hover, .detail-tab.active { border-color: var(--acid); color: #f0dda0; background: #292b1d; }
+.detail-target-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: stretch; }
 .detail-target { width: 100%; min-height: 30px; padding: 0 8px; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 10px; }
+.detail-map-focus { min-height: 30px; padding: 0 8px; border: 1px solid #9b8050; background: #28271b; color: #f0dda0; font-size: 9px; cursor: pointer; white-space: nowrap; }
+.detail-map-focus:hover { border-color: var(--acid); background: #302f1c; }
 .detail-report-container { padding: 12px 0 2px; }
 .detail-summary, .detail-report { display: grid; gap: 7px; }
 .detail-summary > strong, .detail-title strong { color: #c8cfca; font-size: 12px; font-weight: 600; }

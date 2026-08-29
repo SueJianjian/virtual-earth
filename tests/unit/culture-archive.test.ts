@@ -45,6 +45,54 @@ describe("knowledge archive bounds", () => {
     expect(state.eventArchive.archivedKnowledgeCount).toBe(1);
   });
 
+  it("uses exact timeline order when compaction runs beyond numeric clock limits", () => {
+    const state = createWorld(7_011, { width: 8, height: 8, formation: "formed" });
+    const regionId = "region:1:1" as never;
+    const population: PopulationState = { id: "population:remote-knowledge" as never, speciesId: "species:remote-knowledge" as never, regionId, count: 20, energy: 1 };
+    const species: SpeciesState = { id: population.speciesId, role: "consumer", traits: { cognitivePotential: 0.8 } };
+    state.species = [species];
+    state.populations = [population];
+    state.agents = [createAgent(population, species, 0, "remote-knowledge")];
+    const saturatedTick = Number.MAX_SAFE_INTEGER;
+    const baseStep = BigInt(saturatedTick) + 1n;
+    state.knowledge = [
+      {
+        id: "knowledge:00-old" as never,
+        kind: "innovation:construction:old",
+        name: "old record",
+        domain: "construction",
+        sourceIds: [state.agents[0]!.id],
+        credibility: 1,
+        transmissionCost: 0.1,
+        forgettingRate: 0.01,
+        originRegionId: regionId,
+        originTick: saturatedTick,
+        originTimelineStep: baseStep.toString(),
+        originYears: saturatedTick,
+      },
+      ...Array.from({ length: MAX_KNOWLEDGE_PER_CULTURE }, (_, index): KnowledgeState => ({
+        id: `knowledge:later:${index}` as never,
+        kind: `innovation:construction:${index}`,
+        name: `later record ${index}`,
+        domain: "construction",
+        sourceIds: [state.agents[0]!.id],
+        credibility: 1,
+        transmissionCost: 0.1,
+        forgettingRate: 0.01,
+        originRegionId: regionId,
+        originTick: saturatedTick,
+        originTimelineStep: (baseStep + BigInt(index) + 1n).toString(),
+        originYears: saturatedTick,
+      })),
+    ];
+    state.cultures = [{ id: "culture:remote-knowledge" as never, regionId, knowledgeIds: state.knowledge.map((knowledge) => knowledge.id), beliefIds: [], transmissionRate: 0.8 }];
+
+    expect(compactKnowledgeRecords(state)).toBe(0);
+    expect(state.cultures[0]!.knowledgeIds).toHaveLength(MAX_KNOWLEDGE_PER_CULTURE);
+    expect(state.cultures[0]!.knowledgeIds).not.toContain("knowledge:00-old");
+    expect(state.cultures[0]!.knowledgeIds).toContain(`knowledge:later:${MAX_KNOWLEDGE_PER_CULTURE - 1}`);
+  });
+
   it("retains active cultures, bounds beliefs, and archives inactive records", () => {
     const state = createWorld(702, { width: 8, height: 8, formation: "formed" });
     const activeRegionId = "region:active" as never;
@@ -61,7 +109,8 @@ describe("knowledge archive bounds", () => {
       epistemicStatus: "believed" as const,
       name: `Phenomenon ${index}`,
       regionId: activeRegionId,
-      originTick: index,
+      originTick: Number.MAX_SAFE_INTEGER,
+      originTimelineStep: (BigInt(Number.MAX_SAFE_INTEGER) + BigInt(index)).toString(),
       parentIds: [],
       causeRuleId: "test",
       evidence: {},

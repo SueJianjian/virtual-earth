@@ -7,6 +7,7 @@ import {
   MAX_EVENT_MILESTONES,
   MAX_HISTORY_SAMPLES,
   MAX_STRATEGIC_ROUTE_SUMMARIES,
+  appendHistorySample,
   appendEvents,
   appendExternalEvents,
   compactEventLedger,
@@ -28,6 +29,7 @@ import { createOrganization } from "../../src/sim/society/organization.ts";
 import { technologyProfileForRegion } from "../../src/sim/culture/technology.ts";
 import { EXTINCT_SPECIES_RETAIN_COUNT } from "../../src/sim/ecology/archive.ts";
 import { derivePathogen } from "../../src/sim/health/disease.ts";
+import { eventsForRegionAndOrganizations } from "../../src/sim/events/index.ts";
 
 const draft: WorldEventDraft = {
   kind: "test-event",
@@ -67,6 +69,19 @@ describe("rule engine and event ledger", () => {
     expect(appendEvents([first], [draft], 4)).toHaveLength(1);
   });
 
+  it("keeps generated events distinct by exact timeline after tick saturation", () => {
+    const saturatedTick = Number.MAX_SAFE_INTEGER;
+    const firstStep = String(BigInt(saturatedTick) + 1n);
+    const nextStep = String(BigInt(saturatedTick) + 2n);
+    const first = materializeEvent(draft, saturatedTick, 0, undefined, firstStep, firstStep);
+
+    const next = appendEvents([first], [draft], saturatedTick, undefined, nextStep, nextStep);
+
+    expect(next).toHaveLength(2);
+    expect(next.map((event) => event.timelineStep)).toEqual([firstStep, nextStep]);
+    expect(appendEvents(next, [draft], saturatedTick, undefined, nextStep, nextStep)).toHaveLength(2);
+  });
+
   it("keeps the hot trade metric current after in-place event growth", () => {
     const world = createWorld(8, { width: 8, height: 8 });
     const trade = (id: string, tick: number, amount: number): WorldEvent => ({
@@ -90,6 +105,42 @@ describe("rule engine and event ledger", () => {
     expect(lifetimeTradeVolume(world)).toBe(3);
     world.events[0] = trade("event:trade:replacement", 3, 7);
     expect(lifetimeTradeVolume(world)).toBe(7);
+  });
+
+  it("keeps indexed region and organization queries ordered after append-only growth", () => {
+    const region = "region:1:1" as RegionId;
+    const organizationId = "organization:city:indexed";
+    const event = (id: string, tick: number, payload: Record<string, string>): WorldEvent => ({
+      id,
+      tick,
+      years: tick,
+      kind: "organization-trade",
+      ruleId: "test:indexed-query",
+      source: "natural",
+      sourceIds: payload.organizationId ? [organizationId] : [],
+      probability: 1,
+      roll: 0,
+      evidence: {},
+      payload,
+    });
+    const events: WorldEvent[] = [
+      event("event:indexed:1", 1, { regionId: region }),
+      event("event:indexed:2", 2, { organizationId }),
+    ];
+
+    expect(eventsForRegionAndOrganizations(events, region, [organizationId]).map((item) => item.id)).toEqual([
+      "event:indexed:1",
+      "event:indexed:2",
+    ]);
+    events.push(
+      event("event:indexed:3", 3, { regionId: region, organizationId }),
+      event("event:indexed:4", 4, { regionId: "region:2:1" }),
+    );
+    expect(eventsForRegionAndOrganizations(events, region, [organizationId]).map((item) => item.id)).toEqual([
+      "event:indexed:1",
+      "event:indexed:2",
+      "event:indexed:3",
+    ]);
   });
 
   it("does not change a natural event ID when evidence key order changes", () => {
@@ -193,9 +244,9 @@ describe("rule engine and event ledger", () => {
 
   it("keeps the canonical digest stable while streaming typed grids", () => {
     const state = createWorld(1, { width: 256, height: 256, formation: "formed" });
-    expect(worldDigest(state)).toBe("e07600aa");
+    expect(worldDigest(state)).toBe("19a32088");
     state.observation.focusRegionId = "region:1:1" as RegionId;
-    expect(worldDigest(state)).toBe("e07600aa");
+    expect(worldDigest(state)).toBe("19a32088");
   });
 
   it("applies dense patches and sparse changes in simulation-stage order", () => {
@@ -434,6 +485,25 @@ describe("rule engine and event ledger", () => {
     expect(retained[0]?.timelineStep).toBe("365");
     expect(retained.at(-1)?.timelineStep).toBe(String((MAX_HISTORY_SAMPLES + 80) * 365));
     expect(retained.every((sample, index) => index === 0 || BigInt(sample.timelineStep) > BigInt(retained[index - 1]!.timelineStep))).toBe(true);
+  });
+
+  it("appends annual history in place while retaining the first and newest samples", () => {
+    const samples = Array.from({ length: MAX_HISTORY_SAMPLES }, (_, index) => historySample(index + 1));
+
+    appendHistorySample(samples, historySample(MAX_HISTORY_SAMPLES + 1));
+
+    expect(samples).toHaveLength(MAX_HISTORY_SAMPLES);
+    expect(samples[0]?.timelineStep).toBe("365");
+    expect(samples[1]?.timelineStep).toBe(String(3 * 365));
+    expect(samples.at(-1)?.timelineStep).toBe(String((MAX_HISTORY_SAMPLES + 1) * 365));
+  });
+
+  it("normalizes reordered annual history before appending a newer sample", () => {
+    const samples = [historySample(4), historySample(1), historySample(3)];
+
+    appendHistorySample(samples, historySample(5));
+
+    expect(samples.map((sample) => sample.timelineStep)).toEqual(["365", String(3 * 365), String(4 * 365), String(5 * 365)]);
   });
 
   it("drops per-organization archive indexes after an organization disappears", () => {

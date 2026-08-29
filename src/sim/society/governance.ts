@@ -18,13 +18,20 @@ export type GovernanceIndex = {
   cultureValuesByRegion: ReadonlyMap<string, ReturnType<typeof cultureIdentityFor>["values"]>;
   technologyByRegion: ReadonlyMap<string, TechnologyProfile>;
   facilityEffectsByRegion: ReadonlyMap<string, FacilityEffectProfile>;
+  memberAggregatesByKey: Map<string, GovernanceMemberAggregate>;
   territoryAgentIds: Map<string, OrganizationState["memberIds"]>;
+};
+
+type GovernanceMemberAggregate = {
+  cooperationTotal: number;
+  socialityTotal: number;
+  relationshipIncidence: number;
 };
 
 const organizationRegionKey = (organizationId: string, regionId: string): string => `${organizationId}|${regionId}`;
 
 export const createGovernanceIndex = (
-  state: Pick<WorldState, "agents" | "relationships" | "cultures" | "resources" | "knowledge" | "facilities">,
+  state: Pick<WorldState, "agents" | "relationships" | "cultures" | "resources" | "knowledge" | "facilities" | "organizations">,
 ): GovernanceIndex => {
   const agentsByRegion = new Map<string, WorldState["agents"]>();
   const agentsById = new Map<EntityId, AgentState>();
@@ -55,6 +62,22 @@ export const createGovernanceIndex = (
     const key = organizationRegionKey(resource.holderId, resource.regionId);
     localResourceByOrganization.set(key, (localResourceByOrganization.get(key) ?? 0) + resource.amount);
   }
+  const memberAggregatesByKey = new Map<string, GovernanceMemberAggregate>();
+  const cacheMemberAggregate = (memberIds: readonly EntityId[]): void => {
+    const key = memberIds.join("\0");
+    if (memberAggregatesByKey.has(key)) return;
+    let cooperationTotal = 0;
+    let socialityTotal = 0;
+    let relationshipIncidence = 0;
+    for (const memberId of memberIds) {
+      const member = agentsById.get(memberId);
+      cooperationTotal += member?.traits.cooperation ?? 0;
+      socialityTotal += member?.traits.sociality ?? 0;
+      relationshipIncidence += relationshipIncidenceByAgent.get(memberId) ?? 0;
+    }
+    memberAggregatesByKey.set(key, { cooperationTotal, socialityTotal, relationshipIncidence });
+  };
+  for (const organization of state.organizations) cacheMemberAggregate(organization.memberIds);
   return {
     agentIds: new Set(agentsById.keys()),
     agentsByRegion,
@@ -67,6 +90,7 @@ export const createGovernanceIndex = (
     cultureValuesByRegion,
     technologyByRegion: technologyProfilesForState(state),
     facilityEffectsByRegion: facilityEffectProfilesForState(state),
+    memberAggregatesByKey,
     territoryAgentIds: new Map(),
   };
 };
@@ -98,15 +122,22 @@ const nextGovernance = (
 ): GovernanceState => {
   const previous = governanceForOrganization(organization);
   const territorySize = Math.max(1, organization.territoryRegionIds.length || 1);
-  let cooperationTotal = 0;
-  let socialityTotal = 0;
-  let relationshipIncidence = 0;
-  for (const memberId of members) {
-    const member = index.agentsById.get(memberId);
-    cooperationTotal += member?.traits.cooperation ?? 0;
-    socialityTotal += member?.traits.sociality ?? 0;
-    relationshipIncidence += index.relationshipIncidenceByAgent.get(memberId) ?? 0;
+  const memberKey = members.join("\0");
+  let aggregate = index.memberAggregatesByKey.get(memberKey);
+  if (!aggregate) {
+    let cooperationTotal = 0;
+    let socialityTotal = 0;
+    let relationshipIncidence = 0;
+    for (const memberId of members) {
+      const member = index.agentsById.get(memberId);
+      cooperationTotal += member?.traits.cooperation ?? 0;
+      socialityTotal += member?.traits.sociality ?? 0;
+      relationshipIncidence += index.relationshipIncidenceByAgent.get(memberId) ?? 0;
+    }
+    aggregate = { cooperationTotal, socialityTotal, relationshipIncidence };
+    index.memberAggregatesByKey.set(memberKey, aggregate);
   }
+  const { cooperationTotal, socialityTotal, relationshipIncidence } = aggregate;
   const cooperation = members.length > 0 ? cooperationTotal / members.length : 0;
   const sociality = members.length > 0 ? socialityTotal / members.length : 0;
   const relationshipDensity = clamp(relationshipIncidence / Math.max(1, members.length * 2.8));

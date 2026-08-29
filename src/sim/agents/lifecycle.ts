@@ -34,11 +34,14 @@ const emptyDelta = (): WorldDelta => ({
 
 const clamp = (value: number, min = 0, max = 1): number => Math.max(min, Math.min(max, value));
 const asEntityId = (value: string): EntityId => value as EntityId;
+const agentPairKey = (leftId: string, rightId: string): string =>
+  leftId < rightId ? `${leftId}:${rightId}` : `${rightId}:${leftId}`;
 export const MAX_DETAILED_AGENTS = 256;
 export const MAX_AGENT_MEMORY_IDS = 128;
 export const MAX_BELIEFS_PER_AGENT = 32;
 export const MAX_RELATIONSHIPS_PER_AGENT = 32;
 export const MAX_RELATIONSHIP_RECORDS = Math.floor(MAX_DETAILED_AGENTS * MAX_RELATIONSHIPS_PER_AGENT / 2);
+const MAX_PARTNER_CANDIDATES_PER_AGENT = 48;
 
 const relationshipPriority: Record<RelationshipState["kind"], number> = {
   parent: 8,
@@ -254,6 +257,10 @@ export const stepAgents = (
 ): AgentsDelta => {
   const delta = emptyDelta();
   const years = Math.max(0, elapsedYears);
+  // A lifecycle stage never advances the world clock. Reuse these exact
+  // values for births and relationships instead of reparsing the timeline.
+  const simulationStep = simulationStepForWorld(state);
+  const nextTick = nextSimulationTick(state);
   // Only these nested fields are written during a lifecycle step. Avoiding a
   // full structured clone for every detailed agent keeps dense worlds bounded
   // without sharing mutable state with the previous authoritative snapshot.
@@ -406,7 +413,7 @@ export const stepAgents = (
     }
   }
 
-  if (agents.size - deadIds.size < MAX_DETAILED_AGENTS) {
+  if (years > 0 && agents.size - deadIds.size < MAX_DETAILED_AGENTS) {
     for (const population of state.populations) {
       if (agents.size - deadIds.size >= MAX_DETAILED_AGENTS) break;
       if (removedPopulationIds.has(population.id) || aggregateRegions.has(population.regionId) || population.count < 4) continue;
@@ -419,7 +426,7 @@ export const stepAgents = (
       if ((agentCountsByPopulation.get(populationId) ?? 0) >= emergenceTarget) continue;
       const existing = (agentsByPopulation.get(populationId) ?? []).filter((agent) => !deadIds.has(agent.id));
       for (let ordinal = existing.length; ordinal < emergenceTarget && agents.size - deadIds.size < MAX_DETAILED_AGENTS; ordinal += 1) {
-        const candidate = createAgent(population, species, ordinal, `${state.seed}:${simulationStepForWorld(state)}`);
+        const candidate = createAgent(population, species, ordinal, `${state.seed}:${simulationStep}`);
         const probability = clamp(0.12 + (species.traits.cognitivePotential ?? 0) * 0.5);
         const [roll] = randomFloat(forkRandom(state.random, `emergence:${candidate.id}`));
         if (roll < probability && !agents.has(candidate.id)) {
@@ -437,20 +444,49 @@ export const stepAgents = (
   const relationshipMap = new Map(state.relationships.map((relationship) => [relationship.id, relationship]));
   const stateAgentIds = new Set(state.agents.map((agent) => agent.id));
   const stateRelationshipIds = new Set(state.relationships.map((relationship) => relationship.id));
-  const familyForPair = new Map<string, OrganizationState>();
+  const replacementCandidatesByPopulation = new Map<string, AgentState[]>();
+  for (const candidate of agents.values()) {
+    if (deadIds.has(candidate.id) || candidate.parentIds.length > 0) continue;
+    const candidates = replacementCandidatesByPopulation.get(String(candidate.populationId)) ?? [];
+    candidates.push(candidate);
+    replacementCandidatesByPopulation.set(String(candidate.populationId), candidates);
+  }
+  for (const candidates of replacementCandidatesByPopulation.values()) {
+    candidates.sort((left, right) => right.age - left.age || left.id.localeCompare(right.id));
+  }
   const families = state.organizations.filter((organization) => organization.type === "family");
   const familyMembers = new Map(families.map((organization) => [organization.id, [...organization.memberIds]]));
+  const familyMemberSets = new Map<string, Set<EntityId>>();
+  const familiesByMember = new Map<EntityId, OrganizationState[]>();
   for (const family of families) {
-    const members = family.memberIds;
-    for (let index = 0; index < members.length; index += 1) {
-      for (let next = index + 1; next < members.length; next += 1) {
-        familyForPair.set([members[index], members[next]].sort().join(":"), family);
-      }
+    const memberSet = new Set(family.memberIds);
+    familyMemberSets.set(family.id, memberSet);
+    for (const memberId of memberSet) {
+      const memberFamilies = familiesByMember.get(memberId) ?? [];
+      memberFamilies.push(family);
+      familiesByMember.set(memberId, memberFamilies);
     }
   }
-  const currentAgents = [...agents.values()].filter((agent) => !deadIds.has(agent.id)).sort((left, right) => left.id.localeCompare(right.id));
+  const familyForPairCache = new Map<string, OrganizationState>();
+  const familyForPair = (firstId: EntityId, secondId: EntityId): OrganizationState | undefined => {
+    const key = agentPairKey(firstId, secondId);
+    const cached = familyForPairCache.get(key);
+    if (cached) return cached;
+    const family = (familiesByMember.get(firstId) ?? [])
+      .find((candidate) => familyMemberSets.get(candidate.id)?.has(secondId));
+    if (family) familyForPairCache.set(key, family);
+    return family;
+  };
+  // Agent insertion order is authoritative and survives delta application and
+  // serialization. Re-sorting this bounded collection on every tick only
+  // allocates work; iteration remains deterministic without it.
+  const currentAgents: AgentState[] = [];
+  for (const agent of agents.values()) {
+    if (!deadIds.has(agent.id)) currentAgents.push(agent);
+  }
   const currentById = new Map(currentAgents.map((agent) => [agent.id, agent]));
   const partnerByAgent = new Map<EntityId, AgentState>();
+  const partnerRelationshipSources = new Set<EntityId>();
   for (const relationship of relationshipMap.values()) {
     if (relationship.kind !== "partner") continue;
     const first = currentById.get(relationship.fromId);
@@ -458,10 +494,12 @@ export const stepAgents = (
     if (first && second) {
       partnerByAgent.set(first.id, second);
       partnerByAgent.set(second.id, first);
+      partnerRelationshipSources.add(first.id);
     }
   }
   const availableByRegion = new Map<string, AgentState[]>();
   for (const agent of currentAgents) {
+    if (agent.age < 16 || partnerByAgent.has(agent.id)) continue;
     const members = availableByRegion.get(agent.regionId) ?? [];
     members.push(agent);
     availableByRegion.set(agent.regionId, members);
@@ -471,7 +509,7 @@ export const stepAgents = (
     if (pairedAgents.has(first.id) || first.age < 16) continue;
     const existingPartner = partnerByAgent.get(first.id);
     const regionalCandidates = availableByRegion.get(first.regionId) ?? [];
-    const candidateCount = existingPartner ? 1 : regionalCandidates.length;
+    const candidateCount = existingPartner ? 1 : Math.min(regionalCandidates.length, MAX_PARTNER_CANDIDATES_PER_AGENT);
     for (let candidateIndex = 0; candidateIndex < candidateCount; candidateIndex += 1) {
       const second = existingPartner ?? regionalCandidates[candidateIndex];
       if (!second
@@ -492,15 +530,24 @@ export const stepAgents = (
       const probability = clamp(affinity * (0.43 + foodSecurity * 0.02));
       const [roll] = randomFloat(forkRandom(state.random, `partner:${first.id}:${second.id}`));
       if (roll >= probability) continue;
-      addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, nextSimulationTick(state), affinity, simulationStepForWorld(state)));
+      addRelationship(relationshipMap, createRelationship("partner", first.id, second.id, nextTick, affinity, simulationStep));
+      partnerByAgent.set(first.id, second);
+      partnerByAgent.set(second.id, first);
+      partnerRelationshipSources.add(first.id);
       pairedAgents.add(first.id);
       pairedAgents.add(second.id);
-      const pairKey = [first.id, second.id].sort().join(":");
-      if (!familyForPair.has(pairKey)) {
+      const pairKey = agentPairKey(first.id, second.id);
+      if (!familyForPair(first.id, second.id)) {
         const family = createFamily([first.id, second.id], first.regionId);
         delta.entityEffects.push({ collection: "organizations", operation: "create", id: family.id, value: family });
-        familyForPair.set(pairKey, family);
         familyMembers.set(family.id, [...family.memberIds]);
+        familyMemberSets.set(family.id, new Set(family.memberIds));
+        familyForPairCache.set(pairKey, family);
+        for (const memberId of family.memberIds) {
+          const memberFamilies = familiesByMember.get(memberId) ?? [];
+          memberFamilies.push(family);
+          familiesByMember.set(memberId, memberFamilies);
+        }
         delta.eventDrafts.push({
           kind: "family-formation",
           ruleId: "family-formation",
@@ -516,18 +563,16 @@ export const stepAgents = (
     }
   }
 
-  const partnerPairs = [...relationshipMap.values()]
-    .filter((relationship) => relationship.kind === "partner")
-    .map((relationship) => [agents.get(relationship.fromId), agents.get(relationship.toId)] as const)
-    .filter((pair): pair is [AgentState, AgentState] => Boolean(pair[0]
-      && pair[1]
-      && !deadIds.has(pair[0].id)
-      && !deadIds.has(pair[1].id)))
-    .sort(([left], [right]) => left.id.localeCompare(right.id));
-  for (const [first, second] of partnerPairs) {
+  // partnerByAgent contains both existing and newly formed pairs. Visiting
+  // the pair from the current agent order avoids rebuilding and sorting a
+  // second relationship array.
+  for (const first of currentAgents) {
+    if (!partnerRelationshipSources.has(first.id)) continue;
+    const second = partnerByAgent.get(first.id);
+    if (!second) continue;
     if (first.age < 18 || second.age < 18 || first.age >= first.lifespan || second.age >= second.lifespan) continue;
     if (first.populationId !== second.populationId) continue;
-    const family = familyForPair.get([first.id, second.id].sort().join(":"));
+    const family = familyForPair(first.id, second.id);
     if (!family) continue;
     const population = populationsById.get(first.populationId);
     const species = population ? speciesById.get(population.speciesId) : undefined;
@@ -548,7 +593,7 @@ export const stepAgents = (
       + geneticEnvironmentFitness(second, species, parentClimate.temperature, parentClimate.humidity).fitness
     ) / 2;
     const probability = clamp((fertility * 0.16 + foodSecurity * 0.08) * ageFactor * (0.35 + parentFitness * 0.65));
-    const [roll] = randomFloat(forkRandom(state.random, `birth:${family.id}:${simulationStepForWorld(state)}`));
+    const [roll] = randomFloat(forkRandom(state.random, `birth:${family.id}:${simulationStep}`));
     if (roll >= probability) continue;
     let populationAgentCount = agentCountsByPopulation.get(String(population.id)) ?? 0;
     const ecologicalSampleLimit = Math.min(
@@ -559,24 +604,19 @@ export const stepAgents = (
       ),
     );
     if (agents.size - deadIds.size >= MAX_DETAILED_AGENTS || populationAgentCount >= ecologicalSampleLimit) {
-      const replacement = [...agents.values()]
-        .filter((candidate) => candidate.populationId === population.id
-          && !deadIds.has(candidate.id)
-          && candidate.id !== first.id
-          && candidate.id !== second.id
-          && candidate.parentIds.length === 0)
-        .sort((left, right) => right.age - left.age || left.id.localeCompare(right.id))[0];
+      const replacement = replacementCandidatesByPopulation.get(String(population.id))
+        ?.find((candidate) => !deadIds.has(candidate.id) && candidate.id !== first.id && candidate.id !== second.id);
       if (!replacement) continue;
       deadIds.add(replacement.id);
       populationAgentCount = Math.max(0, populationAgentCount - 1);
       agentCountsByPopulation.set(String(population.id), populationAgentCount);
     }
     const geneticInheritance = inheritAgentGenetics(
-      createAgent(population, species, agents.size, `birth:${family.id}:${simulationStepForWorld(state)}`, [first.id, second.id]),
+      createAgent(population, species, agents.size, `birth:${family.id}:${simulationStep}`, [first.id, second.id]),
       first,
       second,
       species,
-      `${state.seed}:${state.random.value}:${family.id}:${simulationStepForWorld(state)}`,
+      `${state.seed}:${state.random.value}:${family.id}:${simulationStep}`,
     );
     const child = inheritCultureFromParents(geneticInheritance.agent, first, second, state.random);
     if (agents.has(child.id)) continue;
@@ -590,11 +630,11 @@ export const stepAgents = (
       .filter((member): member is AgentState => Boolean(member && member.id !== first.id && member.id !== second.id && member.parentIds.includes(first.id) && member.parentIds.includes(second.id)))
       .sort((left, right) => left.id.localeCompare(right.id));
     const childRelationships = [
-      createRelationship("parent", first.id, child.id, nextSimulationTick(state), 0.9, simulationStepForWorld(state)),
-      createRelationship("parent", second.id, child.id, nextSimulationTick(state), 0.9, simulationStepForWorld(state)),
-      createRelationship("caregiver", first.id, child.id, nextSimulationTick(state), 0.8, simulationStepForWorld(state)),
-      createRelationship("caregiver", second.id, child.id, nextSimulationTick(state), 0.8, simulationStepForWorld(state)),
-      ...siblings.map((sibling) => createRelationship("sibling", sibling.id, child.id, nextSimulationTick(state), 0.85, simulationStepForWorld(state))),
+      createRelationship("parent", first.id, child.id, nextTick, 0.9, simulationStep),
+      createRelationship("parent", second.id, child.id, nextTick, 0.9, simulationStep),
+      createRelationship("caregiver", first.id, child.id, nextTick, 0.8, simulationStep),
+      createRelationship("caregiver", second.id, child.id, nextTick, 0.8, simulationStep),
+      ...siblings.map((sibling) => createRelationship("sibling", sibling.id, child.id, nextTick, 0.85, simulationStep)),
     ];
     for (const relationship of childRelationships) {
       relationshipMap.set(relationship.id, relationship);

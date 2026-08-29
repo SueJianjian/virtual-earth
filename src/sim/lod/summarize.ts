@@ -175,6 +175,7 @@ const cultureSummaryFor = (state: WorldState, regionId: RegionId, culture: Cultu
     memoryStrength: Math.max(0, Math.min(1, (culture.transmissionRate * 0.6) + Math.min(1, knowledge.length / 12) * 0.4)),
     innovationCount: knowledge.filter((item) => item.domain !== undefined).length,
     lastChangeTick: state.tick,
+    lastChangeTimelineStep: simulationStepForWorld(state),
   };
 };
 
@@ -207,6 +208,7 @@ const societySummaryFor = (
     conflictPressure: Math.min(1, conflictEvents / 12),
     infrastructureLevel: Math.min(1, activeFacilities.reduce((sum, facility) => sum + facility.level, 0) / 12),
     lastChangeTick: state.tick,
+    lastChangeTimelineStep: simulationStepForWorld(state),
   };
 };
 

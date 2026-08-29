@@ -21,6 +21,6 @@ export const focusRegion = (state: WorldState, regionId: RegionId): ObservationS
   const summary = state.lod.summaries.find((candidate) => candidate.regionId === regionId);
   return {
     focusRegionId: regionId,
-    projection: summary && summary.mode === "aggregate" ? projectRegion(summary, state.tick, 128, summary.versionStep) : projectMicroRegion(state, regionId),
+    projection: summary && summary.mode === "aggregate" ? projectRegion(summary, summary.version, 128, summary.versionStep) : projectMicroRegion(state, regionId),
   };
 };

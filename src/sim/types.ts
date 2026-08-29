@@ -628,6 +628,43 @@ export type ArchivedOrganizationSummary = {
   governance?: GovernanceState;
   diplomacy?: Record<string, DiplomaticStance>;
 };
+export type OrganizationDevelopmentSummary = {
+  id: OrganizationId;
+  type: OrganizationType;
+  eventCount: number;
+  memberCount: number;
+  peakMemberCount: number;
+  territoryCount: number;
+  peakTerritoryCount: number;
+  formationCount: number;
+  splitCount: number;
+  dissolutionCount: number;
+  conflictCount: number;
+  warCount: number;
+  migrationCount: number;
+  expansionCount: number;
+  territoryTransferCount: number;
+  allianceCount: number;
+  tradeCount: number;
+  tradeVolume: number;
+  tradeVolumeByResource: Record<string, number>;
+  facilityPlannedCount: number;
+  facilityConstructedCount: number;
+  facilityUpgradedCount: number;
+  facilityDamagedCount: number;
+  facilityMaintainedCount: number;
+  facilityAbandonedCount: number;
+  facilityRetiredCount: number;
+  milestoneIds: string[];
+  firstActivityTick: number;
+  firstActivityTimelineStep?: string;
+  firstActivityTimelineDays?: string;
+  firstActivityYears?: number;
+  latestActivityTick: number;
+  latestActivityTimelineStep?: string;
+  latestActivityTimelineDays?: string;
+  latestActivityYears?: number;
+};
 export type RegionLineageSummary = {
   descendantCount: number;
   generationDepth: number;
@@ -663,7 +700,9 @@ export type RegionCultureSummary = {
   transmissionRate: number;
   memoryStrength: number;
   innovationCount: number;
+  /** Exact timeline position of the last recorded cultural change. */
   lastChangeTick: number;
+  lastChangeTimelineStep?: string;
 };
 export type RegionSocietySummary = {
   organizationCounts: Record<OrganizationType, number>;
@@ -676,7 +715,9 @@ export type RegionSocietySummary = {
   tradeVolume: number;
   conflictPressure: number;
   infrastructureLevel: number;
+  /** Exact timeline position of the last recorded social change. */
   lastChangeTick: number;
+  lastChangeTimelineStep?: string;
 };
 export type RegionHealthSummary = {
   activePathogenIds: string[];
@@ -1211,6 +1252,7 @@ export type EventArchive = {
   archivedSpeciesSummaries: ArchivedSpeciesSummary[];
   archivedOrganizationCount: number;
   archivedOrganizationSummaries: ArchivedOrganizationSummary[];
+  organizationDevelopment: Record<string, OrganizationDevelopmentSummary>;
   milestones: EventMilestone[];
   strategicRoutes: StrategicRouteSummary[];
   historySamples: WorldHistorySample[];

@@ -23,16 +23,20 @@ const validResourceEntry = (entry: ResourceLedgerEntry): boolean =>
   && typeof entry.originEventId === "string"
   && (entry.holderId === undefined || typeof entry.holderId === "string");
 
-const holderExists = (state: WorldState, holderId: string): boolean => {
-  return state.agents.some((agent) => agent.id === holderId)
-    || state.organizations.some((organization) => organization.id === holderId)
-    || state.lod.summaries.some((summary) => summary.organizations.some((organization) => organization.id === holderId));
+const holderIdsFor = (state: WorldState): Set<string> => {
+  const holderIds = new Set<string>();
+  for (const agent of state.agents) holderIds.add(agent.id);
+  for (const organization of state.organizations) holderIds.add(organization.id);
+  return holderIds;
 };
 
 export const isEntityHolderId = (holderId: string): boolean =>
   holderId.startsWith("agent:")
   || holderId.startsWith("organization:")
   || holderId.startsWith("aggregate:organization:");
+
+const isOrganizationHolderId = (holderId: string): boolean =>
+  holderId.startsWith("organization:") || holderId.startsWith("aggregate:organization:");
 
 const resourcePriority = (entry: ResourceLedgerEntry): number =>
   (entry.holderId === undefined ? 2 : 1) * 1_000_000_000
@@ -58,23 +62,51 @@ const normalizedEntry = (entry: ResourceLedgerEntry): ResourceLedgerEntry | unde
 export const compactResourceRecords = (state: WorldState, options: { removeOrphanedHolders?: boolean } = {}): number => {
   const previousCount = state.resources.length;
   const removeOrphanedHolders = options.removeOrphanedHolders ?? true;
-  const byKey = new Map<string, ResourceLedgerEntry>();
+  const holderIds = removeOrphanedHolders ? holderIdsFor(state) : undefined;
+  const byOriginalKey = new Map<string, ResourceLedgerEntry>();
   for (const raw of state.resources) {
     const entry = normalizedEntry(raw);
-    if (!entry || (removeOrphanedHolders
-      && entry.holderId !== undefined
-      && isEntityHolderId(entry.holderId)
-      && !holderExists(state, entry.holderId))) continue;
+    if (!entry) continue;
     const key = entryKey(entry);
-    const existing = byKey.get(key);
+    const existing = byOriginalKey.get(key);
     if (!existing) {
-      byKey.set(key, entry);
+      byOriginalKey.set(key, entry);
       continue;
     }
     const cap = Math.max(existing.cap, entry.cap);
     existing.cap = cap;
     existing.amount = addCapped(existing.amount, entry.amount, cap);
     if (entry.originEventId.localeCompare(existing.originEventId) > 0) existing.originEventId = entry.originEventId;
+  }
+
+  const byKey = new Map<string, ResourceLedgerEntry>();
+  for (const entry of byOriginalKey.values()) {
+    const orphanedHolder = removeOrphanedHolders
+      && entry.holderId !== undefined
+      && isEntityHolderId(entry.holderId)
+      && !holderIds!.has(entry.holderId);
+    if (!orphanedHolder) {
+      byKey.set(entryKey(entry), entry);
+      continue;
+    }
+
+    // LOD summaries and archives describe former organizations; they are not
+    // authoritative accounts. Release their communal balance to the region.
+    // Personal accounts, such as a practitioner's attunement energy, expire
+    // with the individual instead of becoming public inventory.
+    if (!isOrganizationHolderId(entry.holderId!)) continue;
+    const released: ResourceLedgerEntry = { ...entry };
+    delete released.holderId;
+    const key = entryKey(released);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, released);
+      continue;
+    }
+    const cap = addCapped(existing.cap, released.cap, MAX_PERSISTENT_TOTAL);
+    existing.cap = cap;
+    existing.amount = addCapped(existing.amount, released.amount, cap);
+    if (released.originEventId.localeCompare(existing.originEventId) > 0) existing.originEventId = released.originEventId;
   }
 
   const candidates = [...byKey.values()]

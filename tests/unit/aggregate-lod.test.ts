@@ -6,6 +6,8 @@ import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import type { RegionId, WorldDelta, WorldState } from "../../src/sim/types.ts";
 import { MAX_KNOWLEDGE_PER_CULTURE } from "../../src/sim/culture/archive.ts";
 import { MAX_AGGREGATE_COUNTER, MAX_AGGREGATE_ORGANIZATIONS } from "../../src/sim/lod/index.ts";
+import { focusRegion } from "../../src/sim/lod/focus.ts";
+import { compareSimulationSteps } from "../../src/sim/time.ts";
 
 const region = "region:0:0" as RegionId;
 
@@ -43,6 +45,15 @@ const refreshAt = (state: WorldState, previous: WorldState["lod"]["summaries"][n
   stepped.tick = tick;
   stepped.years = tick;
   return refreshAggregateSummaryWithEvents(stepped, previous, stepped.populations);
+};
+
+const refreshAtTimelineStep = (state: WorldState, previous: WorldState["lod"]["summaries"][number], step: string) => {
+  const stepped = structuredClone(state);
+  stepped.tick = Number.MAX_SAFE_INTEGER;
+  stepped.simulationDays = Number.MAX_SAFE_INTEGER;
+  stepped.years = Number.MAX_SAFE_INTEGER / 365;
+  stepped.timeline = { step, days: (BigInt(step) * 365n).toString() };
+  return { state: stepped, refreshed: refreshAggregateSummaryWithEvents(stepped, previous, stepped.populations) };
 };
 
 describe("aggregate region evolution", () => {
@@ -163,5 +174,37 @@ describe("aggregate region evolution", () => {
     expect(resumed.cultureSummary).toBeDefined();
     expect(resumed.societySummary).toBeDefined();
     expect(resumed.cultureSummary?.knowledge.length).toBeLessThanOrEqual(MAX_KNOWLEDGE_PER_CULTURE);
+  });
+
+  it("keeps aggregate LOD revisions exact beyond the numeric clock limit", () => {
+    const state = aggregateWorld();
+    const firstStep = (BigInt(Number.MAX_SAFE_INTEGER) + 41n).toString();
+    state.tick = Number.MAX_SAFE_INTEGER;
+    state.simulationDays = Number.MAX_SAFE_INTEGER;
+    state.years = Number.MAX_SAFE_INTEGER / 365;
+    state.timeline = { step: firstStep, days: (BigInt(firstStep) * 365n).toString() };
+    const initial = summarizeRegionState(state, region, "aggregate");
+    const secondStep = (BigInt(firstStep) + 1n).toString();
+    const second = refreshAtTimelineStep(state, initial, secondStep);
+
+    expect(second.refreshed.summary.version).toBe(Number.MAX_SAFE_INTEGER);
+    expect(second.refreshed.summary.versionStep).toBe(secondStep);
+    expect(compareSimulationSteps(second.refreshed.summary.cultureSummary!.lastChangeTimelineStep!, String(Number.MAX_SAFE_INTEGER))).toBeGreaterThan(0);
+    expect(compareSimulationSteps(second.refreshed.summary.societySummary!.lastChangeTimelineStep!, String(Number.MAX_SAFE_INTEGER))).toBeGreaterThan(0);
+
+    const focused = focusRegion({ ...second.state, lod: { ...second.state.lod, summaries: [second.refreshed.summary] } }, region);
+    expect(focused.projection?.sourceRevision).toBe(Number.MAX_SAFE_INTEGER);
+    expect(focused.projection?.sourceRevisionStep).toBe(secondStep);
+
+    const restored = deserializeWorld(serializeWorld({ ...second.state, lod: { ...second.state.lod, summaries: [second.refreshed.summary] } }));
+    expect(restored.lod.summaries[0]?.versionStep).toBe(secondStep);
+    expect(restored.lod.summaries[0]?.cultureSummary?.lastChangeTimelineStep).toBe(second.refreshed.summary.cultureSummary?.lastChangeTimelineStep);
+    expect(restored.lod.summaries[0]?.societySummary?.lastChangeTimelineStep).toBe(second.refreshed.summary.societySummary?.lastChangeTimelineStep);
+
+    const thirdStep = (BigInt(secondStep) + 1n).toString();
+    const third = refreshAtTimelineStep(restored, restored.lod.summaries[0]!, thirdStep);
+    expect(third.refreshed.summary.versionStep).toBe(thirdStep);
+    expect(compareSimulationSteps(third.refreshed.summary.cultureSummary!.lastChangeTimelineStep!, second.refreshed.summary.cultureSummary!.lastChangeTimelineStep!)).toBeGreaterThanOrEqual(0);
+    expect(compareSimulationSteps(third.refreshed.summary.societySummary!.lastChangeTimelineStep!, second.refreshed.summary.societySummary!.lastChangeTimelineStep!)).toBeGreaterThanOrEqual(0);
   });
 });

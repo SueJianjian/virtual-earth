@@ -16,6 +16,8 @@ const emptyDelta = (): WorldDelta => ({
 });
 
 const agentsAfterDelta = (state: WorldState, delta: WorldDelta): WorldState["agents"] => {
+  const hasAgentEffect = delta.entityEffects.some((effect) => effect.collection === "agents");
+  if (!hasAgentEffect) return state.agents;
   const agents = new Map(state.agents.map((agent) => [agent.id, agent]));
   for (const effect of delta.entityEffects) {
     if (effect.collection !== "agents") continue;
@@ -42,7 +44,12 @@ const environmentForRegion = (state: WorldState, regionId: WorldState["cultures"
 export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): CultureDelta => {
   const delta = emptyDelta();
   const agents = agentsAfterDelta(state, agentsDelta);
-  const cultures = new Map(state.cultures.map((culture) => [culture.id, structuredClone(culture)]));
+  const cultures = new Map(state.cultures.map((culture) => [culture.id, {
+    ...culture,
+    knowledgeIds: [...culture.knowledgeIds],
+    beliefIds: [...culture.beliefIds],
+    ...(culture.identity ? { identity: structuredClone(culture.identity) } : {}),
+  }]));
   const culturesByRegion = new Map<string, WorldState["cultures"][number]>(state.cultures.map((culture) => [culture.regionId, cultures.get(culture.id)!]));
   const knowledgeById = new Map(state.knowledge.map((knowledge) => [knowledge.id, knowledge]));
   const newKnowledge = new Map<string, WorldState["knowledge"][number]>();
@@ -90,6 +97,7 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
         source: "natural",
       });
     }
+    const knowledgeBefore = culture.knowledgeIds.join("\0");
     const sourcesByKnowledgeKind = new Map<string, WorldState["agents"]>();
     for (const member of members) {
       for (const kind of knowledgeKindsFor(member)) {
@@ -125,6 +133,7 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
       if (!culture.knowledgeIds.includes(innovation.knowledge.id)) culture.knowledgeIds.push(innovation.knowledge.id);
     }
     culture.knowledgeIds = [...new Set(culture.knowledgeIds)].sort();
+    const knowledgeChanged = culture.knowledgeIds.join("\0") !== knowledgeBefore;
     const domains = culture.knowledgeIds
       .map((knowledgeId) => knowledgeById.get(knowledgeId)?.domain)
       .filter((domain): domain is NonNullable<typeof domain> => Boolean(domain));
@@ -132,6 +141,7 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
     const evolvedIdentity = evolveCultureIdentity(identity, `${state.seed}:${culture.id}`, state.tick, members, environmentForRegion(state, culture.regionId), domains, simulationStepForWorld(state));
     if (cultureIdentityChanged(identity, evolvedIdentity)) {
       culture.identity = evolvedIdentity;
+      changedCultureIds.add(culture.id);
       delta.eventDrafts.push({
         kind: "culture-evolution",
         ruleId: "culture:identity-adaptation",
@@ -150,8 +160,11 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
       });
     } else if (!culture.identity) {
       culture.identity = identity;
+      changedCultureIds.add(culture.id);
     }
-    changedCultureIds.add(culture.id);
+    if (knowledgeChanged || createdCultureIds.has(culture.id)) {
+      changedCultureIds.add(culture.id);
+    }
   }
 
   for (const route of knowledgeDiffusionRoutes(state)) {
@@ -175,8 +188,11 @@ export const stepCulture = (state: WorldState, agentsDelta: WorldDelta): Culture
   for (const agent of agents) {
     const culture = culturesByRegion.get(agent.regionId);
     if (!culture) continue;
-    const knowledgeIds = [...new Set([...agent.knowledgeIds, ...culture.knowledgeIds])].sort();
-    const memoryIds = [...new Set([...agent.memoryIds, ...culture.knowledgeIds])].sort();
+    const missingKnowledge = culture.knowledgeIds.some((id) => !agent.knowledgeIds.includes(id));
+    const missingMemory = culture.knowledgeIds.some((id) => !agent.memoryIds.includes(id));
+    if (!missingKnowledge && !missingMemory) continue;
+    const knowledgeIds = missingKnowledge ? [...new Set([...agent.knowledgeIds, ...culture.knowledgeIds])].sort() : agent.knowledgeIds;
+    const memoryIds = missingMemory ? [...new Set([...agent.memoryIds, ...culture.knowledgeIds])].sort() : agent.memoryIds;
     if (knowledgeIds.length !== agent.knowledgeIds.length || memoryIds.length !== agent.memoryIds.length) {
       delta.entityEffects.push({ collection: "agents", operation: "update", id: agent.id, value: { ...agent, knowledgeIds, memoryIds } });
     }

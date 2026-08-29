@@ -332,4 +332,28 @@ describe("emergent disease and public health", () => {
     expect(upgraded.pathogens).toEqual([]);
     expect(upgraded.agents.every((agent) => agent.health?.vitality === 1)).toBe(true);
   });
+
+  it("keeps same-step infections canonical before persistence", () => {
+    const { state, first, pathogen } = diseaseWorld();
+    const secondary = {
+      ...pathogen,
+      id: "pathogen:secondary",
+      regionalOutbreaks: pathogen.regionalOutbreaks.map((outbreak) => ({ ...outbreak })),
+    };
+    state.pathogens = [pathogen, secondary];
+    first.health = {
+      vitality: 0.8,
+      infections: [
+        { pathogenId: secondary.id, infectedTick: 12, infectedTimelineStep: "12", severity: 0.2 },
+        { pathogenId: pathogen.id, infectedTick: 12, infectedTimelineStep: "12", severity: 0.4 },
+      ],
+      immunityIds: [],
+    };
+
+    const agents = clonedAgents([first]);
+    stepAgentHealth(state, agents, 0);
+
+    expect(agents.get(first.id)?.health?.infections.map((infection) => infection.pathogenId))
+      .toEqual([pathogen.id, secondary.id].sort());
+  });
 });

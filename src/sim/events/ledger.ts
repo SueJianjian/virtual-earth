@@ -3,6 +3,7 @@ import { addPersistentTotal } from "../numeric.ts";
 import { compareSimulationSteps } from "../time.ts";
 import { MAX_ARCHIVED_SPECIES_SUMMARIES, retainArchivedSpeciesSummaries } from "../ecology/archive.ts";
 import { MAX_ARCHIVED_ORGANIZATION_SUMMARIES, retainArchivedOrganizationSummaries } from "../society/archive.ts";
+import { invalidateEventLookupCache } from "./index.ts";
 import type { EventArchive, EventMilestone, RegionId, StrategicRouteKind, StrategicRouteSummary, WorldEvent, WorldEventDraft, WorldHistorySample, WorldState } from "../types.ts";
 
 export const EVENT_LOG_RETAIN_COUNT = 4_096;
@@ -15,6 +16,8 @@ export const MAX_EVENT_MILESTONES = 512;
 export const MAX_MILESTONE_RELATED_IDS = 12;
 export const MAX_STRATEGIC_ROUTE_SUMMARIES = 256;
 export const MAX_HISTORY_SAMPLES = 256;
+
+const canonicalHistorySamples = new WeakSet<WorldHistorySample[]>();
 
 type HotTradeCache = {
   events: readonly WorldEvent[];
@@ -115,6 +118,7 @@ export const createEventArchive = (events: readonly WorldEvent[] = []): EventArc
     archivedSpeciesSummaries: [],
     archivedOrganizationCount: 0,
     archivedOrganizationSummaries: [],
+    organizationDevelopment: {},
     milestones: retainMilestones(events.filter(isMilestoneEvent).map(eventMilestoneFor)),
     strategicRoutes: [],
     historySamples: [],
@@ -256,10 +260,45 @@ export const retainHistorySamples = (input: readonly WorldHistorySample[]): Worl
   const unique = new Map<string, WorldHistorySample>();
   for (const sample of input) unique.set(sample.timelineStep, sample);
   const ordered = [...unique.values()].sort((left, right) => compareSimulationSteps(left.timelineStep, right.timelineStep));
-  if (ordered.length <= MAX_HISTORY_SAMPLES) return ordered;
-  const anchor = ordered[0]!;
-  const recent = ordered.slice(-(MAX_HISTORY_SAMPLES - 1));
-  return anchor.timelineStep === recent[0]?.timelineStep ? recent : [anchor, ...recent];
+  const retained = ordered.length <= MAX_HISTORY_SAMPLES
+    ? ordered
+    : (() => {
+      const anchor = ordered[0]!;
+      const recent = ordered.slice(-(MAX_HISTORY_SAMPLES - 1));
+      return anchor.timelineStep === recent[0]?.timelineStep ? recent : [anchor, ...recent];
+    })();
+  canonicalHistorySamples.add(retained);
+  return retained;
+};
+
+/**
+ * Annual samples normally arrive in timeline order. Keep that hot path
+ * allocation-free after the archive reaches capacity, while retaining the
+ * full normalizer for restored or externally reordered data.
+ */
+export const appendHistorySample = (samples: WorldHistorySample[], sample: WorldHistorySample): void => {
+  if (!canonicalHistorySamples.has(samples)) {
+    const retained = retainHistorySamples(samples);
+    samples.splice(0, samples.length, ...retained);
+    canonicalHistorySamples.add(samples);
+  }
+  const latest = samples.at(-1);
+  if (!latest) {
+    samples.push(sample);
+    return;
+  }
+  const order = compareSimulationSteps(sample.timelineStep, latest.timelineStep);
+  if (order > 0 && samples.length <= MAX_HISTORY_SAMPLES) {
+    if (samples.length === MAX_HISTORY_SAMPLES) samples.splice(1, 1);
+    samples.push(sample);
+    return;
+  }
+  if (order === 0 && samples.length <= MAX_HISTORY_SAMPLES) {
+    samples[samples.length - 1] = sample;
+    return;
+  }
+  const retained = retainHistorySamples([...samples, sample]);
+  samples.splice(0, samples.length, ...retained);
 };
 
 const strategicRouteKindFor = (event: WorldEvent): StrategicRouteKind | undefined => {
@@ -522,6 +561,7 @@ export const compactEventLedger = (state: WorldState): WorldEvent[] => {
   if (archived.length === 0) return [];
   archiveEvents(state, archived);
   state.events.splice(0, state.events.length, ...active, ...state.events.slice(splitAt));
+  invalidateEventLookupCache(state.events);
   return archived;
 };
 
@@ -537,6 +577,9 @@ export const compactEventArchiveIndexes = (state: WorldState): void => {
   state.eventArchive.milestones = retainMilestones(state.eventArchive.milestones ?? []);
   state.eventArchive.strategicRoutes = retainStrategicRoutes(state.eventArchive.strategicRoutes ?? []);
   state.eventArchive.historySamples = retainHistorySamples(state.eventArchive.historySamples ?? []);
+  // Organization development is bounded on every write and restore. Repeating
+  // the same archive-wide ordering here made routine event compaction scale
+  // with all historical organizations.
   if (state.eventArchive.archivedSpeciesSummaries.length > MAX_ARCHIVED_SPECIES_SUMMARIES) {
     state.eventArchive.archivedSpeciesSummaries = retainArchivedSpeciesSummaries(state.eventArchive.archivedSpeciesSummaries);
   }
@@ -555,7 +598,17 @@ export const appendEventsInPlace = (
 ): WorldEvent[] => {
   if (drafts.length === 0) return [];
   const emitted: WorldEvent[] = [];
-  const known = new Set(existing.filter((event) => event.tick === tick).map((event) => event.id));
+  const currentStep = timelineStep ?? String(tick);
+  const known = new Set<string>();
+  // The ledger is chronological. Only events at this exact simulation step
+  // can share a generated ID, so avoid scanning all retained events once the
+  // compatibility tick has saturated in very remote eras.
+  for (let index = existing.length - 1; index >= 0; index -= 1) {
+    const event = existing[index]!;
+    const order = compareSimulationSteps(event.timelineStep ?? String(event.tick), currentStep);
+    if (order < 0) break;
+    if (order === 0) known.add(event.id);
+  }
   drafts.forEach((draft, index) => {
     const event = materializeEvent(draft, tick, index, years, timelineStep, timelineDays);
     if (known.has(event.id)) return;
@@ -588,7 +641,10 @@ export const appendExternalEventsInPlace = (
     emitted.push(normalized);
   }
   const lastExisting = existing[existing.length - emitted.length - 1];
-  if (lastExisting && emitted.some((event) => compareEvents(lastExisting, event) > 0)) existing.sort(compareEvents);
+  if (lastExisting && emitted.some((event) => compareEvents(lastExisting, event) > 0)) {
+    existing.sort(compareEvents);
+    invalidateEventLookupCache(existing);
+  }
   return emitted;
 };
 

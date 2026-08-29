@@ -10,11 +10,49 @@ import { createWorld } from "../../src/sim/world.ts";
 import { lineageForSnapshot, renderInspector } from "../../src/ui/inspector.ts";
 import { createEventArchive } from "../../src/sim/events/ledger.ts";
 import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
-import type { ArchivedSpeciesSummary, RegionCultureSummary, RegionId, RegionSocietySummary } from "../../src/sim/types.ts";
+import type { ArchivedSpeciesSummary, OrganizationDevelopmentSummary, OrganizationType, RegionCultureSummary, RegionId, RegionSocietySummary } from "../../src/sim/types.ts";
 import type { WorldSnapshot } from "../../src/worker/protocol.ts";
 import { derivePathogen } from "../../src/sim/health/disease.ts";
 
 const region = "region:0:0" as RegionId;
+
+const organizationDevelopmentSummary = (id: string, type: OrganizationType): OrganizationDevelopmentSummary => ({
+  id: id as OrganizationDevelopmentSummary["id"],
+  type,
+  eventCount: 31,
+  memberCount: 42,
+  peakMemberCount: 120,
+  territoryCount: 3,
+  peakTerritoryCount: 7,
+  formationCount: 1,
+  splitCount: 2,
+  dissolutionCount: 0,
+  conflictCount: 5,
+  warCount: 2,
+  migrationCount: 4,
+  expansionCount: 6,
+  territoryTransferCount: 1,
+  allianceCount: 3,
+  tradeCount: 8,
+  tradeVolume: 56.5,
+  tradeVolumeByResource: { food: 14.5, energy: 42 },
+  facilityPlannedCount: 4,
+  facilityConstructedCount: 3,
+  facilityUpgradedCount: 2,
+  facilityDamagedCount: 1,
+  facilityMaintainedCount: 7,
+  facilityAbandonedCount: 1,
+  facilityRetiredCount: 0,
+  milestoneIds: ["event:organization-development"],
+  firstActivityTick: 2,
+  firstActivityTimelineStep: "2",
+  firstActivityTimelineDays: "730",
+  firstActivityYears: 2,
+  latestActivityTick: 40,
+  latestActivityTimelineStep: "40",
+  latestActivityTimelineDays: "14600",
+  latestActivityYears: 40,
+});
 
 const lineageSnapshot = (): WorldSnapshot => {
   const state = createWorld(140, { width: 8, height: 8, formation: "formed" });
@@ -435,6 +473,23 @@ describe("region lineage inspector", () => {
       lastTick: 12,
       lastTimelineDays: "12",
     }];
+    snapshot.eventArchive.organizationDevelopment[stateOrganization.id] = organizationDevelopmentSummary(stateOrganization.id, "state");
+    snapshot.eventArchive.milestones = [{
+      id: "event:organization-development",
+      tick: 40,
+      timelineStep: "40",
+      timelineDays: "14600",
+      years: 40,
+      kind: "territory-expansion",
+      ruleId: "society:territory-expansion",
+      source: "natural",
+      sourceIds: [stateOrganization.id],
+      regionIds: [region],
+      organizationIds: [stateOrganization.id],
+      probability: 0.4,
+      roll: 0.2,
+      details: { result: "secured" },
+    }];
     snapshot.recentRegionEvents = [{
       id: "event:state-history",
       tick: 11,
@@ -502,6 +557,11 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("累计 1.5 单位");
     expect(element.innerHTML).toContain("归档 2 批");
     expect(element.innerHTML).toContain("长期战略路线");
+    expect(element.innerHTML).toContain("长期发展档案");
+    expect(element.innerHTML).toContain("42 / 120 人");
+    expect(element.innerHTML).toContain("56.5 单位");
+    expect(element.innerHTML).toContain("规划 4 · 建成 3 · 升级 2");
+    expect(element.innerHTML).toContain("疆域扩张");
     expect(element.innerHTML).toContain('data-strategic-route-kind="migration"');
     expect(element.innerHTML).toContain("跨区域战争");
     expect(element.innerHTML).toContain("结果 repelled");
@@ -588,6 +648,23 @@ describe("region lineage inspector", () => {
     const state = createWorld(141, { width: 8, height: 8, formation: "formed" });
     archiveOrganizationRecords(state, [organization], "lifecycle");
     snapshot.eventArchive = state.eventArchive;
+    snapshot.eventArchive.organizationDevelopment[organization.id] = organizationDevelopmentSummary(organization.id, "city");
+    snapshot.eventArchive.milestones = [{
+      id: "event:organization-development",
+      tick: 40,
+      timelineStep: "40",
+      timelineDays: "14600",
+      years: 40,
+      kind: "organization-trade",
+      ruleId: "society:organization-trade",
+      source: "natural",
+      sourceIds: [organization.id],
+      regionIds: [region],
+      organizationIds: [organization.id],
+      probability: 0.5,
+      roll: 0.1,
+      details: { resourceId: "food", amount: 14.5 },
+    }];
     const element = { innerHTML: "" } as HTMLElement;
 
     renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "city", id: organization.id });
@@ -597,6 +674,8 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("生命周期结束归档");
     expect(element.innerHTML).toContain("已解体");
     expect(element.innerHTML).toContain("8 食物单位");
+    expect(element.innerHTML).toContain("长期发展档案");
+    expect(element.innerHTML).toContain("食物贸易 · 14.5 单位");
   });
 
   it("renders a culture report with its origin, values, and inherited traditions", () => {
@@ -641,6 +720,7 @@ describe("region lineage inspector", () => {
       memoryStrength: 0.68,
       innovationCount: 3,
       lastChangeTick: 24,
+      lastChangeTimelineStep: "9007199254740992",
     };
     const societySummary: RegionSocietySummary = {
       organizationCounts: { family: 8, clan: 2, tribe: 1, settlement: 1, city: 1, state: 0, federation: 0, empire: 0 },
@@ -654,6 +734,7 @@ describe("region lineage inspector", () => {
       conflictPressure: 0.12,
       infrastructureLevel: 0.48,
       lastChangeTick: 24,
+      lastChangeTimelineStep: "9007199254740992",
     };
     snapshot.focusRegionId = region;
     snapshot.cultures = [];
@@ -671,6 +752,7 @@ describe("region lineage inspector", () => {
     const selection = { x: 0, y: 0, index: 0, regionId: region };
 
     renderInspector(element, snapshot, selection);
+    expect(element.innerHTML).toContain("9007199254740992");
     expect(element.innerHTML).toContain("社会演化");
     expect(element.innerHTML).toContain("生态总量");
     expect(element.innerHTML).toContain("社会人口");
@@ -783,9 +865,13 @@ describe("region lineage inspector", () => {
       workforceEfficiency: 1,
       materialInvested: 4,
       plannedTick: 1,
+      plannedTimelineStep: "9007199254740993",
       builtTick: 2,
+      builtTimelineStep: "9007199254740994",
       lastMaintainedTick: 3,
+      lastMaintainedTimelineStep: "9007199254740995",
       lastIncidentTick: 3,
+      lastIncidentTimelineStep: "9007199254740996",
     }];
     const pathogen = { ...derivePathogen(createWorld(9_003, { width: 8, height: 8, formation: "formed" }), region, species.id), id: "pathogen:history" };
     snapshot.pathogens = [pathogen];
@@ -872,6 +958,12 @@ describe("region lineage inspector", () => {
       expect(element.innerHTML).toContain(`data-history-level="${level}"`);
       expect(element.innerHTML).toContain(`data-history-id="${id}"`);
     }
+    renderInspector(element, snapshot, selection, { level: "facility", id: "facility:history" });
+    expect(element.innerHTML).toContain("9,007,199,254,740,994");
+    expect(element.innerHTML).toContain("9,007,199,254,740,995");
+    expect(element.innerHTML).toContain("9,007,199,254,740,996");
+    renderInspector(element, snapshot, selection, { level: "family", id: family.id });
+    expect(element.innerHTML).toContain("9,007,199,254,740,994");
     renderInspector(element, snapshot, selection, { level: "substance", id: "substance:history" });
     expect(element.innerHTML).toContain("历史档案");
     expect(element.innerHTML).toContain("24,677,258,232,167 年 38 天");

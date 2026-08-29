@@ -1,7 +1,7 @@
 import type { DiplomaticStance, FacilityState, OrganizationState, OrganizationType, RegionId, ResourceTransaction, WorldDelta, WorldState } from "../types.ts";
 import { facilityEffectProfilesForState } from "./facilities.ts";
 import { diplomacyForOrganization } from "./organization.ts";
-import { neighboringRegionIds } from "./territory.ts";
+import { neighboringRegionIdsCached } from "./territory.ts";
 import { simulationStepForWorld } from "../time.ts";
 
 export type SupplyResourceId = "food" | "materials" | "energy";
@@ -74,13 +74,32 @@ export const supplyTargetFor = (
 
 type SupplyRouteCandidate = { organizationId: OrganizationState["id"]; direct: boolean; stance: DiplomaticStance };
 
+type SupplyTargets = ReadonlyMap<SupplyResourceId, ReadonlyMap<OrganizationState["id"], number>>;
+
+const supplyTargetsFor = (
+  state: WorldState,
+  organizations: readonly OrganizationState[],
+  facilitiesByOwner: ReadonlyMap<OrganizationState["id"], FacilityState[]>,
+): SupplyTargets => new Map(
+  supplyResources.map((resource) => [
+    resource.id,
+    new Map(organizations.map((organization) => [
+      organization.id,
+      supplyTargetFor(state, organization, resource.id, facilitiesByOwner),
+    ])),
+  ]),
+);
+
 const routeCandidatesFor = (state: WorldState, organizations: OrganizationState[]): ReadonlyMap<string, SupplyRouteCandidate[]> => {
   const width = state.fields.elevation.width;
   const height = state.fields.elevation.height;
   const organizationsById = new Map(organizations.map((organization) => [organization.id, organization]));
-  const territory = (organization: OrganizationState): RegionId[] => organization.territoryRegionIds.length > 0
-    ? organization.territoryRegionIds
-    : [organization.regionId];
+  const territoriesByOrganizationId = new Map(organizations.map((organization) => [
+    organization.id,
+    organization.territoryRegionIds.length > 0 ? organization.territoryRegionIds : [organization.regionId],
+  ]));
+  const territory = (organization: OrganizationState): RegionId[] =>
+    territoriesByOrganizationId.get(organization.id) ?? [organization.regionId];
   const organizationsByRegion = new Map<RegionId, Set<OrganizationState["id"]>>();
   for (const organization of organizations) {
     for (const regionId of territory(organization)) {
@@ -105,7 +124,7 @@ const routeCandidatesFor = (state: WorldState, organizations: OrganizationState[
   const result = new Map<OrganizationState["id"], SupplyRouteCandidate[]>();
   for (const destination of organizations) {
     const candidates = new Map<OrganizationState["id"], SupplyRouteCandidate>();
-    const nearbyRegions = new Set(territory(destination).flatMap((regionId) => [regionId, ...neighboringRegionIds(regionId, width, height)]));
+    const nearbyRegions = new Set(territory(destination).flatMap((regionId) => [regionId, ...neighboringRegionIdsCached(regionId, width, height)]));
     for (const regionId of nearbyRegions) {
       for (const organizationId of organizationsByRegion.get(regionId) ?? []) {
         if (organizationId === destination.id) continue;
@@ -154,10 +173,11 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
     facilities.push(facility);
     facilitiesByOwner.set(facility.ownerOrganizationId, facilities);
   }
+  const targetsByResource = supplyTargetsFor(state, organizations, facilitiesByOwner);
   const relationsRecorded = new Set<string>();
 
   for (const resource of supplyResources) {
-    const targets = new Map(organizations.map((organization) => [organization.id, supplyTargetFor(state, organization, resource.id, facilitiesByOwner)]));
+    const targets = targetsByResource.get(resource.id) ?? new Map<OrganizationState["id"], number>();
     const balanceFor = (organization: OrganizationState): number => balances.get(balanceKey(resource.id, organization.regionId, organization.id)) ?? 0;
     const destinations = organizations
       .map((organization) => ({ organization, shortage: (targets.get(organization.id) ?? 0) - balanceFor(organization) }))
@@ -256,7 +276,7 @@ export const stepSupplyChains = (state: WorldState, priorTransactions: ResourceT
 
   for (const organization of organizations) {
     const available = balances.get(balanceKey("energy", organization.regionId, organization.id)) ?? 0;
-    const target = supplyTargetFor(state, organization, "energy", facilitiesByOwner);
+    const target = targetsByResource.get("energy")?.get(organization.id) ?? 0.1;
     const amount = Math.min(available, rounded(target * 0.18));
     if (amount <= 0.001) continue;
     delta.resourceTransactions.push({
