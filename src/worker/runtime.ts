@@ -12,6 +12,7 @@ import { eventOrganizationIds, eventRegionIds, strategicRouteForEvent } from "..
 import { diseasePrevalenceForRegion } from "../sim/health/disease.ts";
 import { addPersistentTotal } from "../sim/numeric.ts";
 import { substanceReserveRatio } from "../sim/environment/substances.ts";
+import { RuntimePerformanceTracker } from "./performance.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
 const cloneChemistry = (chemistry: WorldState["chemistry"]): WorldState["chemistry"] => structuredClone(chemistry);
@@ -583,6 +584,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
   let lastStepMs = 0;
   let averageStepMs = 0;
   let peakStepMs = 0;
+  const performanceTracker = new RuntimePerformanceTracker();
   let stepsSinceAutosave = 0;
   const recordStepDuration = (durationMs: number): void => {
     const duration = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
@@ -590,20 +592,29 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
     lastStepMs = duration;
     averageStepMs = measuredSteps === 1 ? duration : averageStepMs * 0.98 + duration * 0.02;
     peakStepMs = Math.max(peakStepMs, duration);
+    performanceTracker.record(duration);
   };
   const resetStepDiagnostics = (): void => {
     measuredSteps = 0;
     lastStepMs = 0;
     averageStepMs = 0;
     peakStepMs = 0;
+    performanceTracker.reset();
   };
   const runtimeDiagnostics = (): RuntimeDiagnostics => {
     const rounded = (value: number): number => Number(value.toFixed(3));
+    const recent = performanceTracker.diagnostics();
     return {
       measuredSteps,
       lastStepMs: rounded(lastStepMs),
       averageStepMs: rounded(averageStepMs),
       peakStepMs: rounded(peakStepMs),
+      recentWindowSteps: recent.recentWindowSteps,
+      recentAverageStepMs: rounded(recent.recentAverageStepMs),
+      recentP95StepMs: rounded(recent.recentP95StepMs),
+      recentSlowStepCount: recent.recentSlowStepCount,
+      baselineStepMs: rounded(recent.baselineStepMs),
+      recentStepCostRatio: rounded(recent.recentStepCostRatio),
       hotEventCount: state.events.length,
       archivedEventCount: state.eventArchive.archivedEventCount,
       milestoneCount: state.eventArchive.milestones.length,

@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { AUTOSAVE_INTERVAL_STEPS, createSimulationRuntime, MAX_SCENE_STRATEGIC_LINKS, RECENT_REGION_EVENT_LIMIT } from "../../src/worker/runtime.ts";
+import { RUNTIME_PERFORMANCE_WINDOW_STEPS } from "../../src/worker/performance.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
 import { clearSimulationStages, registerSimulationStage } from "../../src/sim/engine.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
@@ -40,7 +41,18 @@ describe("simulation worker runtime", () => {
 
     expect(snapshot?.type).toBe("snapshot");
     if (snapshot?.type !== "snapshot") return;
-    expect(snapshot.snapshot.runtime).toMatchObject({ measuredSteps: 2, hotEventCount: expect.any(Number), archivedEventCount: expect.any(Number), milestoneCount: expect.any(Number) });
+    expect(snapshot.snapshot.runtime).toMatchObject({
+      measuredSteps: 2,
+      recentWindowSteps: 2,
+      recentAverageStepMs: expect.any(Number),
+      recentP95StepMs: expect.any(Number),
+      recentSlowStepCount: expect.any(Number),
+      baselineStepMs: 0,
+      recentStepCostRatio: 1,
+      hotEventCount: expect.any(Number),
+      archivedEventCount: expect.any(Number),
+      milestoneCount: expect.any(Number),
+    });
     expect(snapshot.snapshot.runtime?.lastStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.averageStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.peakStepMs).toBeGreaterThanOrEqual(snapshot.snapshot.runtime?.lastStepMs ?? 0);
@@ -50,6 +62,23 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.atmosphere?.precipitation.values).toHaveLength(64);
     expect(snapshot.snapshot.ocean?.seaTemperature.values).toHaveLength(64);
     expect(snapshot.snapshot.ocean?.seaIce.values).toHaveLength(64);
+  });
+
+  it("keeps long-running timing diagnostics bounded by a fixed recent window", () => {
+    const runtime = createSimulationRuntime(createWorld(156, { width: 8, height: 8 }));
+    const messages = runtime.dispatch({ type: "step", count: RUNTIME_PERFORMANCE_WINDOW_STEPS + 3 });
+    const snapshot = messages.find((message) => message.type === "snapshot");
+
+    expect(snapshot?.type).toBe("snapshot");
+    if (snapshot?.type !== "snapshot") return;
+    expect(snapshot.snapshot.runtime).toMatchObject({
+      measuredSteps: RUNTIME_PERFORMANCE_WINDOW_STEPS + 3,
+      recentWindowSteps: RUNTIME_PERFORMANCE_WINDOW_STEPS,
+      baselineStepMs: expect.any(Number),
+      recentStepCostRatio: expect.any(Number),
+    });
+    expect(snapshot.snapshot.runtime?.baselineStepMs).toBeGreaterThanOrEqual(0);
+    expect(snapshot.snapshot.runtime?.recentStepCostRatio).toBeGreaterThanOrEqual(0);
   });
 
   it("exposes bounded annual history samples through worker snapshots", () => {

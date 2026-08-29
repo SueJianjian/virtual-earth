@@ -159,6 +159,11 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
         ${metric("最近一步", { value: formatNumber(runtime.lastStepMs, 2), unit: "毫秒" })}
         ${metric("平均耗时", { value: formatNumber(runtime.averageStepMs, 2), unit: "毫秒" })}
         ${metric("峰值耗时", { value: formatNumber(runtime.peakStepMs, 2), unit: "毫秒" })}
+        ${metric("近期窗口", formatCount(runtime.recentWindowSteps, "步"), "最多 120 步")}
+        ${metric("近期均值", { value: formatNumber(runtime.recentAverageStepMs, 2), unit: "毫秒" })}
+        ${metric("近期 P95", { value: formatNumber(runtime.recentP95StepMs, 2), unit: "毫秒" })}
+        ${metric("性能倍率", { value: formatNumber(runtime.recentStepCostRatio, 2), unit: "x" }, "相对完整窗口基线")}
+        ${metric("近期慢步", formatCount(runtime.recentSlowStepCount, "步"), "超过基线两倍")}
         ${metric("当前热事件", formatCount(runtime.hotEventCount, "条"), "保留窗口")}
         ${metric("历史归档", formatCount(runtime.archivedEventCount, "条"), "累计事件")}
         ${metric("关键里程碑", formatCount(runtime.milestoneCount, "条"), "有界档案")}

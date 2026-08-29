@@ -17,6 +17,14 @@ export type RuntimeDiagnostics = {
   lastStepMs: number;
   averageStepMs: number;
   peakStepMs: number;
+  /** Number of timing samples retained from the most recent fixed-size window. */
+  recentWindowSteps: number;
+  recentAverageStepMs: number;
+  recentP95StepMs: number;
+  recentSlowStepCount: number;
+  /** First complete timing window after reset or load, used only for comparison. */
+  baselineStepMs: number;
+  recentStepCostRatio: number;
   hotEventCount: number;
   archivedEventCount: number;
   milestoneCount: number;
