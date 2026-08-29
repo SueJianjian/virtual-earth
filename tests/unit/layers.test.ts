@@ -5,6 +5,29 @@ import type { WorldSnapshot } from "../../src/worker/protocol.ts";
 import { createCultureIdentity } from "../../src/sim/culture/identity.ts";
 
 describe("food security map layer", () => {
+  it("renders distinct plates and highlights stressed boundaries", () => {
+    const world = createWorld(200, { width: 8, height: 8, formation: "formed" });
+    world.tectonics.plateIndex.values[0] = 0;
+    world.tectonics.plateIndex.values[1] = 1;
+    world.tectonics.plateIndex.values[2] = 0;
+    world.tectonics.boundaryStress.values[0] = 0;
+    world.tectonics.boundaryStress.values[2] = 1;
+    const snapshot: WorldSnapshot = {
+      seed: world.seed,
+      tick: 0,
+      years: 0,
+      formation: world.formation,
+      tectonics: world.tectonics,
+      digest: "",
+      fields: world.fields,
+      chemistry: world.chemistry,
+      metrics: {},
+    };
+
+    expect(colorForCell(snapshot, 0, "tectonics")).not.toEqual(colorForCell(snapshot, 1, "tectonics"));
+    expect(colorForCell(snapshot, 0, "tectonics")).not.toEqual(colorForCell(snapshot, 2, "tectonics"));
+  });
+
   it("uses regional security rather than a global value", () => {
     const world = createWorld(201, { width: 2, height: 1 });
     const snapshot: WorldSnapshot = {

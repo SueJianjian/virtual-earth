@@ -6,6 +6,7 @@ import { societyStage } from "../../src/sim/society/index.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
 import type { WorldDelta } from "../../src/sim/types.ts";
 import { createWorld } from "../../src/sim/world.ts";
+import { naturalHazardDelta } from "../../src/sim/environment/hazards.ts";
 
 const emptyDelta = (): WorldDelta => ({
   fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [],
@@ -13,6 +14,26 @@ const emptyDelta = (): WorldDelta => ({
 });
 
 describe("natural hazard society bridge", () => {
+  it("derives geological hazards from authoritative plate evidence", () => {
+    const state = createWorld(990, { width: 8, height: 8, formation: "formed" });
+    state.fields.elevation.values.fill(0.5);
+    state.fields.temperature.values.fill(0.5);
+    state.fields.humidity.values.fill(0.5);
+    state.fields.water.values.fill(0.5);
+    state.tectonics.plateIndex.values.set(Array.from({ length: 64 }, (_, index) => index % 2));
+    state.tectonics.boundaryStress.values.fill(1);
+    state.tectonics.boundaryActivity.values.fill(0.8);
+
+    const result = naturalHazardDelta(state, 1_000_000);
+    const geological = result.delta.eventDrafts.filter((event) => event.kind === "volcano" || event.kind === "earthquake");
+
+    expect(geological.length).toBeGreaterThan(0);
+    expect(geological.every((event) => event.sourceIds.length === 2
+      && typeof event.evidence.plateId === "string"
+      && typeof event.evidence.peerPlateId === "string"
+      && event.evidence.boundaryType === "convergent")).toBe(true);
+  });
+
   it("emits environmental hazards through the authoritative world step", () => {
     const state = createWorld(992, { width: 8, height: 8, formation: "formed" });
     state.fields.elevation.values.fill(0.02);
@@ -25,6 +46,7 @@ describe("natural hazard society bridge", () => {
 
     expect(floods.length).toBeGreaterThan(0);
     expect(floods.every((event) => event.source === "natural" && event.ruleId === "environment:natural-flood")).toBe(true);
+    expect(floods.every((event) => event.sourceIds.length === 0)).toBe(true);
     expect(result.state.fields.water.values.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)).toBe(true);
   });
 

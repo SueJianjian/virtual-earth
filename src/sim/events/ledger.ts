@@ -26,7 +26,7 @@ type HotTradeCache = {
 const hotTradeCache = new WeakMap<EventArchive, HotTradeCache>();
 
 const MILESTONE_KINDS = new Set([
-  "protoplanetary-dust", "planetesimal-formation", "planetary-accretion", "core-differentiation", "planetary-cooling", "planet-formation-complete", "ocean-formation", "prebiotic-chemistry",
+  "protoplanetary-dust", "planetesimal-formation", "planetary-accretion", "core-differentiation", "planetary-cooling", "planet-formation-complete", "tectonic-plates-established", "tectonic-boundary-shift", "ocean-formation", "prebiotic-chemistry",
   "abiogenesis", "species-emergence", "species-divergence", "family-formation", "organization-formation", "organization-split", "organization-conflict", "organization-dissolved",
   "population-migration", "population-dispersal", "organization-migration", "territory-expansion", "territory-transfer", "war-displacement", "border-conflict", "organization-war", "diplomatic-alliance",
   "substance-formation", "substance-discovery", "substance-engineering", "substance-depletion", "knowledge-innovation", "culture-emergence", "worldview-entity-dormant", "worldview-entity-revived",
@@ -36,7 +36,7 @@ const MILESTONE_KINDS = new Set([
 ]);
 const MILESTONE_DETAIL_KEYS = [
   "regionId", "fromRegion", "toRegion", "originRegionId", "organizationId", "fromOrganizationId", "toOrganizationId", "leftOrganizationId", "rightOrganizationId",
-  "ownerOrganizationId", "winnerOrganizationId", "loserOrganizationId", "familyId", "pathogenId", "hostSpeciesId", "speciesId", "substanceId", "name", "type", "result", "outcome", "resourceId", "amount", "intensity", "prevalence", "severity", "generation", "mutationCount", "parentDivergence", "lineageSignature", "route", "reason", "foodSecurity", "pressure", "currentHabitat", "destinationHabitat", "movedMemberCount", "movedPopulationCount", "carriedResourceAmount", "abandonedTerritoryCount", "practiceOrigin", "remainingReserve", "reserveRatio", "purpose", "extractedTotal",
+  "ownerOrganizationId", "winnerOrganizationId", "loserOrganizationId", "familyId", "pathogenId", "hostSpeciesId", "speciesId", "substanceId", "plateId", "peerPlateId", "boundaryType", "stress", "activity", "plateCount", "name", "type", "result", "outcome", "resourceId", "amount", "intensity", "prevalence", "severity", "generation", "mutationCount", "parentDivergence", "lineageSignature", "route", "reason", "foodSecurity", "pressure", "currentHabitat", "destinationHabitat", "movedMemberCount", "movedPopulationCount", "carriedResourceAmount", "abandonedTerritoryCount", "practiceOrigin", "remainingReserve", "reserveRatio", "purpose", "extractedTotal",
 ];
 
 const stableValue = (value: unknown): unknown => {

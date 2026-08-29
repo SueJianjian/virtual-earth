@@ -14,6 +14,7 @@ import { MAX_FACILITIES_PER_REGION } from "../src/sim/society/facilities.ts";
 import { HERITABLE_AGENT_TRAITS, validAgentGenetics } from "../src/sim/agents/genetics.ts";
 import { ACTIVE_ADAPTIVE_SPECIES_LIMITS } from "../src/sim/ecology/species.ts";
 import { isEntityHolderId } from "../src/sim/resources.ts";
+import { isTectonicState, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES } from "../src/sim/environment/geology.ts";
 
 const requestedScenario = process.argv[4] ?? process.env.BENCHMARK_SCENARIO ?? "autonomous";
 const scenario = requestedScenario === "dense" ? "dense" : "autonomous";
@@ -97,6 +98,7 @@ if (scenario === "dense" && (warmupWidth !== width || warmupHeight !== height)) 
   state = {
     ...state,
     formation: expanded.formation,
+    tectonics: expanded.tectonics,
     fields: expanded.fields,
     chemistry: expanded.chemistry,
   };
@@ -110,6 +112,7 @@ type CollectionCounts = {
   events: number;
   milestones: number;
   strategicRoutes: number;
+  tectonicPlates: number;
   populations: number;
   agents: number;
   relationships: number;
@@ -129,6 +132,7 @@ const collectionCounts = (): CollectionCounts => ({
   events: state.events.length,
   milestones: state.eventArchive.milestones.length,
   strategicRoutes: state.eventArchive.strategicRoutes.length,
+  tectonicPlates: state.tectonics.plates.length,
   populations: state.populations.length,
   agents: state.agents.length,
   relationships: state.relationships.length,
@@ -243,6 +247,9 @@ const archiveCounters = [
 ];
 const health = {
   finite: isFiniteWorld(state),
+  tectonicsHealthy: isTectonicState(state.tectonics, width, height)
+    && state.tectonics.plates.length >= MIN_TECTONIC_PLATES
+    && state.tectonics.plates.length <= MAX_TECTONIC_PLATES,
   finiteArchiveCounters: archiveCounters.every((value) => Number.isFinite(value) && value >= 0),
   eventLogBounded: state.events.length <= EVENT_LOG_MAX_COUNT,
   milestoneArchiveBounded: state.eventArchive.milestones.length <= MAX_EVENT_MILESTONES,
@@ -382,6 +389,7 @@ console.log(JSON.stringify({
   events: state.events.length,
   milestones: state.eventArchive.milestones.length,
   strategicRoutes: state.eventArchive.strategicRoutes.length,
+  tectonicPlates: state.tectonics.plates.length,
   archivedEvents: state.eventArchive.archivedEventCount,
   archivedSpecies: state.eventArchive.archivedSpeciesCount,
   archivedKnowledge: state.eventArchive.archivedKnowledgeCount,

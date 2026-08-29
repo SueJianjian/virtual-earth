@@ -44,6 +44,8 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.runtime?.lastStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.averageStepMs).toBeGreaterThanOrEqual(0);
     expect(snapshot.snapshot.runtime?.peakStepMs).toBeGreaterThanOrEqual(snapshot.snapshot.runtime?.lastStepMs ?? 0);
+    expect(snapshot.snapshot.tectonics?.plates).toHaveLength(runtime.getState().tectonics.plates.length);
+    expect(snapshot.snapshot.tectonics?.plateIndex.values).toHaveLength(64);
   });
 
   it("exposes bounded annual history samples through worker snapshots", () => {

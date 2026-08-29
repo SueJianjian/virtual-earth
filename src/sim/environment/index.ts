@@ -2,7 +2,7 @@ import { calculateChemistry, calculateChemistryPatches, projectChemistry } from 
 import { calculateClimate } from "./climate.ts";
 import { simulateWater } from "./hydrology.ts";
 import { initializeTerrainWater } from "./terrain.ts";
-import { calculateGeology } from "./geology.ts";
+import { stepTectonics } from "./geology.ts";
 import { stepPlanetFormation } from "./formation.ts";
 import { stepSubstances } from "./substances.ts";
 import { applyNaturalHazardWaterEffects, naturalHazardDelta } from "./hazards.ts";
@@ -179,7 +179,11 @@ export const stepEnvironment = (
       nutrients: { ...state.fields.nutrients, values: nutrientValues },
     },
   } as WorldState;
-  const hazardResult = naturalHazardDelta(workingState, elapsedYears);
+  const tectonicResult = stepTectonics(workingState, elapsedYears, input.timelineStep);
+  const geologyState = tectonicResult.tectonics
+    ? { ...workingState, tectonics: tectonicResult.tectonics } as WorldState
+    : workingState;
+  const hazardResult = naturalHazardDelta(geologyState, elapsedYears);
   const water = applyNaturalHazardWaterEffects(
     workingState,
     simulateWater(workingState, activeEvents, elapsedYears),
@@ -218,6 +222,9 @@ export const stepEnvironment = (
   appendItems(delta.fieldChanges, hazardResult.delta.fieldChanges);
   appendItems(delta.chemistryChanges, hazardResult.delta.chemistryChanges);
   appendItems(delta.eventDrafts, hazardResult.delta.eventDrafts);
+  appendItems(delta.fieldChanges, tectonicResult.fieldChanges);
+  appendItems(delta.eventDrafts, tectonicResult.eventDrafts);
+  if (tectonicResult.tectonics) delta.tectonicEffect = tectonicResult.tectonics;
   const technologyByRegion = technologyProfilesForState(state);
   const technologyCells = [...technologyByRegion.entries()]
     .filter(([, technology]) => technology.energy > 0)
@@ -242,7 +249,6 @@ export const stepEnvironment = (
   }
   const nextChemistry = projectChemistry(workingState, delta.chemistryPatches, delta.chemistryChanges);
   addEnvironmentalMilestones(state, delta, water, nextChemistry, elapsedYears);
-  appendItems(delta.fieldChanges, calculateGeology(workingState, elapsedYears));
   const width = state.fields.elevation.width;
   for (const event of activeEvents) {
     const region = String(event.evidence.regionId ?? event.payload.regionId ?? "region:0:0");
@@ -297,6 +303,7 @@ export const applyEnvironmentDelta = (
   }
   next.chemistry = projectChemistry(next, delta.chemistryPatches ?? [], delta.chemistryChanges);
   if (delta.climateCycleEffect) next.climateCycle = structuredClone(delta.climateCycleEffect);
+  if (delta.tectonicEffect) next.tectonics = structuredClone(delta.tectonicEffect);
   return next;
 };
 

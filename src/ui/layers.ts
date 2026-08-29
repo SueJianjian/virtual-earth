@@ -1,9 +1,10 @@
 import type { WorldSnapshot } from "../worker/protocol.ts";
 
-export type MapLayer = "natural" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
+export type MapLayer = "natural" | "tectonics" | "temperature" | "rainfall" | "nutrients" | "biomass" | "carbon" | "oxygen" | "substances" | "species" | "culture" | "foodSecurity" | "health";
 
 export const layerLabels: Record<MapLayer, string> = {
   natural: "自然",
+  tectonics: "地质板块",
   temperature: "温度",
   rainfall: "降水",
   nutrients: "养分",
@@ -24,6 +25,19 @@ const mix = (from: [number, number, number], to: [number, number, number], amoun
   Math.round(from[2] + (to[2] - from[2]) * amount),
 ];
 
+const plateColors: Array<[number, number, number]> = [
+  [63, 124, 138],
+  [181, 121, 62],
+  [92, 139, 79],
+  [166, 82, 92],
+  [117, 99, 154],
+  [194, 160, 68],
+  [64, 139, 122],
+  [157, 102, 66],
+  [79, 106, 151],
+  [143, 126, 83],
+];
+
 export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapLayer): [number, number, number] => {
   const fields = snapshot.fields;
   const elevation = clamp(fields.elevation.values[index] ?? 0);
@@ -40,6 +54,15 @@ export const colorForCell = (snapshot: WorldSnapshot, index: number, layer: MapL
   const diseasePrevalence = clamp(snapshot.diseasePrevalence?.values[index] ?? 0);
   const substanceRichness = clamp(snapshot.substanceRichnessByRegion?.[regionId] ?? 0);
   const culture = snapshot.cultureIdentityByRegion?.[regionId];
+  if (layer === "tectonics") {
+    if (snapshot.formation.phase !== "stable-crust") {
+      return mix([47, 44, 42], [139, 105, 70], clamp(snapshot.formation.progress));
+    }
+    const plateIndex = Math.trunc(snapshot.tectonics?.plateIndex.values[index] ?? 0);
+    const plateColor = plateColors[((plateIndex % plateColors.length) + plateColors.length) % plateColors.length]!;
+    const stress = clamp(snapshot.tectonics?.boundaryStress.values[index] ?? 0);
+    return mix(plateColor, [236, 91, 57], stress * 0.88);
+  }
   if (layer === "temperature") return mix([43, 93, 145], [221, 72, 40], temperature);
   if (layer === "rainfall") return mix([37, 43, 46], [44, 163, 191], humidity);
   if (layer === "nutrients") return mix([51, 47, 41], [211, 167, 63], nutrients);

@@ -17,6 +17,7 @@ import { addPersistentTotal, boundedPersistentTotal } from "../sim/numeric.ts";
 import { MAX_SUBSTANCE_RESERVE, normalizeSubstanceReserve } from "../sim/environment/substances.ts";
 import { createOrbitalState, isOrbitalState } from "../sim/environment/orbit.ts";
 import { createClimateCycleState, isClimateCycleState } from "../sim/environment/cycle.ts";
+import { createTectonicState, isTectonicState } from "../sim/environment/geology.ts";
 
 const encode = (value: unknown): unknown => {
   if (value instanceof Float32Array) return { __type: "Float32Array", values: Array.from(value) };
@@ -308,6 +309,17 @@ const validateWorld = (value: unknown): WorldState => {
   const fieldValues = Object.values(fields);
   const chemistryValues = Object.values(chemistry);
   if (!fieldValues.every(isGrid) || !chemistryValues.every(isGrid)) throw new Error("Save contains invalid grids");
+  const elevationGrid = (fields as WorldState["fields"]).elevation;
+  const tectonics = world.tectonics === undefined
+    ? createTectonicState(world.seed!, elevationGrid.width, elevationGrid.height, {
+      elapsedYears: world.years!,
+      lastUpdatedTick: world.tick,
+      timelineStep: world.timeline?.step ?? String(world.tick),
+    })
+    : world.tectonics;
+  if (!isTectonicState(tectonics, elevationGrid.width, elevationGrid.height)) {
+    throw new Error("Save contains invalid tectonic state");
+  }
   if (world.climateCycle !== undefined && !isClimateCycleState(world.climateCycle)) throw new Error("Save contains invalid climate cycle state");
   const climateCycle = world.climateCycle === undefined
     ? hydrateClimateCycle(timelineDays, fields as WorldState["fields"])
@@ -457,6 +469,7 @@ const validateWorld = (value: unknown): WorldState => {
   const normalizedWorld = {
     ...world,
     formation,
+    tectonics,
     orbital,
     climateCycle,
     species: normalizedSpecies,

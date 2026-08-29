@@ -3,10 +3,51 @@ import { applyEnvironmentDelta, applyNaturalHazardWaterEffects, calculateClimate
 import { projectChemistry } from "../../src/sim/environment/chemistry.ts";
 import { totalWater } from "../../src/sim/environment/hydrology.ts";
 import { createWorld, worldDigest } from "../../src/sim/world.ts";
+import { createTectonicState, isTectonicState, MAX_TECTONIC_EVENTS_PER_STEP, MAX_TECTONIC_PLATES, MIN_TECTONIC_PLATES, stepTectonics } from "../../src/sim/environment/geology.ts";
 
 const makeEnvironment = () => initializeEnvironment(createWorld(9, { width: 16, height: 8, formation: "formed" }));
 
 describe("environment simulation", () => {
+  it("creates deterministic, seed-specific bounded tectonic plates", () => {
+    const first = createTectonicState(90_001, 32, 16);
+    const replay = createTectonicState(90_001, 32, 16);
+    const different = createTectonicState(90_002, 32, 16);
+
+    expect(first).toEqual(replay);
+    expect(first).not.toEqual(different);
+    expect(first.plates.length).toBeGreaterThanOrEqual(MIN_TECTONIC_PLATES);
+    expect(first.plates.length).toBeLessThanOrEqual(MAX_TECTONIC_PLATES);
+    expect(new Set(first.plates.map((plate) => plate.name)).size).toBe(first.plates.length);
+    expect(first.plates.every((plate) => plate.name.endsWith(" Plate") && !/^Plate \d+$/.test(plate.name))).toBe(true);
+    expect(first.plateIndex.values.every((value) => Number.isInteger(value) && value >= 0 && value < first.plates.length)).toBe(true);
+    expect(first.boundaryStress.values.some((value) => value > 0)).toBe(true);
+    expect(isTectonicState(first, 32, 16)).toBe(true);
+  });
+
+  it("moves plates in bounded geological intervals with traceable boundary events", () => {
+    const state = makeEnvironment();
+    const beforeCenters = state.tectonics.plates.map((plate) => [plate.centerX, plate.centerY]);
+    const result = stepTectonics(state, 8);
+
+    expect(result.tectonics).toBeDefined();
+    expect(result.tectonics?.plates.map((plate) => [plate.centerX, plate.centerY])).not.toEqual(beforeCenters);
+    expect(result.eventDrafts.length).toBeLessThanOrEqual(MAX_TECTONIC_EVENTS_PER_STEP);
+    expect(result.eventDrafts.every((event) => event.kind === "tectonic-boundary-shift"
+      && event.sourceIds.length === 2
+      && event.sourceIds.every((id) => result.tectonics?.plates.some((plate) => plate.id === id)))).toBe(true);
+    expect(result.fieldChanges).toHaveLength(state.fields.elevation.values.length * 2);
+  });
+
+  it("keeps tectonic work bounded for a billion-year simulation step", () => {
+    const state = makeEnvironment();
+    const result = stepTectonics(state, 1_000_000_000);
+
+    expect(result.tectonics?.plates).toHaveLength(state.tectonics.plates.length);
+    expect(result.fieldChanges).toHaveLength(state.fields.elevation.values.length * 2);
+    expect(result.eventDrafts.length).toBeLessThanOrEqual(MAX_TECTONIC_EVENTS_PER_STEP);
+    expect(isTectonicState(result.tectonics, 16, 8)).toBe(true);
+  });
+
   it("creates deterministic ocean, temperature and humidity fields", () => {
     const first = makeEnvironment();
     const second = makeEnvironment();

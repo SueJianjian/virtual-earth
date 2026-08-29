@@ -258,6 +258,8 @@ document.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach((button) =>
     document.querySelectorAll("[data-layer]").forEach((candidate) => candidate.classList.toggle("active", candidate === button));
     const legend: [string, string] = layer === "natural"
       ? ["海洋", "高地"]
+      : layer === "tectonics"
+        ? ["板块内部", "活跃边界"]
       : layer === "foodSecurity"
         ? ["低保障", "高保障"]
         : layer === "health"

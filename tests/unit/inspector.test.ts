@@ -17,7 +17,7 @@ import { derivePathogen } from "../../src/sim/health/disease.ts";
 const region = "region:0:0" as RegionId;
 
 const lineageSnapshot = (): WorldSnapshot => {
-  const state = createWorld(140, { width: 8, height: 8 });
+  const state = createWorld(140, { width: 8, height: 8, formation: "formed" });
   const species = createSpecies("lineage", "consumer");
   const population = { id: "population:lineage" as never, speciesId: species.id, regionId: region, count: 8, energy: 1 };
   const first = createAgent(population, species, 0, "lineage");
@@ -42,6 +42,7 @@ const lineageSnapshot = (): WorldSnapshot => {
     tick: state.tick,
     years: state.years,
     formation: state.formation,
+    tectonics: state.tectonics,
     digest: "test",
     fields: state.fields,
     chemistry: state.chemistry,
@@ -206,6 +207,8 @@ describe("region lineage inspector", () => {
 
     expect(element.innerHTML).toContain("行星坐标");
     expect(element.innerHTML).toContain("模拟海拔");
+    expect(element.innerHTML).toContain("地质板块");
+    expect(element.innerHTML).toContain("边界应力");
     expect(element.innerHTML).toContain("°C");
     expect(element.innerHTML).toContain("m");
     expect(element.innerHTML).toContain("相对浓度");

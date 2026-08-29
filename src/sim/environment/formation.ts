@@ -213,6 +213,19 @@ export const stepPlanetFormation = (state: WorldState, input: EnvironmentInput):
       payload: { name: milestone.name, phase: crossed.phase },
       source: "natural",
     });
+    if (crossed.phase === "stable-crust") {
+      delta.eventDrafts.push({
+        kind: "tectonic-plates-established",
+        ruleId: "formation:tectonic-plates-established",
+        years: projectedYearsAfterStep(state, Math.max(0, crossed.progress - state.formation.progress) * FORMATION_DURATION_DAYS / DAYS_PER_YEAR),
+        sourceIds: state.tectonics.plates.map((plate) => plate.id).slice(0, 10),
+        probability: 1,
+        roll: 0,
+        evidence: { plateCount: state.tectonics.plates.length },
+        payload: { name: "地质板块体系形成", plateCount: state.tectonics.plates.length },
+        source: "natural",
+      });
+    }
   }
   return delta;
 };

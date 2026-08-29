@@ -746,6 +746,36 @@ const regionalHealthReport = (snapshot: WorldSnapshot, regionId?: RegionId): str
   return `<section class="organization-governance public-health" aria-label="区域公共健康"><div class="detail-heading"><strong>公共健康</strong><span>${pathogenRecords.length > 0 ? `${format(pathogenRecords.length)} 种病原体有演化记录` : "当前没有已记录病原体"}</span></div><dl class="detail-grid"><div><dt>当前流行率</dt><dd>${formatPercent(prevalence).value}%</dd></div><div><dt>感染个体</dt><dd>${format(infectedCount)} 人</dd></div><div><dt>免疫个体</dt><dd>${format(immuneCount)} 人</dd></div><div><dt>平均活力</dt><dd>${formatPercent(meanVitality).value}%</dd></div></dl><div class="detail-tags">${pathogenRecords.length > 0 ? pathogenRecords.slice(0, 8).map(({ pathogen, outbreak }) => `<span>${escapeHtml(pathogen.name)} · ${pathogenStatusLabels[outbreak!.status]} · ${formatPercent(outbreak!.prevalence).value}%</span>`).join("") : "<span>环境与宿主密度尚未产生可持续传播</span>"}</div></section>`;
 };
 
+const regionalTectonicReport = (snapshot: WorldSnapshot, regionId?: RegionId): string => {
+  const tectonics = snapshot.tectonics;
+  if (!tectonics || !regionId) return "";
+  if (snapshot.formation.phase !== "stable-crust") {
+    return `<section class="organization-governance tectonic-report" aria-label="区域地质板块"><div class="detail-heading"><strong>地质板块</strong><span>尚未形成</span></div><div class="detail-tags"><span>稳定地壳形成后开始记录板块、边界和应力</span></div></section>`;
+  }
+  const match = /^region:(\d+):(\d+)$/.exec(regionId);
+  const x = Number(match?.[1] ?? -1);
+  const y = Number(match?.[2] ?? -1);
+  if (x < 0 || x >= tectonics.plateIndex.width || y < 0 || y >= tectonics.plateIndex.height) return "";
+  const index = y * tectonics.plateIndex.width + x;
+  const plateIndex = Math.trunc(tectonics.plateIndex.values[index] ?? -1);
+  const plate = tectonics.plates[plateIndex];
+  if (!plate) return "";
+  const stress = tectonics.boundaryStress.values[index] ?? 0;
+  const activity = tectonics.boundaryActivity.values[index] ?? 0;
+  const boundary = stress < 0.01
+    ? "板块内部"
+    : activity >= 0.12
+      ? "聚合边界"
+      : activity <= -0.12
+        ? "离散边界"
+        : "转换边界";
+  const horizontal = Math.abs(plate.velocityX) < 0.001 ? "" : plate.velocityX > 0 ? "向东" : "向西";
+  const vertical = Math.abs(plate.velocityY) < 0.001 ? "" : plate.velocityY > 0 ? "向南" : "向北";
+  const direction = [horizontal, vertical].filter(Boolean).join("、") || "近乎静止";
+  const kind = { continental: "大陆型", oceanic: "海洋型", mixed: "混合型" }[plate.kind];
+  return `<section class="organization-governance tectonic-report" aria-label="区域地质板块"><div class="detail-heading"><strong>地质板块</strong><span>${escapeHtml(plate.name)} · ${kind}</span></div><dl class="detail-grid"><div><dt>板块编号</dt><dd>${escapeHtml(plate.id)}</dd></div><div><dt>局地位置</dt><dd>${boundary}</dd></div><div><dt>边界应力</dt><dd>${formatPercent(stress).value}%</dd></div><div><dt>聚散活动</dt><dd>${formatNumber(activity, 3)}</dd></div><div><dt>运动方向</dt><dd>${direction}</dd></div><div><dt>运动速度</dt><dd>${formatNumber(Math.hypot(plate.velocityX, plate.velocityY) * 1_000, 2)} 格 / 千年</dd></div><div><dt>相对密度</dt><dd>${formatPercent(plate.density).value}%</dd></div><div><dt>相对厚度</dt><dd>${formatPercent(plate.thickness).value}%</dd></div><div><dt>地壳年龄</dt><dd>${formatSimulationAge(plate.crustAgeYears)}</dd></div><div><dt>板块更新</dt><dd>${format(tectonics.updateCount)} 次 · 演化步 ${escapeHtml(tectonics.lastUpdatedTimelineStep ?? String(tectonics.lastUpdatedTick))}</dd></div></dl></section>`;
+};
+
 const detailTargets = (snapshot: WorldSnapshot, level: InspectorDetail["level"]): Array<{ id: string; label: string }> => {
   if (level === "region") return [];
   if (level === "substance") return (snapshot.substances ?? [])
@@ -848,7 +878,9 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     }).join("");
     const facilities = (snapshot.facilities ?? []).filter((facility) => facility.regionId === snapshot.focusRegionId);
     const substances = (snapshot.substances ?? []).filter((substance) => substance.regionId === snapshot.focusRegionId);
-    const healthReport = regionalHealthReport(snapshot, snapshot.focusRegionId) + ecologicalRelationshipReport(snapshot, snapshot.focusRegionId);
+    const environmentReport = regionalTectonicReport(snapshot, snapshot.focusRegionId)
+      + regionalHealthReport(snapshot, snapshot.focusRegionId)
+      + ecologicalRelationshipReport(snapshot, snapshot.focusRegionId);
     const regionalCulture = (snapshot.cultures ?? []).find((culture) => culture.regionId === snapshot.focusRegionId);
     const regionalCultureSummary = snapshot.selectedRegion?.cultureSummary;
     const regionalIdentity = regionalCulture
@@ -858,7 +890,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const aggregateSociety = lineage.source === "aggregate" && regionalSocietySummary
       ? aggregateSocietyReport(regionalSocietySummary, snapshot.selectedRegion?.population ?? 0, snapshot.selectedRegion?.socialPopulation ?? snapshot.selectedRegion?.population ?? 0)
       : "";
-    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${healthReport}${regionalIdentity ? cultureSummaryReport(regionalIdentity, regionalCultureSummary) : ""}${aggregateSociety}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
+    return `<div class="detail-summary"><strong>区域总览</strong><span>${lineage.source === "aggregate" ? "来自聚合摘要，选择下方层级可查看可重建对象" : "来自实时微观投影"}</span><div class="detail-counts">${available}</div>${environmentReport}${regionalIdentity ? cultureSummaryReport(regionalIdentity, regionalCultureSummary) : ""}${aggregateSociety}${substanceInventoryReport(substances)}${facilityAssetsReport(facilities)}</div>`;
   }
   if (!detail.id) return `<div class="empty-state"><strong>请选择${detailLevelLabel(detail.level)}</strong><span>对象选择器会列出当前区域可查看的实体</span></div>`;
   if (detail.level === "culture") {

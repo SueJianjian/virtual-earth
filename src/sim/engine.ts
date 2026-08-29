@@ -35,6 +35,7 @@ import { compactEcologicalRelationships } from "./ecology/interactions.ts";
 import { compactResourceRecords } from "./resources.ts";
 import { orbitalStateForWorld } from "./environment/orbit.ts";
 import { isClimateCycleState } from "./environment/cycle.ts";
+import { isTectonicState } from "./environment/geology.ts";
 import type {
   EntityEffect,
   RuleContext,
@@ -945,6 +946,13 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
   if (delta.climateCycleEffect && !isClimateCycleState(delta.climateCycleEffect)) {
     throw new Error("Invalid climate cycle state");
   }
+  if (delta.tectonicEffect && !isTectonicState(
+    delta.tectonicEffect,
+    state.fields.elevation.width,
+    state.fields.elevation.height,
+  )) {
+    throw new Error("Invalid tectonic state");
+  }
 };
 
 const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: readonly WorldDelta[] = [delta]): void => {
@@ -971,6 +979,7 @@ const applyDelta = (state: WorldState, delta: WorldDelta, orderedGridDeltas: rea
   applyWorldviewEffects(state, delta.worldviewEffects);
   if (delta.formationEffect) state.formation = structuredClone(delta.formationEffect);
   if (delta.climateCycleEffect) state.climateCycle = structuredClone(delta.climateCycleEffect);
+  if (delta.tectonicEffect) state.tectonics = structuredClone(delta.tectonicEffect);
   for (const effect of delta.lodEffects ?? []) {
     const index = state.lod.summaries.findIndex((summary) => summary.regionId === (effect.operation === "upsert-summary" ? effect.summary.regionId : effect.regionId));
     if (effect.operation === "remove-summary") {
@@ -1147,6 +1156,7 @@ export const stepWorld = (state: WorldState, input: StepInput, options: StepOpti
     if (delta.lodEffects) merged.lodEffects = [...(merged.lodEffects ?? []), ...delta.lodEffects];
     if (delta.formationEffect) merged.formationEffect = delta.formationEffect;
     if (delta.climateCycleEffect) merged.climateCycleEffect = delta.climateCycleEffect;
+    if (delta.tectonicEffect) merged.tectonicEffect = delta.tectonicEffect;
   }
   const next = options.mutateState
     ? previous

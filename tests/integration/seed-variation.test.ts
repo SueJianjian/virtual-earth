@@ -6,7 +6,7 @@ import type { WorldState } from "../../src/sim/types.ts";
 const run = (seed: number) => {
   let state = createWorld(seed, { width: 16, height: 8 });
   for (let index = 0; index < 900; index += 1) {
-    state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }).state;
+    state = stepWorld(state, { elapsedYears: 1, externalEvents: [] }, { computeDigest: false, mutateState: true }).state;
   }
   return state;
 };

@@ -11,6 +11,39 @@ import { speciesBlueprintFor } from "../../src/sim/ecology/blueprints.ts";
 import type { ArchivedSpeciesSummary } from "../../src/sim/types.ts";
 
 describe("world persistence", () => {
+  it("round-trips tectonics and deterministically restores pre-tectonic saves", () => {
+    const world = createWorld(119, { width: 8, height: 8, formation: "formed" });
+    const restored = deserializeWorld(serializeWorld(world));
+    expect(restored.tectonics).toEqual(world.tectonics);
+
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { tectonics?: unknown } };
+    delete legacy.world.tectonics;
+    const firstUpgrade = deserializeWorld(JSON.stringify(legacy));
+    const secondUpgrade = deserializeWorld(JSON.stringify(legacy));
+    expect(firstUpgrade.tectonics).toEqual(world.tectonics);
+    expect(secondUpgrade.tectonics).toEqual(firstUpgrade.tectonics);
+
+    const agedWorld = createWorld(117, { width: 8, height: 8, formation: "formed" });
+    agedWorld.tick = 81;
+    agedWorld.years = 81;
+    const agedLegacy = JSON.parse(serializeWorld(agedWorld)) as { world: { tectonics?: unknown } };
+    delete agedLegacy.world.tectonics;
+    const agedUpgrade = deserializeWorld(JSON.stringify(agedLegacy));
+    expect(agedUpgrade.tectonics.updateCount).toBe(10);
+    expect(agedUpgrade.tectonics.lastUpdatedYears).toBe(80);
+    expect(agedUpgrade.tectonics.plates.every((plate) => plate.crustAgeYears === 80)).toBe(true);
+  });
+
+  it("rejects malformed tectonic grids instead of loading corrupted geology", () => {
+    const save = JSON.parse(serializeWorld(createWorld(118, { width: 8, height: 8 }))) as { world: { tectonics: { plates: unknown[] } } };
+    save.world.tectonics.plates = [];
+    expect(() => deserializeWorld(JSON.stringify(save))).toThrow("invalid tectonic state");
+
+    const extreme = JSON.parse(serializeWorld(createWorld(116, { width: 8, height: 8 }))) as { world: { tectonics: { plates: Array<{ velocityX: number }> } } };
+    extreme.world.tectonics.plates[0]!.velocityX = 2;
+    expect(() => deserializeWorld(JSON.stringify(extreme))).toThrow("invalid tectonic state");
+  });
+
   it("round-trips authoritative state and typed grids", () => {
     const world = createWorld(120, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
     world.observation = { focusRegionId: "region:1:1" as never };

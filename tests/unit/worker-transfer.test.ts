@@ -11,6 +11,7 @@ describe("worker snapshot transfer", () => {
       tick: world.tick,
       years: world.years,
       formation: world.formation,
+      tectonics: structuredClone(world.tectonics),
       digest: "test",
       fields: structuredClone(world.fields),
       chemistry: structuredClone(world.chemistry),
@@ -21,12 +22,13 @@ describe("worker snapshot transfer", () => {
 
     const buffers = snapshotTransferables(snapshot);
 
-    expect(buffers).toHaveLength(13);
+    expect(buffers).toHaveLength(16);
     expect(new Set(buffers).size).toBe(buffers.length);
     expect(buffers).toContain(snapshot.fields.water.values.buffer);
     expect(buffers).toContain(snapshot.chemistry.oxygen.values.buffer);
     expect(buffers).toContain(snapshot.foodSecurity!.values.buffer);
     expect(buffers).toContain(snapshot.diseasePrevalence!.values.buffer);
+    expect(buffers).toContain(snapshot.tectonics!.boundaryStress.values.buffer);
     expect(messageTransferables({ type: "events", events: [] })).toEqual([]);
 
     const received = structuredClone(snapshot, { transfer: buffers });
@@ -34,5 +36,6 @@ describe("worker snapshot transfer", () => {
     expect(received.fields.water.values).toHaveLength(64);
     expect(received.foodSecurity?.values).toHaveLength(64);
     expect(received.diseasePrevalence?.values).toHaveLength(64);
+    expect(received.tectonics?.plateIndex.values).toHaveLength(64);
   });
 });

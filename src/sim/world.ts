@@ -25,6 +25,7 @@ import { isSimulationTimeline } from "./time.ts";
 import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
 import { MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PRACTICES } from "./worldview/archive.ts";
 import { createClimateCycleState, isClimateCycleState } from "./environment/cycle.ts";
+import { createTectonicState, isTectonicState } from "./environment/geology.ts";
 
 const DEFAULT_WIDTH = 96;
 const DEFAULT_HEIGHT = 48;
@@ -84,6 +85,7 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
   const formed = options.formation === "formed";
   const emptyLod: LodState = { summaries: [], canonicalMicroRegionIds: [] };
   const emptyObservation: ObservationState = {};
+  const fields = createFields(normalizedSeed, width, height, formed);
   return {
     version: 1,
     seed: normalizedSeed,
@@ -93,7 +95,8 @@ export const createWorld = (seed: number, options: WorldOptions = {}): WorldStat
     climateCycle: createClimateCycleState(),
     random: createRandom(normalizedSeed),
     formation: formed ? completedPlanetFormationState(normalizedSeed) : createPlanetFormationState(normalizedSeed),
-    fields: createFields(normalizedSeed, width, height, formed),
+    tectonics: createTectonicState(normalizedSeed, width, height),
+    fields,
     chemistry: createChemistry(width, height, formed),
     substances: [],
     pathogens: [],
@@ -202,6 +205,11 @@ export const isFiniteWorld = (state: WorldState): boolean => {
   const exactTimeline = state.timeline === undefined || isSimulationTimeline(state.timeline);
   const finiteOrbital = state.orbital === undefined || isOrbitalState(state.orbital);
   const finiteClimateCycle = state.climateCycle === undefined || isClimateCycleState(state.climateCycle);
+  const finiteTectonics = isTectonicState(
+    state.tectonics,
+    state.fields.elevation.width,
+    state.fields.elevation.height,
+  );
   const grids = [
     ...Object.values(state.fields),
     ...Object.values(state.chemistry),
@@ -460,7 +468,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     ].every(Number.isFinite));
     return [...summaryValues, ...cultureValues, ...societyValues].every(Number.isFinite) && finiteAgentRecords && finiteEcologyRecords;
   });
-  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
+  return finiteClock && exactTimeline && finiteOrbital && finiteClimateCycle && finiteTectonics && finiteGrids && formationValues.every(Number.isFinite) && finiteSubstances && finitePathogens && finiteRelationships && finiteSpecies && finiteKnowledge && finiteCultures && finiteEcologicalRelationships && finiteResources && finiteFacilities && finiteHistorySamples && finiteArchivedSpecies && finiteArchivedOrganizations && finiteStrategicRoutes && finiteWorldviews && finiteLod;
 };
 
 export const regionIdForCell = (x: number, y: number): RegionId =>

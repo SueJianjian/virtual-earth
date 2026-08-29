@@ -94,6 +94,7 @@ describe("autonomous planet formation", () => {
       "core-differentiation",
       "planetary-cooling",
       "planet-formation-complete",
+      "tectonic-plates-established",
     ]);
   });
 

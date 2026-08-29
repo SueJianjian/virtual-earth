@@ -104,6 +104,10 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.getByRole("button", { name: "碳循环" })).toHaveClass(/active/);
   await page.getByRole("button", { name: "氧气" }).click();
   await expect(page.getByRole("button", { name: "氧气" })).toHaveClass(/active/);
+  await page.getByRole("button", { name: "地质板块" }).click();
+  await expect(page.getByRole("button", { name: "地质板块" })).toHaveClass(/active/);
+  await expect(page.locator("#legend-low")).toHaveText("板块内部");
+  await expect(page.locator("#legend-high")).toHaveText("活跃边界");
   await page.getByRole("button", { name: "食物保障" }).click();
   await expect(page.getByRole("button", { name: "食物保障" })).toHaveClass(/active/);
   await expect(page.locator("#legend-low")).toHaveText("低保障");
@@ -115,6 +119,7 @@ test("renders a non-empty world map and interactive observation panels", async (
   await expect(page.locator("#inspector")).toContainText("m");
   await expect(page.locator("#inspector")).toContainText("°C");
   await expect(page.locator("#inspector")).toContainText("相对浓度");
+  await expect(page.getByRole("region", { name: "区域地质板块" })).toContainText("尚未形成");
   await expect(page.getByRole("region", { name: "认知与传说" })).toBeVisible();
   await expect(page.getByRole("region", { name: "认知与传说" })).toContainText("观测、理论、信仰与验证严格分离");
   await expect(page.getByRole("region", { name: "规律训练" })).toBeVisible();
@@ -675,6 +680,7 @@ test("renders the complete society as detailed fantasy 3d models", async ({ page
   await expect(page.locator("#status-panel")).toContainText("原创物质");
   await expect(page.locator("#status-panel")).toContainText("原创文化");
   await expect(page.locator("#status-panel")).toContainText("原创病原体");
+  await expect(page.getByRole("region", { name: "区域地质板块" })).toContainText("边界应力");
   await page.locator('[data-layer="health"]').click();
   await expect(page.locator('[data-layer="health"]')).toHaveClass(/active/);
   await expect(page.locator("#legend-low")).toHaveText("无传播");

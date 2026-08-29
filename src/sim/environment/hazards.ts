@@ -1,5 +1,5 @@
 import { forkRandom, randomFloat } from "../random.ts";
-import { projectedYearsAfterStep, simulationCycleAngle, simulationDaysForWorld, simulationStepForWorld } from "../time.ts";
+import { projectedYearsAfterStep, simulationStepForWorld } from "../time.ts";
 import type { ChemistryChange, EnvironmentDelta, FieldChange, RegionId, WorldEventDraft, WorldState } from "../types.ts";
 
 export const MAX_NATURAL_HAZARDS_PER_STEP = 3;
@@ -107,11 +107,6 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
   const samplingScale = REFERENCE_HAZARD_CELL_COUNT / Math.max(1, cellCount);
   const width = elevation.width;
   const height = elevation.height;
-  const phase = (state.seed % 4096) / 4096 * Math.PI * 2;
-  const pulse = 0.55 + Math.sin(simulationCycleAngle(simulationDaysForWorld(state), Math.round(180 * 2 * Math.PI * 365)) + phase) * 0.45;
-  const xScale = Math.PI * 4 / Math.max(1, width);
-  const yScale = Math.PI * 2 / Math.max(1, height - 1);
-  const phaseOffset = phase * 0.7;
   const sampleScale = round(samplingScale);
   const retained: NaturalHazard[] = [];
   for (let index = 0; index < cellCount; index += 1) {
@@ -130,21 +125,39 @@ export const naturalHazardsFor = (state: WorldState, elapsedYears = 1): NaturalH
       + (elevation.values[east] ?? elevationValue)
     ) / 4;
     const relief = clamp(Math.abs(elevationValue - localMean) * 9);
-    const plate = Math.sin(x * xScale + phase) * Math.cos(y * yScale - phaseOffset);
-    const stress = clamp(Math.abs(plate) * pulse);
+    const localPlateIndex = Math.trunc(state.tectonics.plateIndex.values[index] ?? 0);
+    const peerPlateIndex = [north, south, west, east]
+      .map((neighbor) => Math.trunc(state.tectonics.plateIndex.values[neighbor] ?? localPlateIndex))
+      .find((candidate) => candidate !== localPlateIndex);
+    const plate = state.tectonics.plates[localPlateIndex];
+    const peerPlate = peerPlateIndex === undefined ? undefined : state.tectonics.plates[peerPlateIndex];
+    const stress = clamp(state.tectonics.boundaryStress.values[index] ?? 0);
+    const activity = Math.max(-1, Math.min(1, state.tectonics.boundaryActivity.values[index] ?? 0));
+    const boundaryType = stress < 0.01 ? "interior" : activity >= 0.12 ? "convergent" : activity <= -0.12 ? "divergent" : "transform";
     const temperatureValue = clamp(temperature.values[index] ?? 0);
     const humidityValue = clamp(humidity.values[index] ?? 0);
     const waterValue = clamp(water.values[index] ?? 0);
     const nutrientsValue = clamp(nutrients.values[index] ?? 0);
-    const volcanicScore = clamp(stress * 0.54 + elevationValue * 0.3 + relief * 0.16);
-    const earthquakeScore = clamp(stress * 0.68 + relief * 0.32);
+    const volcanicScore = clamp(stress * 0.62 + Math.abs(activity) * 0.16 + elevationValue * 0.12 + relief * 0.1);
+    const earthquakeScore = clamp(stress * 0.8 + relief * 0.2);
     const heat = clamp((temperatureValue - 0.6) / 0.4);
     const aridity = (clamp((0.4 - humidityValue) / 0.4) + clamp((0.34 - waterValue) / 0.34)) / 2;
     const droughtScore = clamp(heat * 0.42 + aridity * 0.58);
     const wetness = (waterValue + humidityValue) / 2;
     const floodScore = clamp(wetness * 0.68 + (1 - elevationValue) * 0.32);
     const common = volcanicScore >= 0.73 || earthquakeScore >= 0.78 || droughtScore >= 0.74 || floodScore >= 0.78
-      ? { elevation: round(elevationValue), temperature: round(temperatureValue), humidity: round(humidityValue), water: round(waterValue), nutrients: round(nutrientsValue), samplingScale: sampleScale }
+      ? {
+        elevation: round(elevationValue),
+        temperature: round(temperatureValue),
+        humidity: round(humidityValue),
+        water: round(waterValue),
+        nutrients: round(nutrientsValue),
+        samplingScale: sampleScale,
+        plateId: plate?.id ?? "unknown",
+        ...(peerPlate ? { peerPlateId: peerPlate.id } : {}),
+        boundaryType,
+        tectonicActivity: round(activity),
+      }
       : undefined;
     if (common && volcanicScore >= 0.73) {
       const candidate = evaluateHazard(state, index, "volcano", volcanicScore, 0.73, (0.00035 + Math.max(0, volcanicScore - 0.73) * 0.0022) * samplingScale, elapsedYears, { ...common, tectonicStress: round(stress), relief: round(relief) });
@@ -209,7 +222,10 @@ export const naturalHazardDelta = (state: WorldState, elapsedYears = 1): { hazar
       ruleId: `environment:natural-${hazard.kind}`,
       years,
       position: [hazard.index % state.fields.elevation.width, Math.floor(hazard.index / state.fields.elevation.width)],
-      sourceIds: [],
+      sourceIds: hazard.kind === "volcano" || hazard.kind === "earthquake"
+        ? [hazard.evidence.plateId, hazard.evidence.peerPlateId]
+          .filter((value): value is string => typeof value === "string")
+        : [],
       probability: hazard.probability,
       roll: hazard.roll,
       evidence: { ...hazard.evidence, intensity },

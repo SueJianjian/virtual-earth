@@ -45,6 +45,29 @@ export type ClimateCycleState = {
   maximumTemperature: number;
   lastCompleted?: ClimateYearSummary;
 };
+export type TectonicPlateKind = "continental" | "oceanic" | "mixed";
+export type TectonicPlateState = {
+  id: string;
+  name: string;
+  kind: TectonicPlateKind;
+  centerX: number;
+  centerY: number;
+  velocityX: number;
+  velocityY: number;
+  density: number;
+  thickness: number;
+  crustAgeYears: number;
+};
+export type TectonicState = {
+  plates: TectonicPlateState[];
+  plateIndex: Grid;
+  boundaryStress: Grid;
+  boundaryActivity: Grid;
+  updateCount: number;
+  lastUpdatedTick: number;
+  lastUpdatedTimelineStep?: string;
+  lastUpdatedYears: number;
+};
 export type WorldOptions = { width?: number; height?: number; enabledPackIds?: string[]; formation?: "dust" | "formed" };
 export type Grid = { width: number; height: number; values: Float32Array };
 export type SpeciesRole = "producer" | "consumer" | "decomposer";
@@ -389,6 +412,7 @@ export type WorldDelta = {
   lodEffects?: LodEffect[];
   formationEffect?: PlanetFormationState;
   climateCycleEffect?: ClimateCycleState;
+  tectonicEffect?: TectonicState;
 };
 
 export type StateMetric =
@@ -1204,6 +1228,7 @@ export type WorldState = {
   climateCycle: ClimateCycleState;
   random: RandomState;
   formation: PlanetFormationState;
+  tectonics: TectonicState;
   fields: {
     elevation: Grid;
     temperature: Grid;
