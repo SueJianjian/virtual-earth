@@ -22,6 +22,7 @@ import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES } from "./
 import { isArchivedOrganizationSummary, MAX_ARCHIVED_ORGANIZATION_SUMMARIES } from "./society/archive.ts";
 import { isSimulationTimeline } from "./time.ts";
 import { MAX_SUBSTANCE_RESERVE } from "./environment/substances.ts";
+import { MAX_WORLDVIEW_INTERACTIONS } from "./worldview/archive.ts";
 import { createClimateCycleState, isClimateCycleState } from "./environment/cycle.ts";
 
 const DEFAULT_WIDTH = 96;
@@ -356,8 +357,25 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     entity.lastActiveTick ?? 0,
     entity.dormantSinceTick ?? 0,
     entity.revivalCount ?? 0,
+    entity.propagationCount ?? 0,
+    entity.conflictCount ?? 0,
+    entity.fusionCount ?? 0,
+    entity.lastInteractionTick ?? 0,
     ...Object.values(entity.resourceBalances),
-  ].every(Number.isFinite));
+  ].every(Number.isFinite)) && state.worldview.interactions.length <= MAX_WORLDVIEW_INTERACTIONS && state.worldview.interactions.every((interaction) => [
+    interaction.originTick,
+    interaction.lastInteractionTick,
+    interaction.attempts,
+    interaction.successes,
+    interaction.failures,
+    interaction.compatibility,
+    interaction.intensity,
+  ].every(Number.isFinite)
+    && interaction.attempts >= 0
+    && interaction.successes >= 0
+    && interaction.failures >= 0
+    && interaction.compatibility >= 0 && interaction.compatibility <= 1
+    && interaction.intensity >= 0 && interaction.intensity <= 1);
   const finiteLod = state.lod.summaries.every((summary) => {
     const culture = summary.cultureSummary;
     const society = summary.societySummary;

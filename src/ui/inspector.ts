@@ -1,6 +1,6 @@
 import type { CellSelection } from "./map-canvas.ts";
 import { summarizeLineage } from "../sim/lod/lineage.ts";
-import type { AgentState, AggregateKnowledgeSummary, ArchivedOrganizationSummary, ArchivedSpeciesSummary, CultureIdentity, EcologicalRelationshipKind, EcologicalRelationshipState, EventMilestone, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, PathogenState, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SpeciesState, SubstanceState, WorldviewEntityState } from "../sim/types.ts";
+import type { AgentState, AggregateKnowledgeSummary, ArchivedOrganizationSummary, ArchivedSpeciesSummary, CultureIdentity, EcologicalRelationshipKind, EcologicalRelationshipState, EventMilestone, FacilityState, FamilyLineageSummary, KnowledgeDomain, KnowledgeState, OrganizationState, OrganizationType, PathogenState, RegionCultureSummary, RegionId, RegionLineageSummary, RegionSocietySummary, SpeciesBlueprint, SpeciesState, SubstanceState, WorldviewEntityState, WorldviewInteractionState } from "../sim/types.ts";
 import { governanceForOrganization } from "../sim/society/organization.ts";
 import { speciesBlueprintFor } from "../sim/ecology/blueprints.ts";
 import { facilityOperationalEffect, facilityWorkforceRequiredFor } from "../sim/society/facilities.ts";
@@ -108,6 +108,8 @@ const epistemicLabels = {
   verified: "已验证",
 } as const;
 const worldviewEntityLabels = { deity: "神话实体", sect: "研修流派", "cultivation-path": "修行路径" } as const;
+const worldviewInteractionLabels: Record<WorldviewInteractionState["kind"], string> = { propagation: "跨体系传播", conflict: "体系冲突", fusion: "传统融合" };
+const worldviewInteractionStatusLabels: Record<WorldviewInteractionState["status"], string> = { active: "持续接触", dormant: "接触沉寂", resolved: "融合完成" };
 const substanceKindLabels: Record<SubstanceState["kind"], string> = {
   mineral: "原创矿物",
   crystal: "原创晶体",
@@ -914,7 +916,11 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const members = entity.memberIds ?? [];
     const status = (entity.status ?? "active") === "active" ? "活跃传承" : "沉寂保留";
     const reserve = entity.resourceBalances["attunement-energy"] ?? 0;
-    return `<div class="detail-report"><div class="detail-title"><strong>流派报告</strong><span>${escapeHtml(entity.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(entity.name ?? worldviewEntityLabels[entity.kind])}</dd></div><div><dt>类型</dt><dd>${worldviewEntityLabels[entity.kind]}</dd></div><div><dt>状态</dt><dd>${status}</dd></div><div><dt>影响力</dt><dd>${formatPercent(entity.influence).value}%</dd></div><div><dt>存续度</dt><dd>${formatPercent(entity.viability ?? entity.influence).value}%</dd></div><div><dt>成员</dt><dd>${format(members.length)} 人</dd></div><div><dt>支持者</dt><dd>${format(entity.supporterCount ?? members.length)} 人</dd></div><div><dt>活跃修行者</dt><dd>${format(entity.activePractitionerCount ?? 0)} 人</dd></div><div><dt>赞助组织</dt><dd>${format(entity.sponsorCount ?? (entity.sponsorOrganizationId ? 1 : 0))} 个</dd></div><div><dt>复兴次数</dt><dd>${format(entity.revivalCount ?? 0)} 次</dd></div><div><dt>创始者</dt><dd>${entity.founderId ? escapeHtml(entity.founderId.slice(-8)) : "集体形成"}</dd></div><div><dt>依据规律</dt><dd>${phenomenon ? escapeHtml(phenomenon.name) : "历史规律记录"}</dd></div><div><dt>赞助组织</dt><dd>${sponsor ? escapeHtml(organizationName(sponsor)) : entity.sponsorOrganizationId ? escapeHtml(entity.sponsorOrganizationId.slice(-8)) : "自主维持"}</dd></div><div><dt>能量储备</dt><dd>${formatNumber(reserve * 100, 1)} 单位</dd></div><div><dt>形成时间</dt><dd>${entity.originTick === undefined ? "旧历史记录" : `演化步 ${format(entity.originTick)}`}</dd></div></dl><div class="detail-tags">${members.length > 0 ? members.slice(0, 16).map((id) => `<span>成员 · ${escapeHtml(id.slice(-8))}</span>`).join("") : "<span>当前没有在世传承者</span>"}</div></div>`;
+    const interactions = (snapshot.worldviewInteractions ?? [])
+      .filter((interaction) => interaction.sourceEntityId === entity.id || interaction.targetEntityId === entity.id)
+      .sort((left, right) => right.lastInteractionTick - left.lastInteractionTick || left.id.localeCompare(right.id));
+    const interactionReport = `<section class="organization-governance worldview-interaction-report" aria-label="世界观互动记录"><div class="detail-heading"><strong>跨体系互动</strong><span>记录传播、冲突与融合的真实结果</span></div><div class="detail-tags">${interactions.length > 0 ? interactions.slice(0, 12).map((interaction) => `<span>${worldviewInteractionLabels[interaction.kind]} · ${worldviewInteractionStatusLabels[interaction.status]} · ${format(interaction.successes)} 次</span>`).join("") : "<span>尚无跨体系互动记录</span>"}</div>${entity.derivedFromEntityIds?.length ? `<p>融合来源 · ${entity.derivedFromEntityIds.map((id) => escapeHtml(id.slice(-8))).join(" / ")}</p>` : ""}</section>`;
+    return `<div class="detail-report"><div class="detail-title"><strong>流派报告</strong><span>${escapeHtml(entity.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(entity.name ?? worldviewEntityLabels[entity.kind])}</dd></div><div><dt>类型</dt><dd>${worldviewEntityLabels[entity.kind]}</dd></div><div><dt>状态</dt><dd>${status}</dd></div><div><dt>影响力</dt><dd>${formatPercent(entity.influence).value}%</dd></div><div><dt>存续度</dt><dd>${formatPercent(entity.viability ?? entity.influence).value}%</dd></div><div><dt>成员</dt><dd>${format(members.length)} 人</dd></div><div><dt>支持者</dt><dd>${format(entity.supporterCount ?? members.length)} 人</dd></div><div><dt>活跃修行者</dt><dd>${format(entity.activePractitionerCount ?? 0)} 人</dd></div><div><dt>赞助组织</dt><dd>${format(entity.sponsorCount ?? (entity.sponsorOrganizationId ? 1 : 0))} 个</dd></div><div><dt>复兴次数</dt><dd>${format(entity.revivalCount ?? 0)} 次</dd></div><div><dt>创始者</dt><dd>${entity.founderId ? escapeHtml(entity.founderId.slice(-8)) : "集体形成"}</dd></div><div><dt>依据规律</dt><dd>${phenomenon ? escapeHtml(phenomenon.name) : "历史规律记录"}</dd></div><div><dt>赞助组织</dt><dd>${sponsor ? escapeHtml(organizationName(sponsor)) : entity.sponsorOrganizationId ? escapeHtml(entity.sponsorOrganizationId.slice(-8)) : "自主维持"}</dd></div><div><dt>能量储备</dt><dd>${formatNumber(reserve * 100, 1)} 单位</dd></div><div><dt>形成时间</dt><dd>${entity.originTick === undefined ? "旧历史记录" : `演化步 ${format(entity.originTick)}`}</dd></div></dl>${interactionReport}<div class="detail-tags">${members.length > 0 ? members.slice(0, 16).map((id) => `<span>成员 · ${escapeHtml(id.slice(-8))}</span>`).join("") : "<span>当前没有在世传承者</span>"}</div></div>`;
   }
   if (detail.level === "facility") return facilityDetailReport(snapshot, detail.id);
   if (detail.level === "agent") {
@@ -1030,6 +1036,9 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
   const worldviewEntities = (snapshot.worldviewEntities ?? [])
     .filter((entity) => entity.regionId === selection.regionId)
     .sort((left, right) => right.influence - left.influence || left.id.localeCompare(right.id));
+  const worldviewInteractions = (snapshot.worldviewInteractions ?? [])
+    .filter((interaction) => interaction.regionId === selection.regionId)
+    .sort((left, right) => right.lastInteractionTick - left.lastInteractionTick || left.id.localeCompare(right.id));
   const regionalKnowledge = knowledgeForRegion(snapshot, selection.regionId);
   const regionalTechnology = technologyForSnapshotRegion(snapshot, selection.regionId);
   const regionalSubstances = (snapshot.substances ?? []).filter((substance) => substance.regionId === selection.regionId);
@@ -1123,6 +1132,16 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
           const parentNames = record.parentIds.map((id) => worldviewById.get(id)?.name).filter((name): name is string => Boolean(name));
           return `<li data-epistemic-status="${record.epistemicStatus}"><div><span>${epistemicLabels[record.epistemicStatus]}</span><small>演化步 ${format(record.originTick)}</small></div><strong>${escapeHtml(record.name)}</strong><p>${parentNames.length > 0 ? `源自 ${parentNames.map(escapeHtml).join("、")}` : "源自当地可重复观测的环境证据"}</p></li>`;
         }).join("") : "<li class=\"worldview-empty\">尚未形成异常观测、文明理论或神话记录</li>"}
+      </ol>
+    </section>
+    <section class="worldview-records" aria-label="世界观互动">
+      <div class="worldview-heading"><strong>世界观互动</strong><span>传播、冲突与融合只在真实接触和相容条件下发生</span></div>
+      <ol class="worldview-list">
+        ${worldviewInteractions.length > 0 ? worldviewInteractions.slice(0, 12).map((interaction) => {
+          const source = worldviewEntities.find((entity) => entity.id === interaction.sourceEntityId) ?? (snapshot.worldviewEntities ?? []).find((entity) => entity.id === interaction.sourceEntityId);
+          const target = worldviewEntities.find((entity) => entity.id === interaction.targetEntityId) ?? (snapshot.worldviewEntities ?? []).find((entity) => entity.id === interaction.targetEntityId);
+          return `<li data-worldview-interaction-kind="${interaction.kind}" data-worldview-interaction-status="${interaction.status}"><div><span>${worldviewInteractionLabels[interaction.kind]}</span><small>${worldviewInteractionStatusLabels[interaction.status]}</small></div><strong>${escapeHtml(source?.name ?? interaction.sourceEntityId.slice(-8))} / ${escapeHtml(target?.name ?? interaction.targetEntityId.slice(-8))}</strong><p>相容度 ${formatPercent(interaction.compatibility).value}% · 强度 ${formatPercent(interaction.intensity).value}% · 发生 ${format(interaction.successes)} 次</p></li>`;
+        }).join("") : "<li class=\"worldview-empty\">当地尚未发生跨体系传播、冲突或融合</li>"}
       </ol>
     </section>
     <section class="practice-records" aria-label="规律训练">

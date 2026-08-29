@@ -183,6 +183,24 @@ describe("region lineage inspector", () => {
       dormantSinceTick: 30,
       revivalCount: 2,
     }];
+    snapshot.worldviewInteractions = [{
+      id: "worldview-interaction:inspector",
+      kind: "fusion",
+      sourceEntityId: "worldview:crystal-sect" as never,
+      targetEntityId: "worldview:mythic-memory" as never,
+      sourcePackId: "emergence.original-worldview",
+      targetPackId: "mythology.chinese-motif",
+      regionId: region,
+      originTick: 31,
+      lastInteractionTick: 34,
+      attempts: 1,
+      successes: 1,
+      failures: 0,
+      compatibility: 0.82,
+      intensity: 0.44,
+      status: "resolved",
+      fusionEntityId: "worldview:fusion-result" as never,
+    }];
     const element = { innerHTML: "" } as HTMLElement;
     renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region });
 
@@ -213,6 +231,8 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("区域因果历史");
     expect(element.innerHTML).toContain("区域洪水");
     expect(element.innerHTML).toContain("强度 62%");
+    expect(element.innerHTML).toContain("世界观互动");
+    expect(element.innerHTML).toContain("传统融合");
 
     renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region }, { level: "worldview", id: "worldview:crystal-sect" });
     expect(element.innerHTML).toContain("流派报告");
@@ -222,6 +242,8 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("支持者");
     expect(element.innerHTML).toContain("存续度");
     expect(element.innerHTML).toContain("复兴次数");
+    expect(element.innerHTML).toContain("跨体系互动");
+    expect(element.innerHTML).toContain("融合完成");
   });
 
   it("renders inspectable species and population reports for the selected region", () => {

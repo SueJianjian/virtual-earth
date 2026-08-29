@@ -1,4 +1,4 @@
-import type { CultureIdentity, EcologicalRelationshipKind, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SimulationTimeline, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldHistorySample, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
+import type { CultureIdentity, EcologicalRelationshipKind, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SimulationTimeline, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldHistorySample, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewInteractionState, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -60,6 +60,7 @@ export type WorldSnapshot = {
   worldviewPhenomena?: WorldviewPhenomenonState[];
   worldviewPractices?: WorldviewPracticeState[];
   worldviewEntities?: WorldviewEntityState[];
+  worldviewInteractions?: WorldviewInteractionState[];
   selectedRegion?: RegionSummary;
   recentRegionEvents?: RecentRegionEvent[];
   projection?: RegionProjection;

@@ -25,4 +25,5 @@ export const createWorldviewState = (enabledPackIds: string[]) => ({
   entities: [],
   phenomena: [],
   practices: [],
+  interactions: [],
 });

@@ -6,7 +6,7 @@ import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../src/sim/environment/su
 import { MAX_POPULATION_RECORDS } from "../src/sim/ecology/archive.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../src/sim/ecology/interactions.ts";
 import { MAX_BELIEFS_PER_CULTURE, MAX_CULTURE_RECORDS, MAX_KNOWLEDGE_PER_AGENT, MAX_KNOWLEDGE_PER_CULTURE, MAX_KNOWLEDGE_RECORDS } from "../src/sim/culture/archive.ts";
-import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../src/sim/worldview/archive.ts";
+import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../src/sim/worldview/archive.ts";
 import { createWorld, isFiniteWorld, worldDigest } from "../src/sim/world.ts";
 import { initializeEnvironment } from "../src/sim/environment/index.ts";
 import { MAX_IMMUNITY_IDS_PER_AGENT, MAX_INFECTIONS_PER_AGENT, MAX_PATHOGENS, MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "../src/sim/health/disease.ts";
@@ -121,6 +121,7 @@ type CollectionCounts = {
   phenomena: number;
   practices: number;
   worldviewEntities: number;
+  worldviewInteractions: number;
   pathogens: number;
 };
 const collectionCounts = (): CollectionCounts => ({
@@ -138,6 +139,7 @@ const collectionCounts = (): CollectionCounts => ({
   phenomena: state.worldview.phenomena.length,
   practices: state.worldview.practices.length,
   worldviewEntities: state.worldview.entities.length,
+  worldviewInteractions: state.worldview.interactions.length,
   pathogens: state.pathogens.length,
 });
 const segments: Array<{ fromStep: number; toStep: number; elapsedMs: number; averageStepMs: number; collections: CollectionCounts }> = [];
@@ -288,7 +290,17 @@ const health = {
     && entity.influence <= 1
     && (entity.viability ?? 0) <= 1
     && (entity.memberIds ?? []).every((memberId) => agentIds.has(memberId))
-    && (!entity.sponsorOrganizationId || organizationIds.has(entity.sponsorOrganizationId))),
+     && (!entity.sponsorOrganizationId || organizationIds.has(entity.sponsorOrganizationId))),
+  worldviewInteractionsBounded: state.worldview.interactions.length <= MAX_WORLDVIEW_INTERACTIONS,
+  validWorldviewInteractions: state.worldview.interactions.every((interaction) => {
+    const source = state.worldview.entities.find((entity) => entity.id === interaction.sourceEntityId);
+    const target = state.worldview.entities.find((entity) => entity.id === interaction.targetEntityId);
+    return Boolean(source && target && source.packId !== target.packId
+      && (!interaction.fusionEntityId || state.worldview.entities.some((entity) => entity.id === interaction.fusionEntityId))
+      && [interaction.originTick, interaction.lastInteractionTick, interaction.attempts, interaction.successes, interaction.failures, interaction.compatibility, interaction.intensity].every((value) => Number.isFinite(value) && value >= 0))
+      && interaction.compatibility <= 1
+      && interaction.intensity <= 1;
+  }),
   worldviewPhenomenaBounded: state.worldview.phenomena.length <= MAX_WORLDVIEW_PHENOMENA,
   worldviewPracticesBounded: state.worldview.practices.length <= MAX_WORLDVIEW_PRACTICES,
   worldviewEntitiesBounded: state.worldview.entities.length <= MAX_WORLDVIEW_ENTITIES,

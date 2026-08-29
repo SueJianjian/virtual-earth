@@ -177,5 +177,19 @@ export const reconcileWorldviewLifecycle = (state: WorldState): WorldEventDraft[
     if (changed) events.push(lifecycleEvent(next, previousStatus, status, nextTick));
     return next;
   });
+  const entitiesById = new Map(state.worldview.entities.map((entity) => [entity.id, entity]));
+  state.worldview.interactions = state.worldview.interactions
+    .filter((interaction) => entitiesById.has(interaction.sourceEntityId) && entitiesById.has(interaction.targetEntityId))
+    .map((interaction) => {
+      if (interaction.kind === "fusion") return interaction.fusionEntityId && entitiesById.has(interaction.fusionEntityId)
+        ? { ...interaction, status: "resolved" as const }
+        : { ...interaction, status: "dormant" as const };
+      const source = entitiesById.get(interaction.sourceEntityId);
+      const target = entitiesById.get(interaction.targetEntityId);
+      return {
+        ...interaction,
+        status: source?.status === "active" && target?.status === "active" ? "active" as const : "dormant" as const,
+      };
+    });
   return events;
 };

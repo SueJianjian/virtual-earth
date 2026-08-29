@@ -905,6 +905,35 @@ export type WorldviewEntityState = {
   dormantSinceTick?: number;
   dormantSinceTimelineStep?: string;
   revivalCount?: number;
+  derivedFromEntityIds?: EntityId[];
+  derivedFromPackIds?: string[];
+  propagationCount?: number;
+  conflictCount?: number;
+  fusionCount?: number;
+  lastInteractionTick?: number;
+  lastInteractionTimelineStep?: string;
+};
+export type WorldviewInteractionKind = "propagation" | "conflict" | "fusion";
+export type WorldviewInteractionStatus = "active" | "dormant" | "resolved";
+export type WorldviewInteractionState = {
+  id: string;
+  kind: WorldviewInteractionKind;
+  sourceEntityId: EntityId;
+  targetEntityId: EntityId;
+  sourcePackId: string;
+  targetPackId: string;
+  regionId: RegionId;
+  originTick: number;
+  originTimelineStep?: string;
+  lastInteractionTick: number;
+  lastInteractionTimelineStep?: string;
+  attempts: number;
+  successes: number;
+  failures: number;
+  compatibility: number;
+  intensity: number;
+  status: WorldviewInteractionStatus;
+  fusionEntityId?: EntityId;
 };
 export type WorldviewPhenomenonKind =
   | "natural-anomaly"
@@ -1013,6 +1042,18 @@ export type WorldviewEffect =
       organizationId?: OrganizationId;
       evidence: Record<string, number | string | boolean>;
     }
+  | {
+      kind: "interact-entities";
+      packId: string;
+      interaction: WorldviewInteractionKind;
+      sourceEntityId: EntityId;
+      targetEntityId: EntityId;
+      regionId: RegionId;
+      probability: number;
+      compatibility: number;
+      intensity: number;
+      evidence: Record<string, number | string | boolean>;
+    }
   | { kind: "resource-transaction"; transaction: ResourceTransaction };
 export type WorldviewState = {
   enabledPackIds: string[];
@@ -1020,6 +1061,7 @@ export type WorldviewState = {
   entities: WorldviewEntityState[];
   phenomena: WorldviewPhenomenonState[];
   practices: WorldviewPracticeState[];
+  interactions: WorldviewInteractionState[];
 };
 export type SimulationStage = {
   id: string;

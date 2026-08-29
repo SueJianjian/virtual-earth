@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { clearSimulationStages, registerSimulationStage, stepWorld } from "../../src/sim/engine.ts";
-import { createWorld, assertBlankWorld } from "../../src/sim/world.ts";
+import { createWorld, assertBlankWorld, isFiniteWorld } from "../../src/sim/world.ts";
 import { createWorldviewState, DEFAULT_WORLDVIEW_PACK_IDS, listWorldviewPacks, stepWorldviews } from "../../src/sim/worldview/index.ts";
 import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
@@ -73,6 +73,73 @@ describe("worldview packs", () => {
     const result = stepWorld(world, { elapsedYears: 1, externalEvents: [] });
     expect(result.state.worldview.entities).toHaveLength(1);
     expect(result.state.worldview.entities[0]?.kind).toBe("cultivation-path");
+  });
+
+  it("generates cross-pack contact from active entities in one real region", () => {
+    const regionId = "region:2:2" as never;
+    let found: ReturnType<typeof stepWorldviews> | undefined;
+    for (let seed = 1; seed <= 256 && !found; seed += 1) {
+      const world = createWorld(seed, { width: 8, height: 8, enabledPackIds: ["cultivation.path", "mythology.chinese-motif"], formation: "formed" });
+      world.populations = [{ id: `population:contact:${seed}` as never, speciesId: "species:contact" as never, regionId, count: 48, energy: 1 }];
+      world.worldview.entities = [{
+        id: `worldview:contact-source:${seed}` as never,
+        packId: "cultivation.path",
+        kind: "cultivation-path",
+        name: "潮息路径",
+        regionId,
+        influence: 0.72,
+        resourceBalances: {},
+        status: "active",
+      }, {
+        id: `worldview:contact-target:${seed}` as never,
+        packId: "mythology.chinese-motif",
+        kind: "deity",
+        name: "回环神话",
+        regionId,
+        influence: 0.68,
+        resourceBalances: {},
+        status: "active",
+      }];
+      const delta = stepWorldviews(world, highContext(world));
+      if (delta.worldviewEffects.some((effect) => effect.kind === "interact-entities")) found = delta;
+    }
+
+    expect(found?.worldviewEffects.some((effect) => effect.kind === "interact-entities")).toBe(true);
+    expect(found?.eventDrafts.some((event) => event.kind.startsWith("worldview-cross-pack-") && event.sourceIds.length === 2)).toBe(true);
+  });
+
+  it("applies conflict, propagation, and fusion as bounded reducer effects", () => {
+    const regionId = "region:3:2" as never;
+    const makeWorld = () => {
+      const world = createWorld(1_308, { width: 8, height: 8, enabledPackIds: ["cultivation.path", "mythology.chinese-motif"], formation: "formed" });
+      world.worldview.entities = [{ id: "worldview:source" as never, packId: "cultivation.path", kind: "cultivation-path", name: "源路径", regionId, influence: 0.7, resourceBalances: {}, status: "active" }, { id: "worldview:target" as never, packId: "mythology.chinese-motif", kind: "deity", name: "目标神话", regionId, influence: 0.6, resourceBalances: {}, status: "active" }];
+      return world;
+    };
+    const run = (interaction: "conflict" | "propagation" | "fusion") => {
+      const world = makeWorld();
+      registerSimulationStage({
+        id: `worldview-${interaction}-test`,
+        order: 1,
+        run: () => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [], worldviewEffects: [{ kind: "interact-entities", packId: "cultivation.path", interaction, sourceEntityId: "worldview:source" as never, targetEntityId: "worldview:target" as never, regionId, probability: 1, compatibility: interaction === "fusion" ? 0.9 : 0.3, intensity: 0.8, evidence: { eligible: true } }] }),
+      });
+      return stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false }).state;
+    };
+
+    const conflict = run("conflict");
+    expect(conflict.worldview.interactions[0]).toMatchObject({ kind: "conflict", attempts: 1, successes: 1 });
+    expect(conflict.worldview.entities.find((entity) => entity.id === "worldview:target")?.influence).toBeLessThan(0.6);
+
+    clearSimulationStages();
+    const propagation = run("propagation");
+    expect(propagation.worldview.interactions[0]).toMatchObject({ kind: "propagation", attempts: 1, successes: 1 });
+    expect(propagation.worldview.entities.find((entity) => entity.id === "worldview:target")?.influence).toBeGreaterThan(conflict.worldview.entities.find((entity) => entity.id === "worldview:target")?.influence ?? 0);
+
+    clearSimulationStages();
+    const fusion = run("fusion");
+    const fusionEntity = fusion.worldview.entities.find((entity) => entity.derivedFromEntityIds?.length === 2);
+    expect(fusion.worldview.interactions[0]).toMatchObject({ kind: "fusion", status: "resolved", fusionEntityId: fusionEntity?.id });
+    expect(fusionEntity).toMatchObject({ derivedFromPackIds: ["cultivation.path", "mythology.chinese-motif"], regionId, fusionCount: 1 });
+    expect(isFiniteWorld(fusion)).toBe(true);
   });
 
   it("deduplicates a worldview entity by pack, kind, and region across repeated evidence", () => {

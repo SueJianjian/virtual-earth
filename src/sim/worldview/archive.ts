@@ -1,9 +1,10 @@
-import type { WorldState, WorldviewEntityState, WorldviewPhenomenonState, WorldviewPracticeState } from "../types.ts";
+import type { WorldState, WorldviewEntityState, WorldviewInteractionState, WorldviewPhenomenonState, WorldviewPracticeState } from "../types.ts";
 import { compareSimulationSteps } from "../time.ts";
 
 export const MAX_WORLDVIEW_PHENOMENA = 1_024;
 export const MAX_WORLDVIEW_PRACTICES = 512;
 export const MAX_WORLDVIEW_ENTITIES = 512;
+export const MAX_WORLDVIEW_INTERACTIONS = 256;
 
 const statusRank: Record<WorldviewPracticeState["status"], number> = {
   active: 3,
@@ -13,6 +14,11 @@ const statusRank: Record<WorldviewPracticeState["status"], number> = {
 
 const entityStatusRank: Record<WorldviewEntityState["status"], number> = {
   active: 2,
+  dormant: 1,
+};
+const interactionStatusRank: Record<WorldviewInteractionState["status"], number> = {
+  active: 3,
+  resolved: 2,
   dormant: 1,
 };
 
@@ -27,6 +33,12 @@ const compareEntities = (left: WorldviewEntityState, right: WorldviewEntityState
   || Number((right.activePractitionerCount ?? 0) > 0) - Number((left.activePractitionerCount ?? 0) > 0)
   || compareSimulationSteps(right.lastActiveTimelineStep ?? String(right.lastActiveTick ?? right.originTick ?? 0), left.lastActiveTimelineStep ?? String(left.lastActiveTick ?? left.originTick ?? 0))
   || right.influence - left.influence
+  || left.id.localeCompare(right.id);
+
+const compareInteractions = (left: WorldviewInteractionState, right: WorldviewInteractionState): number =>
+  interactionStatusRank[right.status] - interactionStatusRank[left.status]
+  || compareSimulationSteps(right.lastInteractionTimelineStep ?? String(right.lastInteractionTick), left.lastInteractionTimelineStep ?? String(left.lastInteractionTick))
+  || right.successes - left.successes
   || left.id.localeCompare(right.id);
 
 const comparePhenomena = (
@@ -81,10 +93,11 @@ const retainPhenomena = (
   return retained;
 };
 
-export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: number; practicesRemoved: number; entitiesRemoved: number } => {
+export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: number; practicesRemoved: number; entitiesRemoved: number; interactionsRemoved: number } => {
   const previousPhenomena = state.worldview.phenomena.length;
   const previousPractices = state.worldview.practices.length;
   const previousEntities = state.worldview.entities.length;
+  const previousInteractions = state.worldview.interactions.length;
   const agentIds = new Set(state.agents.map((agent) => agent.id));
   const organizationIds = new Set(state.organizations.map((organization) => organization.id));
   const phenomenonIds = new Set(state.worldview.phenomena.map((phenomenon) => phenomenon.id));
@@ -93,12 +106,18 @@ export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: 
       && (!entity.sourcePhenomenonId || phenomenonIds.has(entity.sourcePhenomenonId))
       && (entity.memberIds ?? []).every((memberId) => agentIds.has(memberId)))
     && state.worldview.phenomena.every((phenomenon) => phenomenon.parentIds.every((parentId) => phenomenonIds.has(parentId)))
+    && state.worldview.interactions.every((interaction) => {
+      const source = state.worldview.entities.find((entity) => entity.id === interaction.sourceEntityId);
+      const target = state.worldview.entities.find((entity) => entity.id === interaction.targetEntityId);
+      return Boolean(source && target && interaction.fusionEntityId ? state.worldview.entities.some((entity) => entity.id === interaction.fusionEntityId) : source && target);
+    })
     && state.cultures.every((culture) => culture.beliefIds.every((beliefId) => !beliefId.startsWith("belief:") || phenomenonIds.has(beliefId.slice("belief:".length))));
   if (previousPhenomena <= MAX_WORLDVIEW_PHENOMENA
     && previousPractices <= MAX_WORLDVIEW_PRACTICES
     && previousEntities <= MAX_WORLDVIEW_ENTITIES
+    && previousInteractions <= MAX_WORLDVIEW_INTERACTIONS
     && referencesAreValid) {
-    return { phenomenaRemoved: 0, practicesRemoved: 0, entitiesRemoved: 0 };
+    return { phenomenaRemoved: 0, practicesRemoved: 0, entitiesRemoved: 0, interactionsRemoved: 0 };
   }
   const practices = state.worldview.practices
     .filter((practice) => agentIds.has(practice.practitionerId) && phenomenonIds.has(practice.phenomenonId))
@@ -108,6 +127,13 @@ export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: 
     .filter((entity) => !entity.sponsorOrganizationId || organizationIds.has(entity.sponsorOrganizationId))
     .sort(compareEntities)
     .slice(0, MAX_WORLDVIEW_ENTITIES);
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  const interactions = state.worldview.interactions
+    .filter((interaction) => entityIds.has(interaction.sourceEntityId)
+      && entityIds.has(interaction.targetEntityId)
+      && (!interaction.fusionEntityId || entityIds.has(interaction.fusionEntityId)))
+    .sort(compareInteractions)
+    .slice(0, MAX_WORLDVIEW_INTERACTIONS);
   const retainedPhenomenonIds = retainPhenomena(state.worldview.phenomena, referencedPhenomenonIds(state, practices, entities));
 
   state.worldview.phenomena = state.worldview.phenomena
@@ -124,6 +150,10 @@ export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: 
       ...entity,
       ...(entity.memberIds ? { memberIds: entity.memberIds.filter((memberId) => agentIds.has(memberId)) } : {}),
     }));
+  const retainedEntityIds = new Set(state.worldview.entities.map((entity) => entity.id));
+  state.worldview.interactions = interactions.filter((interaction) => retainedEntityIds.has(interaction.sourceEntityId)
+    && retainedEntityIds.has(interaction.targetEntityId)
+    && (!interaction.fusionEntityId || retainedEntityIds.has(interaction.fusionEntityId)));
   for (const culture of state.cultures) {
     culture.beliefIds = culture.beliefIds.filter((beliefId) => !beliefId.startsWith("belief:") || retainedIds.has(beliefId.slice("belief:".length)));
   }
@@ -132,5 +162,6 @@ export const compactWorldviewRecords = (state: WorldState): { phenomenaRemoved: 
     phenomenaRemoved: previousPhenomena - state.worldview.phenomena.length,
     practicesRemoved: previousPractices - state.worldview.practices.length,
     entitiesRemoved: previousEntities - state.worldview.entities.length,
+    interactionsRemoved: previousInteractions - state.worldview.interactions.length,
   };
 };

@@ -192,9 +192,9 @@ describe("rule engine and event ledger", () => {
 
   it("keeps the canonical digest stable while streaming typed grids", () => {
     const state = createWorld(1, { width: 256, height: 256, formation: "formed" });
-    expect(worldDigest(state)).toBe("6f8b8cc1");
+    expect(worldDigest(state)).toBe("a8f1d56e");
     state.observation.focusRegionId = "region:1:1" as RegionId;
-    expect(worldDigest(state)).toBe("6f8b8cc1");
+    expect(worldDigest(state)).toBe("a8f1d56e");
   });
 
   it("applies dense patches and sparse changes in simulation-stage order", () => {

@@ -42,6 +42,23 @@ describe("world persistence", () => {
       failures: 2,
       status: "active",
     }];
+    world.worldview.interactions = [{
+      id: "worldview-interaction:persistence",
+      kind: "propagation",
+      sourceEntityId: "worldview:source" as never,
+      targetEntityId: "worldview:target" as never,
+      sourcePackId: "cultivation.path",
+      targetPackId: "emergence.original-worldview",
+      regionId: "region:1:1" as never,
+      originTick: 6,
+      lastInteractionTick: 8,
+      attempts: 3,
+      successes: 2,
+      failures: 1,
+      compatibility: 0.66,
+      intensity: 0.42,
+      status: "active",
+    }];
     const restored = deserializeWorld(serializeWorld(world));
     expect(restored.fields.elevation.values).toBeInstanceOf(Float32Array);
     expect(worldDigest(restored)).toBe(worldDigest(world));
@@ -53,6 +70,7 @@ describe("world persistence", () => {
       attempts: 6,
       failures: 2,
     });
+    expect(restored.worldview.interactions).toEqual(world.worldview.interactions);
   });
 
   it("rejects malformed and unsupported saves", () => {
@@ -127,14 +145,16 @@ describe("world persistence", () => {
 
   it("restores an empty phenomenon ledger for saves created before causal worldview records", () => {
     const world = createWorld(123, { width: 8, height: 8, enabledPackIds: ["cultivation.path"] });
-    const legacy = JSON.parse(serializeWorld(world)) as { world: { worldview: { phenomena?: unknown; practices?: unknown } } };
+    const legacy = JSON.parse(serializeWorld(world)) as { world: { worldview: { phenomena?: unknown; practices?: unknown; interactions?: unknown } } };
     delete legacy.world.worldview.phenomena;
     delete legacy.world.worldview.practices;
+    delete legacy.world.worldview.interactions;
 
     const restored = deserializeWorld(JSON.stringify(legacy));
 
     expect(restored.worldview.phenomena).toEqual([]);
     expect(restored.worldview.practices).toEqual([]);
+    expect(restored.worldview.interactions).toEqual([]);
     expect(restored.worldview.enabledPackIds).toEqual(["cultivation.path"]);
   });
 

@@ -45,6 +45,7 @@ import type {
   WorldHistorySample,
   WorldState,
   WorldviewEffect,
+  WorldviewEntityState,
 } from "./types.ts";
 
 const stageRegistry = new Map<string, SimulationStage>();
@@ -397,6 +398,152 @@ type ResourceTransactionLike = WorldDelta["resourceTransactions"][number];
 
 const asEntityId = (value: string) => value as WorldState["agents"][number]["id"];
 
+const fusionKindFor = (source: WorldviewEntityState, target: WorldviewEntityState): WorldviewEntityState["kind"] =>
+  source.kind === target.kind
+    ? source.kind
+    : source.kind === "cultivation-path" || target.kind === "cultivation-path"
+      ? "cultivation-path"
+      : "sect";
+
+const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewEffect, { kind: "interact-entities" }>): void => {
+  const source = state.worldview.entities.find((entity) => entity.id === effect.sourceEntityId);
+  const target = state.worldview.entities.find((entity) => entity.id === effect.targetEntityId);
+  if (!source || !target || source.id === target.id || source.regionId !== effect.regionId || target.regionId !== effect.regionId) return;
+  if (source.packId !== effect.packId
+    || source.packId === target.packId
+    || !state.worldview.enabledPackIds.includes(target.packId)) return;
+
+  const sourceId = source.id.localeCompare(target.id) <= 0 ? source.id : target.id;
+  const targetId = source.id.localeCompare(target.id) <= 0 ? target.id : source.id;
+  const interactionId = `worldview-interaction:${hashString(`${effect.interaction}:${sourceId}:${targetId}`).toString(16)}`;
+  const nextTick = nextSimulationTick(state);
+  const nextStep = nextSimulationStep(state);
+  const existing = state.worldview.interactions.find((interaction) => interaction.id === interactionId);
+  if (existing?.kind === "fusion" && existing.fusionEntityId) return;
+  const sourcePackId = source.packId;
+  const targetPackId = target.packId;
+  const intensity = Math.max(0, Math.min(1, effect.intensity));
+  const compatibility = Math.max(0, Math.min(1, effect.compatibility));
+
+  if (effect.interaction === "conflict") {
+    source.influence = Math.max(0, Math.min(1, source.influence + intensity * 0.015));
+    target.influence = Math.max(0, Math.min(1, target.influence - intensity * 0.02));
+    source.conflictCount = addPersistentTotal(source.conflictCount ?? 0, 1);
+    target.conflictCount = addPersistentTotal(target.conflictCount ?? 0, 1);
+  } else if (effect.interaction === "propagation") {
+    target.influence = Math.max(0, Math.min(1, target.influence + intensity * (0.008 + compatibility * 0.012)));
+    source.propagationCount = addPersistentTotal(source.propagationCount ?? 0, 1);
+    target.propagationCount = addPersistentTotal(target.propagationCount ?? 0, 1);
+  } else {
+    const fusionId = asEntityId(`worldview:fusion:${hashString(`${effect.regionId}:${sourceId}:${targetId}`).toString(16)}`);
+    const existingFusion = state.worldview.entities.find((entity) => entity.id === fusionId);
+    if (!existingFusion) {
+      const memberIds = [...new Set([...(source.memberIds ?? []), ...(target.memberIds ?? [])])].sort().slice(0, 64);
+      const sponsorOrganizationId = [source.sponsorOrganizationId, target.sponsorOrganizationId]
+        .find((organizationId) => organizationId && state.organizations.some((organization) => organization.id === organizationId && organization.status === "active"));
+      const resourceBalances: Record<string, number> = {};
+      for (const [resourceId, amount] of Object.entries(source.resourceBalances)) resourceBalances[resourceId] = Math.min(4, (resourceBalances[resourceId] ?? 0) + amount);
+      for (const [resourceId, amount] of Object.entries(target.resourceBalances)) resourceBalances[resourceId] = Math.min(4, (resourceBalances[resourceId] ?? 0) + amount);
+      const fusionEntity: WorldviewEntityState = {
+        id: fusionId,
+        packId: sourcePackId,
+        kind: fusionKindFor(source, target),
+        name: `${source.name ?? source.id.slice(-8)} + ${target.name ?? target.id.slice(-8)}`,
+        regionId: effect.regionId,
+        influence: Math.max(0, Math.min(1, (source.influence + target.influence) * 0.35 + compatibility * 0.15)),
+        resourceBalances,
+        originTick: nextTick,
+        originTimelineStep: nextStep,
+        derivedFromEntityIds: [source.id, target.id].sort(),
+        derivedFromPackIds: [sourcePackId, targetPackId].sort(),
+        ...(memberIds.length > 0 ? { memberIds } : {}),
+        ...(sponsorOrganizationId ? { sponsorOrganizationId } : {}),
+        status: "active",
+        supporterCount: Math.min(1_000_000_000, (source.supporterCount ?? 0) + (target.supporterCount ?? 0)),
+        activePractitionerCount: Math.min(1_000_000_000, (source.activePractitionerCount ?? 0) + (target.activePractitionerCount ?? 0)),
+        sponsorCount: sponsorOrganizationId ? 1 : 0,
+        viability: Math.max(0, Math.min(1, compatibility * 0.7 + Math.min(source.viability ?? source.influence, target.viability ?? target.influence) * 0.3)),
+        lastStatusChangeTick: nextTick,
+        lastStatusChangeTimelineStep: nextStep,
+        lastActiveTick: nextTick,
+        lastActiveTimelineStep: nextStep,
+        revivalCount: 0,
+        fusionCount: 1,
+        lastInteractionTick: nextTick,
+        lastInteractionTimelineStep: nextStep,
+      };
+      state.worldview.entities.push(fusionEntity);
+    }
+    source.fusionCount = addPersistentTotal(source.fusionCount ?? 0, 1);
+    target.fusionCount = addPersistentTotal(target.fusionCount ?? 0, 1);
+    source.lastInteractionTick = nextTick;
+    target.lastInteractionTick = nextTick;
+    source.lastInteractionTimelineStep = nextStep;
+    target.lastInteractionTimelineStep = nextStep;
+    const fusionEntity = state.worldview.entities.find((entity) => entity.id === fusionId);
+    if (existing) {
+      if (fusionEntity) existing.fusionEntityId = fusionEntity.id;
+      existing.status = "resolved";
+    } else {
+      state.worldview.interactions.push({
+        id: interactionId,
+        kind: effect.interaction,
+        sourceEntityId: source.id,
+        targetEntityId: target.id,
+        sourcePackId,
+        targetPackId,
+        regionId: effect.regionId,
+        originTick: nextTick,
+        originTimelineStep: nextStep,
+        lastInteractionTick: nextTick,
+        lastInteractionTimelineStep: nextStep,
+        attempts: 1,
+        successes: 1,
+        failures: 0,
+        compatibility,
+        intensity,
+        status: "resolved",
+        ...(fusionEntity ? { fusionEntityId: fusionEntity.id } : {}),
+      });
+    }
+    return;
+  }
+
+  source.lastInteractionTick = nextTick;
+  target.lastInteractionTick = nextTick;
+  source.lastInteractionTimelineStep = nextStep;
+  target.lastInteractionTimelineStep = nextStep;
+  if (existing) {
+    existing.lastInteractionTick = nextTick;
+    existing.lastInteractionTimelineStep = nextStep;
+    existing.attempts = addPersistentTotal(existing.attempts, 1);
+    existing.successes = addPersistentTotal(existing.successes, 1);
+    existing.compatibility = compatibility;
+    existing.intensity = intensity;
+    existing.status = source.status === "active" && target.status === "active" ? "active" : "dormant";
+  } else {
+    state.worldview.interactions.push({
+      id: interactionId,
+      kind: effect.interaction,
+      sourceEntityId: source.id,
+      targetEntityId: target.id,
+      sourcePackId,
+      targetPackId,
+      regionId: effect.regionId,
+      originTick: nextTick,
+      originTimelineStep: nextStep,
+      lastInteractionTick: nextTick,
+      lastInteractionTimelineStep: nextStep,
+      attempts: 1,
+      successes: 1,
+      failures: 0,
+      compatibility,
+      intensity,
+      status: "active",
+    });
+  }
+};
+
 const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): void => {
   const clamp = (value: number): number => Math.max(0, Math.min(1, value));
   for (const effect of effects) {
@@ -452,6 +599,15 @@ const applyWorldviewEffects = (state: WorldState, effects: WorldviewEffect[]): v
         lastActiveTimelineStep: nextSimulationStep(state),
         revivalCount: 0,
       });
+    } else if (effect.kind === "interact-entities") {
+      if (!state.worldview.enabledPackIds.includes(effect.packId)) throw new Error(`Worldview pack is not enabled: ${effect.packId}`);
+      if (![effect.probability, effect.compatibility, effect.intensity].every(Number.isFinite)
+        || effect.probability < 0 || effect.probability > 1
+        || effect.compatibility < 0 || effect.compatibility > 1
+        || effect.intensity < 0 || effect.intensity > 1) {
+        throw new Error(`Invalid worldview interaction: ${effect.sourceEntityId}`);
+      }
+      applyWorldviewInteraction(state, effect);
     } else if (effect.kind === "record-phenomenon") {
       if (!state.worldview.enabledPackIds.includes(effect.packId)) throw new Error(`Worldview pack is not enabled: ${effect.packId}`);
       const id = `phenomenon:${hashString(JSON.stringify(effect)).toString(16)}`;
@@ -606,6 +762,13 @@ const validateDeltaBeforeMutation = (state: WorldState, delta: WorldDelta): void
       && (![effect.energyGain, effect.energySpent, effect.attunementDelta].every(Number.isFinite)
         || effect.energyGain < 0 || effect.energySpent < 0)) {
       throw new Error(`Invalid practice training values: ${effect.practiceId}`);
+    }
+    if (effect.kind === "interact-entities"
+      && (![effect.probability, effect.compatibility, effect.intensity].every(Number.isFinite)
+        || effect.probability < 0 || effect.probability > 1
+        || effect.compatibility < 0 || effect.compatibility > 1
+        || effect.intensity < 0 || effect.intensity > 1)) {
+      throw new Error(`Invalid worldview interaction: ${effect.sourceEntityId}`);
     }
   }
   if (delta.formationEffect && !Object.values(delta.formationEffect).every((value) => typeof value !== "number" || Number.isFinite(value))) {

@@ -9,7 +9,7 @@ import { MAX_SUBSTANCE_RESERVE, MAX_SUBSTANCES } from "../../src/sim/environment
 import { MAX_POPULATION_RECORDS } from "../../src/sim/ecology/archive.ts";
 import { MAX_BELIEFS_PER_CULTURE, MAX_CULTURE_RECORDS, MAX_KNOWLEDGE_PER_AGENT, MAX_KNOWLEDGE_PER_CULTURE, MAX_KNOWLEDGE_RECORDS } from "../../src/sim/culture/archive.ts";
 import { MAX_AGENT_MEMORY_IDS, MAX_DETAILED_AGENTS, MAX_RELATIONSHIP_RECORDS, MAX_RELATIONSHIPS_PER_AGENT } from "../../src/sim/agents/lifecycle.ts";
-import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../../src/sim/worldview/archive.ts";
+import { MAX_WORLDVIEW_ENTITIES, MAX_WORLDVIEW_INTERACTIONS, MAX_WORLDVIEW_PHENOMENA, MAX_WORLDVIEW_PRACTICES } from "../../src/sim/worldview/archive.ts";
 import { MAX_CHILD_ORGANIZATION_IDS, MAX_DIPLOMATIC_RELATIONS, MAX_ORGANIZATION_RECORDS, MAX_ORGANIZATIONS_PER_SUMMARY } from "../../src/sim/society/archive.ts";
 import { MAX_IMMUNITY_IDS_PER_AGENT, MAX_INFECTIONS_PER_AGENT, MAX_PATHOGENS, MAX_REGIONAL_OUTBREAKS_PER_PATHOGEN } from "../../src/sim/health/disease.ts";
 import { MAX_FACILITIES_PER_REGION } from "../../src/sim/society/facilities.ts";
@@ -218,6 +218,7 @@ describe("long-running worlds", () => {
     expect(state.worldview.phenomena.length).toBeLessThanOrEqual(MAX_WORLDVIEW_PHENOMENA);
     expect(state.worldview.practices.length).toBeLessThanOrEqual(MAX_WORLDVIEW_PRACTICES);
     expect(state.worldview.entities.length).toBeLessThanOrEqual(MAX_WORLDVIEW_ENTITIES);
+    expect(state.worldview.interactions.length).toBeLessThanOrEqual(MAX_WORLDVIEW_INTERACTIONS);
     const phenomenonIds = new Set(state.worldview.phenomena.map((phenomenon) => phenomenon.id));
     expect(state.worldview.practices.every((practice) => phenomenonIds.has(practice.phenomenonId))).toBe(true);
     expect(state.worldview.phenomena.every((phenomenon) => phenomenon.parentIds.every((parentId) => phenomenonIds.has(parentId)))).toBe(true);
@@ -228,6 +229,14 @@ describe("long-running worlds", () => {
       expect(entity.influence).toBeLessThanOrEqual(1);
       expect(entity.viability ?? 0).toBeLessThanOrEqual(1);
       expect(["active", "dormant"]).toContain(entity.status);
+    }
+    const worldviewEntityIds = new Set(state.worldview.entities.map((entity) => entity.id));
+    for (const interaction of state.worldview.interactions) {
+      expect(worldviewEntityIds.has(interaction.sourceEntityId)).toBe(true);
+      expect(worldviewEntityIds.has(interaction.targetEntityId)).toBe(true);
+      if (interaction.fusionEntityId) expect(worldviewEntityIds.has(interaction.fusionEntityId)).toBe(true);
+      expect(interaction.sourcePackId).not.toBe(interaction.targetPackId);
+      expect([interaction.compatibility, interaction.intensity, interaction.attempts, interaction.successes, interaction.failures].every((value) => Number.isFinite(value) && value >= 0)).toBe(true);
     }
   };
 
