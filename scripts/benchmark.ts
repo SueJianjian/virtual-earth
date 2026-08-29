@@ -296,6 +296,8 @@ const health = {
     const source = state.worldview.entities.find((entity) => entity.id === interaction.sourceEntityId);
     const target = state.worldview.entities.find((entity) => entity.id === interaction.targetEntityId);
     return Boolean(source && target && source.packId !== target.packId
+      && source.regionId === interaction.regionId
+      && target.regionId === (interaction.targetRegionId ?? interaction.regionId)
       && (!interaction.fusionEntityId || state.worldview.entities.some((entity) => entity.id === interaction.fusionEntityId))
       && [interaction.originTick, interaction.lastInteractionTick, interaction.attempts, interaction.successes, interaction.failures, interaction.compatibility, interaction.intensity].every((value) => Number.isFinite(value) && value >= 0))
       && interaction.compatibility <= 1

@@ -50,6 +50,7 @@ describe("world persistence", () => {
       sourcePackId: "cultivation.path",
       targetPackId: "emergence.original-worldview",
       regionId: "region:1:1" as never,
+      targetRegionId: "region:6:1" as never,
       originTick: 6,
       lastInteractionTick: 8,
       attempts: 3,

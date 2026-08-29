@@ -408,14 +408,15 @@ const fusionKindFor = (source: WorldviewEntityState, target: WorldviewEntityStat
 const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewEffect, { kind: "interact-entities" }>): void => {
   const source = state.worldview.entities.find((entity) => entity.id === effect.sourceEntityId);
   const target = state.worldview.entities.find((entity) => entity.id === effect.targetEntityId);
-  if (!source || !target || source.id === target.id || source.regionId !== effect.regionId || target.regionId !== effect.regionId) return;
+  const targetRegionId = effect.targetRegionId ?? effect.regionId;
+  if (!source || !target || source.id === target.id || source.regionId !== effect.regionId || target.regionId !== targetRegionId) return;
   if (source.packId !== effect.packId
     || source.packId === target.packId
     || !state.worldview.enabledPackIds.includes(target.packId)) return;
 
   const sourceId = source.id.localeCompare(target.id) <= 0 ? source.id : target.id;
   const targetId = source.id.localeCompare(target.id) <= 0 ? target.id : source.id;
-  const interactionId = `worldview-interaction:${hashString(`${effect.interaction}:${sourceId}:${targetId}`).toString(16)}`;
+  const interactionId = `worldview-interaction:${hashString(`${effect.interaction}:${sourceId}:${targetId}:${effect.regionId}:${targetRegionId}`).toString(16)}`;
   const nextTick = nextSimulationTick(state);
   const nextStep = nextSimulationStep(state);
   const existing = state.worldview.interactions.find((interaction) => interaction.id === interactionId);
@@ -435,7 +436,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
     source.propagationCount = addPersistentTotal(source.propagationCount ?? 0, 1);
     target.propagationCount = addPersistentTotal(target.propagationCount ?? 0, 1);
   } else {
-    const fusionId = asEntityId(`worldview:fusion:${hashString(`${effect.regionId}:${sourceId}:${targetId}`).toString(16)}`);
+    const fusionId = asEntityId(`worldview:fusion:${hashString(`${effect.regionId}:${targetRegionId}:${sourceId}:${targetId}`).toString(16)}`);
     const existingFusion = state.worldview.entities.find((entity) => entity.id === fusionId);
     if (!existingFusion) {
       const memberIds = [...new Set([...(source.memberIds ?? []), ...(target.memberIds ?? [])])].sort().slice(0, 64);
@@ -449,7 +450,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
         packId: sourcePackId,
         kind: fusionKindFor(source, target),
         name: `${source.name ?? source.id.slice(-8)} + ${target.name ?? target.id.slice(-8)}`,
-        regionId: effect.regionId,
+        regionId: targetRegionId,
         influence: Math.max(0, Math.min(1, (source.influence + target.influence) * 0.35 + compatibility * 0.15)),
         resourceBalances,
         originTick: nextTick,
@@ -493,6 +494,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
         sourcePackId,
         targetPackId,
         regionId: effect.regionId,
+        ...(targetRegionId === effect.regionId ? {} : { targetRegionId }),
         originTick: nextTick,
         originTimelineStep: nextStep,
         lastInteractionTick: nextTick,
@@ -530,6 +532,7 @@ const applyWorldviewInteraction = (state: WorldState, effect: Extract<WorldviewE
       sourcePackId,
       targetPackId,
       regionId: effect.regionId,
+      ...(targetRegionId === effect.regionId ? {} : { targetRegionId }),
       originTick: nextTick,
       originTimelineStep: nextStep,
       lastInteractionTick: nextTick,

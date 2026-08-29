@@ -1,6 +1,7 @@
 import { forkRandom, randomFloat } from "../random.ts";
 import type { ResourceTransaction, RuleApplicationContext, RuleDecision, WorldState, WorldviewContext, WorldviewDelta, WorldviewEffect, WorldviewEntityState } from "../types.ts";
 import { getWorldviewPack } from "./registry.ts";
+import { simulationStepDistance } from "../time.ts";
 
 const emptyDelta = (): WorldviewDelta => ({ worldviewEffects: [], resourceTransactions: [], eventDrafts: [] });
 
@@ -71,6 +72,18 @@ const energyTransactionsFor = (effect: WorldviewEffect, state: Pick<WorldState, 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
 const MAX_INTERACTIONS_PER_STEP = 4;
 const MAX_INTERACTION_CANDIDATES = 128;
+const MAX_CROSS_REGION_CONTACTS = 96;
+const RECENT_CONTACT_WINDOW_STEPS = 64;
+
+type InteractionRoute = "local" | "trade" | "alliance" | "migration" | "war";
+type InteractionCandidate = {
+  source: WorldviewEntityState;
+  target: WorldviewEntityState;
+  sourceRegionId: string;
+  targetRegionId: string;
+  contactStrength: number;
+  route: InteractionRoute;
+};
 
 const pairCompatibility = (source: WorldviewEntityState, target: WorldviewEntityState, localPopulation: number): number => {
   const kindAffinity = source.kind === target.kind
@@ -83,43 +96,135 @@ const pairCompatibility = (source: WorldviewEntityState, target: WorldviewEntity
   return clamp(kindAffinity * 0.5 + influenceAffinity * 0.25 + populationContact * 0.25);
 };
 
-const interactionCandidates = (state: WorldviewContext["state"]): Array<[WorldviewEntityState, WorldviewEntityState]> => {
+const regionValue = (event: WorldState["events"][number], key: string): string | undefined => {
+  const payload = event.payload[key];
+  if (typeof payload === "string" && payload.startsWith("region:")) return payload;
+  const evidence = event.evidence[key];
+  return typeof evidence === "string" && evidence.startsWith("region:") ? evidence : undefined;
+};
+
+const routePriority: Record<InteractionRoute, number> = { local: 0, war: 1, migration: 2, trade: 3, alliance: 4 };
+
+const interactionCandidates = (state: WorldviewContext["state"], currentStep: string): InteractionCandidate[] => {
   const entities = state.worldview.entities
     .filter((entity) => entity.status === "active" && !entity.derivedFromEntityIds?.length)
     .sort((left, right) => right.influence - left.influence || left.id.localeCompare(right.id))
     .slice(0, MAX_INTERACTION_CANDIDATES);
-  const agentsByRegion = new Map<string, number>();
-  for (const population of state.populations) agentsByRegion.set(population.regionId, (agentsByRegion.get(population.regionId) ?? 0) + population.count);
+  const populationByRegion = new Map<string, number>();
+  for (const population of state.populations) populationByRegion.set(population.regionId, (populationByRegion.get(population.regionId) ?? 0) + population.count);
   const byRegion = new Map<string, WorldviewEntityState[]>();
   for (const entity of entities) {
     const regionEntities = byRegion.get(entity.regionId) ?? [];
     if (regionEntities.length < 8) regionEntities.push(entity);
     byRegion.set(entity.regionId, regionEntities);
   }
-  const candidates: Array<[WorldviewEntityState, WorldviewEntityState]> = [];
+  const candidates: InteractionCandidate[] = [];
+  const seenPairs = new Set<string>();
+  const addCandidate = (candidate: InteractionCandidate): void => {
+    if (candidate.source.packId === candidate.target.packId) return;
+    const pairKey = [candidate.source.id, candidate.target.id].sort().join("|");
+    if (seenPairs.has(pairKey)) return;
+    seenPairs.add(pairKey);
+    candidates.push(candidate);
+  };
   for (const [regionId, regionEntities] of [...byRegion.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    const localPopulation = agentsByRegion.get(regionId) ?? 0;
+    const localPopulation = populationByRegion.get(regionId) ?? 0;
     for (let sourceIndex = 0; sourceIndex < regionEntities.length; sourceIndex += 1) {
       for (let targetIndex = sourceIndex + 1; targetIndex < regionEntities.length; targetIndex += 1) {
         const source = regionEntities[sourceIndex]!;
         const target = regionEntities[targetIndex]!;
         if (source.packId === target.packId) continue;
         const ordered = source.id.localeCompare(target.id) <= 0 ? [source, target] as const : [target, source] as const;
-        const sourceEntity = ordered[0];
-        const targetEntity = ordered[1];
-        const compatibility = pairCompatibility(sourceEntity, targetEntity, localPopulation);
-        if (compatibility > 0) candidates.push([sourceEntity, targetEntity]);
+        addCandidate({
+          source: ordered[0],
+          target: ordered[1],
+          sourceRegionId: regionId,
+          targetRegionId: regionId,
+          contactStrength: clamp(localPopulation / 24),
+          route: "local",
+        });
+      }
+    }
+  }
+
+  const contacts = new Map<string, { fromRegion: string; toRegion: string; strength: number; route: Exclude<InteractionRoute, "local"> }>();
+  const addContact = (fromRegion: string, toRegion: string, strength: number, route: Exclude<InteractionRoute, "local">): void => {
+    if (fromRegion === toRegion || !byRegion.has(fromRegion) || !byRegion.has(toRegion)) return;
+    const key = `${fromRegion}|${toRegion}`;
+    const current = contacts.get(key);
+    if (!current && contacts.size >= MAX_CROSS_REGION_CONTACTS) {
+      const weakest = [...contacts.entries()]
+        .sort(([, left], [, right]) => routePriority[left.route] - routePriority[right.route] || left.strength - right.strength || right.fromRegion.localeCompare(left.fromRegion) || right.toRegion.localeCompare(left.toRegion))[0];
+      if (!weakest || routePriority[route] < routePriority[weakest[1].route]
+        || (routePriority[route] === routePriority[weakest[1].route] && strength <= weakest[1].strength)) return;
+      contacts.delete(weakest[0]);
+    }
+    if (!current || strength > current.strength || (strength === current.strength && routePriority[route] > routePriority[current.route])) {
+      contacts.set(key, { fromRegion, toRegion, strength, route });
+    }
+  };
+  const addBidirectionalContact = (left: string, right: string, strength: number, route: Exclude<InteractionRoute, "local">): void => {
+    addContact(left, right, strength, route);
+    addContact(right, left, strength, route);
+  };
+
+  const organizations = state.organizations
+    .filter((organization) => organization.status === "active")
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const organizationsById = new Map(organizations.map((organization) => [organization.id, organization]));
+  for (const organization of organizations) {
+    for (const [peerId, stance] of Object.entries(organization.diplomacy ?? {}).sort(([left], [right]) => left.localeCompare(right))) {
+      const peer = organizationsById.get(peerId as WorldState["organizations"][number]["id"]);
+      if (!peer || organization.regionId === peer.regionId) continue;
+      if (stance === "allied") addBidirectionalContact(organization.regionId, peer.regionId, 0.9, "alliance");
+      else if (stance === "trade") addBidirectionalContact(organization.regionId, peer.regionId, 0.72, "trade");
+    }
+  }
+
+  for (let index = state.events.length - 1; index >= 0 && contacts.size < MAX_CROSS_REGION_CONTACTS; index -= 1) {
+    const event = state.events[index];
+    if (!event || simulationStepDistance(currentStep, event.timelineStep ?? String(event.tick), RECENT_CONTACT_WINDOW_STEPS + 1) > RECENT_CONTACT_WINDOW_STEPS) continue;
+    const fromRegion = regionValue(event, "fromRegion") ?? regionValue(event, "originRegionId");
+    const toRegion = regionValue(event, "toRegion");
+    if (!fromRegion || !toRegion || fromRegion === toRegion) continue;
+    if (event.kind === "interregional-trade") addContact(fromRegion, toRegion, 0.8, "trade");
+    else if (event.kind === "diplomatic-alliance") addBidirectionalContact(fromRegion, toRegion, 0.86, "alliance");
+    else if (event.kind === "population-migration" || event.kind === "population-dispersal") addContact(fromRegion, toRegion, 0.62, "migration");
+    else if (event.kind === "war-displacement" || event.kind === "organization-war") addContact(fromRegion, toRegion, 0.48, "war");
+  }
+
+  for (const contact of [...contacts.values()]
+    .sort((left, right) => routePriority[right.route] - routePriority[left.route] || right.strength - left.strength || left.fromRegion.localeCompare(right.fromRegion) || left.toRegion.localeCompare(right.toRegion))
+    .slice(0, MAX_CROSS_REGION_CONTACTS)) {
+    const sourceEntities = byRegion.get(contact.fromRegion) ?? [];
+    const targetEntities = byRegion.get(contact.toRegion) ?? [];
+    for (const source of sourceEntities) {
+      for (const target of targetEntities) {
+        addCandidate({
+          source,
+          target,
+          sourceRegionId: contact.fromRegion,
+          targetRegionId: contact.toRegion,
+          contactStrength: contact.strength,
+          route: contact.route,
+        });
+        if (candidates.length >= MAX_INTERACTION_CANDIDATES) return candidates;
       }
     }
   }
   return candidates;
 };
 
-const interactionFor = (state: WorldviewContext["state"], context: WorldviewContext, source: WorldviewEntityState, target: WorldviewEntityState): { effect: Extract<WorldviewEffect, { kind: "interact-entities" }>; roll: number } | undefined => {
-  const localPopulation = state.populations.filter((population) => population.regionId === source.regionId).reduce((sum, population) => sum + population.count, 0);
+const interactionFor = (state: WorldviewContext["state"], context: WorldviewContext, candidate: InteractionCandidate): { effect: Extract<WorldviewEffect, { kind: "interact-entities" }>; roll: number } | undefined => {
+  const { source, target } = candidate;
+  const sourcePopulation = state.populations.filter((population) => population.regionId === candidate.sourceRegionId).reduce((sum, population) => sum + population.count, 0);
+  const targetPopulation = state.populations.filter((population) => population.regionId === candidate.targetRegionId).reduce((sum, population) => sum + population.count, 0);
+  const localPopulation = candidate.sourceRegionId === candidate.targetRegionId ? sourcePopulation : sourcePopulation + targetPopulation;
   const compatibility = pairCompatibility(source, target, localPopulation);
-  const contact = clamp(localPopulation / 24);
-  const probability = clamp(0.025 + contact * 0.04 + Math.min(source.influence, target.influence) * 0.025);
+  const contact = candidate.route === "local" ? clamp(localPopulation / 24) : clamp(candidate.contactStrength * (0.65 + Math.min(96, localPopulation) / 240));
+  const probability = candidate.route === "local"
+    ? clamp(0.025 + contact * 0.04 + Math.min(source.influence, target.influence) * 0.025)
+    : clamp(0.035 + contact * 0.09 + Math.min(source.influence, target.influence) * 0.03);
   const [roll] = randomFloat(forkRandom(context.random, `worldview:interaction:${source.id}:${target.id}`));
   if (roll >= probability) return undefined;
   const [kindRoll] = randomFloat(forkRandom(context.random, `worldview:interaction-kind:${source.id}:${target.id}`));
@@ -136,7 +241,8 @@ const interactionFor = (state: WorldviewContext["state"], context: WorldviewCont
       interaction,
       sourceEntityId: source.id,
       targetEntityId: target.id,
-      regionId: source.regionId,
+      regionId: candidate.sourceRegionId as WorldState["worldview"]["entities"][number]["regionId"],
+      ...(candidate.targetRegionId === candidate.sourceRegionId ? {} : { targetRegionId: candidate.targetRegionId as WorldState["worldview"]["entities"][number]["regionId"] }),
       probability,
       compatibility,
       intensity: clamp(0.35 + (1 - compatibility) * 0.45 + roll * 0.2),
@@ -144,8 +250,14 @@ const interactionFor = (state: WorldviewContext["state"], context: WorldviewCont
         eligible: true,
         sourcePackId: source.packId,
         targetPackId: target.packId,
-        localPopulation,
-        compatibility,
+         localPopulation,
+        sourcePopulation,
+        targetPopulation,
+        fromRegion: candidate.sourceRegionId,
+        toRegion: candidate.targetRegionId,
+        route: candidate.route,
+        contactStrength: candidate.contactStrength,
+         compatibility,
         contact,
       },
     },
@@ -218,10 +330,12 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
   }
   const enabledPacks = new Set(context.enabledPackIds);
   let interactionCount = 0;
-  for (const [source, target] of interactionCandidates(context.state)) {
+  const currentStep = context.state.timeline?.step ?? String(context.tick ?? 0);
+  for (const candidate of interactionCandidates(context.state, currentStep)) {
     if (interactionCount >= MAX_INTERACTIONS_PER_STEP) break;
+    const { source, target } = candidate;
     if (!enabledPacks.has(source.packId) || !enabledPacks.has(target.packId)) continue;
-    const result = interactionFor(context.state, context, source, target);
+    const result = interactionFor(context.state, context, candidate);
     if (!result) continue;
     const { effect, roll } = result;
     delta.worldviewEffects.push(effect);
@@ -234,13 +348,16 @@ export const stepWorldviews = (_state: WorldState, context: WorldviewContext): W
       evidence: { ...effect.evidence },
       payload: {
         interaction: effect.interaction,
-        sourceEntityId: effect.sourceEntityId,
-        targetEntityId: effect.targetEntityId,
-        sourcePackId: source.packId,
-        targetPackId: target.packId,
-        regionId: effect.regionId,
-        compatibility: effect.compatibility,
-        intensity: effect.intensity,
+         sourceEntityId: effect.sourceEntityId,
+         targetEntityId: effect.targetEntityId,
+         sourcePackId: source.packId,
+         targetPackId: target.packId,
+         regionId: effect.regionId,
+         ...(effect.targetRegionId === undefined ? {} : { targetRegionId: effect.targetRegionId }),
+         compatibility: effect.compatibility,
+         intensity: effect.intensity,
+         route: effect.evidence.route ?? "local",
+         contactStrength: effect.evidence.contactStrength ?? 0,
       },
       source: "natural",
     });

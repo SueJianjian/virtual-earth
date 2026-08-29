@@ -6,7 +6,7 @@ import { regionIdForWorldview } from "../../src/sim/worldview/rules.ts";
 import { createAgent } from "../../src/sim/agents/index.ts";
 import { createSpecies } from "../../src/sim/ecology/species.ts";
 import { createOrganization } from "../../src/sim/society/organization.ts";
-import type { WorldDelta, WorldviewContext } from "../../src/sim/types.ts";
+import type { WorldDelta, WorldviewContext, WorldviewEffect } from "../../src/sim/types.ts";
 import { originalEmergence } from "../../src/sim/worldview/packs/original-emergence.ts";
 
 const highContext = (state: ReturnType<typeof createWorld>): WorldviewContext => ({
@@ -106,6 +106,66 @@ describe("worldview packs", () => {
 
     expect(found?.worldviewEffects.some((effect) => effect.kind === "interact-entities")).toBe(true);
     expect(found?.eventDrafts.some((event) => event.kind.startsWith("worldview-cross-pack-") && event.sourceIds.length === 2)).toBe(true);
+  });
+
+  it("requires a real interregional contact before worldview propagation can start", () => {
+    const sourceRegion = "region:1:1" as never;
+    const targetRegion = "region:6:1" as never;
+    const makeWorld = (seed: number) => {
+      const world = createWorld(seed, { width: 8, height: 8, enabledPackIds: ["cultivation.path", "mythology.chinese-motif"], formation: "formed" });
+      world.populations = [
+        { id: `population:cross-source:${seed}` as never, speciesId: "species:cross" as never, regionId: sourceRegion, count: 48, energy: 1 },
+        { id: `population:cross-target:${seed}` as never, speciesId: "species:cross" as never, regionId: targetRegion, count: 48, energy: 1 },
+      ];
+      world.worldview.entities = [{ id: `worldview:cross-source:${seed}` as never, packId: "cultivation.path", kind: "cultivation-path", name: "源路径", regionId: sourceRegion, influence: 0.72, resourceBalances: {}, status: "active" }, { id: `worldview:cross-target:${seed}` as never, packId: "mythology.chinese-motif", kind: "deity", name: "目标传统", regionId: targetRegion, influence: 0.68, resourceBalances: {}, status: "active" }];
+      return world;
+    };
+
+    const isolated = makeWorld(1);
+    expect(stepWorldviews(isolated, highContext(isolated)).worldviewEffects.some((effect) => effect.kind === "interact-entities")).toBe(false);
+
+    let interaction: Extract<WorldviewEffect, { kind: "interact-entities" }> | undefined;
+    let delta: ReturnType<typeof stepWorldviews> | undefined;
+    for (let seed = 1; seed <= 512 && !interaction; seed += 1) {
+      const connected = makeWorld(seed);
+      const sourceOrganization = createOrganization("city", sourceRegion, []);
+      const targetOrganization = createOrganization("city", targetRegion, []);
+      sourceOrganization.diplomacy = { [targetOrganization.id]: "trade" };
+      targetOrganization.diplomacy = { [sourceOrganization.id]: "trade" };
+      connected.organizations = [sourceOrganization, targetOrganization];
+      delta = stepWorldviews(connected, highContext(connected));
+      interaction = delta.worldviewEffects.find((effect): effect is Extract<WorldviewEffect, { kind: "interact-entities" }> => effect.kind === "interact-entities");
+    }
+    expect(interaction).toMatchObject({
+      kind: "interact-entities",
+      regionId: sourceRegion,
+      targetRegionId: targetRegion,
+      evidence: { route: "trade", fromRegion: sourceRegion, toRegion: targetRegion },
+    });
+    expect(delta?.eventDrafts).toContainEqual(expect.objectContaining({
+      kind: expect.stringMatching(/^worldview-cross-pack-/),
+      payload: expect.objectContaining({ targetRegionId: targetRegion, route: "trade" }),
+    }));
+  });
+
+  it("records the receiving region when an interregional worldview fusion is applied", () => {
+    const sourceRegion = "region:1:2" as never;
+    const targetRegion = "region:5:2" as never;
+    const world = createWorld(1_504, { width: 8, height: 8, enabledPackIds: ["cultivation.path", "mythology.chinese-motif"], formation: "formed" });
+    world.worldview.entities = [
+      { id: "worldview:cross-reducer-source" as never, packId: "cultivation.path", kind: "cultivation-path", regionId: sourceRegion, influence: 0.7, resourceBalances: {}, status: "active" },
+      { id: "worldview:cross-reducer-target" as never, packId: "mythology.chinese-motif", kind: "deity", regionId: targetRegion, influence: 0.6, resourceBalances: {}, status: "active" },
+    ];
+    registerSimulationStage({
+      id: "worldview-cross-region-reducer-test",
+      order: 1,
+      run: () => ({ fieldChanges: [], chemistryChanges: [], entityEffects: [], relationshipEffects: [], resourceTransactions: [], eventDrafts: [], worldviewEffects: [{ kind: "interact-entities", packId: "cultivation.path", interaction: "fusion", sourceEntityId: "worldview:cross-reducer-source" as never, targetEntityId: "worldview:cross-reducer-target" as never, regionId: sourceRegion, targetRegionId: targetRegion, probability: 1, compatibility: 0.9, intensity: 0.8, evidence: { eligible: true, route: "alliance" } }] }),
+    });
+    const result = stepWorld(world, { elapsedYears: 0, externalEvents: [] }, { computeDigest: false }).state;
+    const fusion = result.worldview.entities.find((entity) => entity.derivedFromEntityIds?.length === 2);
+    expect(fusion).toMatchObject({ regionId: targetRegion, derivedFromEntityIds: ["worldview:cross-reducer-source", "worldview:cross-reducer-target"] });
+    expect(result.worldview.interactions[0]).toMatchObject({ targetRegionId: targetRegion, status: "resolved", fusionEntityId: fusion?.id });
+    expect(isFiniteWorld(result)).toBe(true);
   });
 
   it("applies conflict, propagation, and fusion as bounded reducer effects", () => {

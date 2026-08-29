@@ -14,6 +14,9 @@ import { seasonalTemperatureOffset } from "../sim/environment/orbit.ts";
 import { compareSimulationSteps } from "../sim/time.ts";
 
 const format = (value: number): string => formatNumber(value);
+const worldviewInteractionLocation = (interaction: WorldviewInteractionState): string => interaction.targetRegionId
+  ? `${interaction.regionId} -> ${interaction.targetRegionId}`
+  : interaction.regionId;
 const relationshipLabels: Array<[keyof RegionLineageSummary["relationshipCounts"], string]> = [
   ["partner", "伴侣"],
   ["parent", "亲子"],
@@ -919,7 +922,7 @@ const detailReport = (snapshot: WorldSnapshot, detail: InspectorDetail, lineage:
     const interactions = (snapshot.worldviewInteractions ?? [])
       .filter((interaction) => interaction.sourceEntityId === entity.id || interaction.targetEntityId === entity.id)
       .sort((left, right) => right.lastInteractionTick - left.lastInteractionTick || left.id.localeCompare(right.id));
-    const interactionReport = `<section class="organization-governance worldview-interaction-report" aria-label="世界观互动记录"><div class="detail-heading"><strong>跨体系互动</strong><span>记录传播、冲突与融合的真实结果</span></div><div class="detail-tags">${interactions.length > 0 ? interactions.slice(0, 12).map((interaction) => `<span>${worldviewInteractionLabels[interaction.kind]} · ${worldviewInteractionStatusLabels[interaction.status]} · ${format(interaction.successes)} 次</span>`).join("") : "<span>尚无跨体系互动记录</span>"}</div>${entity.derivedFromEntityIds?.length ? `<p>融合来源 · ${entity.derivedFromEntityIds.map((id) => escapeHtml(id.slice(-8))).join(" / ")}</p>` : ""}</section>`;
+    const interactionReport = `<section class="organization-governance worldview-interaction-report" aria-label="世界观互动记录"><div class="detail-heading"><strong>跨体系互动</strong><span>记录传播、冲突与融合的真实结果</span></div><div class="detail-tags">${interactions.length > 0 ? interactions.slice(0, 12).map((interaction) => `<span>${worldviewInteractionLabels[interaction.kind]} · ${worldviewInteractionStatusLabels[interaction.status]} · ${format(interaction.successes)} 次</span>`).join("") : "<span>尚无跨体系互动记录</span>"}</div>${interactions.length > 0 ? `<p>接触区域 · ${interactions.slice(0, 4).map((interaction) => escapeHtml(worldviewInteractionLocation(interaction))).join(" / ")}</p>` : ""}${entity.derivedFromEntityIds?.length ? `<p>融合来源 · ${entity.derivedFromEntityIds.map((id) => escapeHtml(id.slice(-8))).join(" / ")}</p>` : ""}</section>`;
     return `<div class="detail-report"><div class="detail-title"><strong>流派报告</strong><span>${escapeHtml(entity.id)}</span></div><dl class="detail-grid"><div><dt>名称</dt><dd>${escapeHtml(entity.name ?? worldviewEntityLabels[entity.kind])}</dd></div><div><dt>类型</dt><dd>${worldviewEntityLabels[entity.kind]}</dd></div><div><dt>状态</dt><dd>${status}</dd></div><div><dt>影响力</dt><dd>${formatPercent(entity.influence).value}%</dd></div><div><dt>存续度</dt><dd>${formatPercent(entity.viability ?? entity.influence).value}%</dd></div><div><dt>成员</dt><dd>${format(members.length)} 人</dd></div><div><dt>支持者</dt><dd>${format(entity.supporterCount ?? members.length)} 人</dd></div><div><dt>活跃修行者</dt><dd>${format(entity.activePractitionerCount ?? 0)} 人</dd></div><div><dt>赞助组织</dt><dd>${format(entity.sponsorCount ?? (entity.sponsorOrganizationId ? 1 : 0))} 个</dd></div><div><dt>复兴次数</dt><dd>${format(entity.revivalCount ?? 0)} 次</dd></div><div><dt>创始者</dt><dd>${entity.founderId ? escapeHtml(entity.founderId.slice(-8)) : "集体形成"}</dd></div><div><dt>依据规律</dt><dd>${phenomenon ? escapeHtml(phenomenon.name) : "历史规律记录"}</dd></div><div><dt>赞助组织</dt><dd>${sponsor ? escapeHtml(organizationName(sponsor)) : entity.sponsorOrganizationId ? escapeHtml(entity.sponsorOrganizationId.slice(-8)) : "自主维持"}</dd></div><div><dt>能量储备</dt><dd>${formatNumber(reserve * 100, 1)} 单位</dd></div><div><dt>形成时间</dt><dd>${entity.originTick === undefined ? "旧历史记录" : `演化步 ${format(entity.originTick)}`}</dd></div></dl>${interactionReport}<div class="detail-tags">${members.length > 0 ? members.slice(0, 16).map((id) => `<span>成员 · ${escapeHtml(id.slice(-8))}</span>`).join("") : "<span>当前没有在世传承者</span>"}</div></div>`;
   }
   if (detail.level === "facility") return facilityDetailReport(snapshot, detail.id);
@@ -1037,7 +1040,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     .filter((entity) => entity.regionId === selection.regionId)
     .sort((left, right) => right.influence - left.influence || left.id.localeCompare(right.id));
   const worldviewInteractions = (snapshot.worldviewInteractions ?? [])
-    .filter((interaction) => interaction.regionId === selection.regionId)
+    .filter((interaction) => interaction.regionId === selection.regionId || interaction.targetRegionId === selection.regionId)
     .sort((left, right) => right.lastInteractionTick - left.lastInteractionTick || left.id.localeCompare(right.id));
   const regionalKnowledge = knowledgeForRegion(snapshot, selection.regionId);
   const regionalTechnology = technologyForSnapshotRegion(snapshot, selection.regionId);
@@ -1140,7 +1143,7 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
         ${worldviewInteractions.length > 0 ? worldviewInteractions.slice(0, 12).map((interaction) => {
           const source = worldviewEntities.find((entity) => entity.id === interaction.sourceEntityId) ?? (snapshot.worldviewEntities ?? []).find((entity) => entity.id === interaction.sourceEntityId);
           const target = worldviewEntities.find((entity) => entity.id === interaction.targetEntityId) ?? (snapshot.worldviewEntities ?? []).find((entity) => entity.id === interaction.targetEntityId);
-          return `<li data-worldview-interaction-kind="${interaction.kind}" data-worldview-interaction-status="${interaction.status}"><div><span>${worldviewInteractionLabels[interaction.kind]}</span><small>${worldviewInteractionStatusLabels[interaction.status]}</small></div><strong>${escapeHtml(source?.name ?? interaction.sourceEntityId.slice(-8))} / ${escapeHtml(target?.name ?? interaction.targetEntityId.slice(-8))}</strong><p>相容度 ${formatPercent(interaction.compatibility).value}% · 强度 ${formatPercent(interaction.intensity).value}% · 发生 ${format(interaction.successes)} 次</p></li>`;
+          return `<li data-worldview-interaction-kind="${interaction.kind}" data-worldview-interaction-status="${interaction.status}"><div><span>${worldviewInteractionLabels[interaction.kind]}</span><small>${worldviewInteractionStatusLabels[interaction.status]}</small></div><strong>${escapeHtml(source?.name ?? interaction.sourceEntityId.slice(-8))} / ${escapeHtml(target?.name ?? interaction.targetEntityId.slice(-8))}</strong><p>相容度 ${formatPercent(interaction.compatibility).value}% · 强度 ${formatPercent(interaction.intensity).value}% · 发生 ${format(interaction.successes)} 次</p><p>接触区域 · ${escapeHtml(worldviewInteractionLocation(interaction))}</p></li>`;
         }).join("") : "<li class=\"worldview-empty\">当地尚未发生跨体系传播、冲突或融合</li>"}
       </ol>
     </section>

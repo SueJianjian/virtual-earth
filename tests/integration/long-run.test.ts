@@ -232,8 +232,12 @@ describe("long-running worlds", () => {
     }
     const worldviewEntityIds = new Set(state.worldview.entities.map((entity) => entity.id));
     for (const interaction of state.worldview.interactions) {
-      expect(worldviewEntityIds.has(interaction.sourceEntityId)).toBe(true);
-      expect(worldviewEntityIds.has(interaction.targetEntityId)).toBe(true);
+      const source = state.worldview.entities.find((entity) => entity.id === interaction.sourceEntityId);
+      const target = state.worldview.entities.find((entity) => entity.id === interaction.targetEntityId);
+      expect(source).toBeDefined();
+      expect(target).toBeDefined();
+      expect(source?.regionId).toBe(interaction.regionId);
+      expect(target?.regionId).toBe(interaction.targetRegionId ?? interaction.regionId);
       if (interaction.fusionEntityId) expect(worldviewEntityIds.has(interaction.fusionEntityId)).toBe(true);
       expect(interaction.sourcePackId).not.toBe(interaction.targetPackId);
       expect([interaction.compatibility, interaction.intensity, interaction.attempts, interaction.successes, interaction.failures].every((value) => Number.isFinite(value) && value >= 0)).toBe(true);

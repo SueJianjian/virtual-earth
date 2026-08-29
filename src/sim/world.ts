@@ -340,6 +340,7 @@ export const isFiniteWorld = (state: WorldState): boolean => {
       && validTimelineStep(summary.archivedTimelineDays));
   const finiteArchivedOrganizations = state.eventArchive.archivedOrganizationSummaries.length <= MAX_ARCHIVED_ORGANIZATION_SUMMARIES
     && state.eventArchive.archivedOrganizationSummaries.every(isArchivedOrganizationSummary);
+  const worldviewEntitiesById = new Map(state.worldview.entities.map((entity) => [entity.id, entity]));
   const finiteWorldviews = state.worldview.practices.every((practice) => [
     practice.originTick,
     practice.lastTrainedTick,
@@ -371,6 +372,9 @@ export const isFiniteWorld = (state: WorldState): boolean => {
     interaction.compatibility,
     interaction.intensity,
   ].every(Number.isFinite)
+    && (interaction.targetRegionId === undefined || typeof interaction.targetRegionId === "string")
+    && worldviewEntitiesById.get(interaction.sourceEntityId)?.regionId === interaction.regionId
+    && worldviewEntitiesById.get(interaction.targetEntityId)?.regionId === (interaction.targetRegionId ?? interaction.regionId)
     && interaction.attempts >= 0
     && interaction.successes >= 0
     && interaction.failures >= 0

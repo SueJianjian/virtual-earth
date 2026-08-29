@@ -923,6 +923,8 @@ export type WorldviewInteractionState = {
   sourcePackId: string;
   targetPackId: string;
   regionId: RegionId;
+  /** Destination region for a verified interregional contact. */
+  targetRegionId?: RegionId;
   originTick: number;
   originTimelineStep?: string;
   lastInteractionTick: number;
@@ -1049,6 +1051,7 @@ export type WorldviewEffect =
       sourceEntityId: EntityId;
       targetEntityId: EntityId;
       regionId: RegionId;
+      targetRegionId?: RegionId;
       probability: number;
       compatibility: number;
       intensity: number;
