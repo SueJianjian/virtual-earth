@@ -434,6 +434,8 @@ const applyMessage = (message: WorkerMessage): void => {
   snapshot = message.snapshot;
   canvas.dataset.timelineStep = snapshot.timeline?.step ?? String(snapshot.tick);
   canvas.dataset.timelineDays = snapshot.timeline?.days ?? String(Math.round(snapshot.years * 365));
+  // Start and pause must affect animation immediately even when snapshot UI is frame-coalesced.
+  map.setAnimating(!message.paused && message.speed <= 4);
   snapshotRenderer.enqueue(message);
   if (message.paused) snapshotRenderer.flush();
 };

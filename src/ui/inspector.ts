@@ -1280,8 +1280,14 @@ export const renderInspector = (element: HTMLElement, snapshot: WorldSnapshot, s
     : undefined;
   const ocean = snapshot.ocean;
   const mapFocusTarget = mapFocusTargetForDetail(snapshot, selection, detail);
+  const reportSource = lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影";
+  const reportTimelineStep = snapshot.timeline?.step ?? String(snapshot.tick);
+  const reportTimelineDays = snapshot.timeline?.days ?? String(Math.max(0, Math.round(snapshot.years * 365)));
+  const reportAge = snapshot.timeline?.days !== undefined
+    ? formatSimulationAgeFromDays(snapshot.timeline.days)
+    : formatSimulationAge(snapshot.years);
   element.innerHTML = `
-    <div class="inspector-head"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${lineage.source === "aggregate" ? "聚合摘要" : "实时微观投影"}</span></div>
+    <div class="inspector-head" data-report-source="${lineage.source}" data-report-timeline-step="${escapeHtml(reportTimelineStep)}" data-report-timeline-days="${escapeHtml(reportTimelineDays)}"><div><strong>${formatRegionCoordinates(selection.x, selection.y, fields.elevation.width, fields.elevation.height)}</strong><small>${selection.regionId}</small></div><span>${reportSource}<small class="report-freshness">报告时刻 ${escapeHtml(reportAge)} · 权威演化步 ${escapeHtml(reportTimelineStep)}</small></span></div>
     <section class="observation-group" aria-label="区域地表">
       <h3><span>地表</span><small>高度与局地气候</small></h3>
       <dl class="observation-list">

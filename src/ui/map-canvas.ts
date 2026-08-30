@@ -761,7 +761,8 @@ export const createMapCanvas = (
     canvas.dataset.weatherMode = "clear";
     canvas.dataset.weatherParticleCount = "0";
     canvas.dataset.weatherIntensity = "0.00";
-    canvas.dataset.weatherFrame = "0";
+    if (!animationEnabled) canvas.dataset.weatherFrame = "0";
+    else if (canvas.dataset.weatherFrame === undefined) canvas.dataset.weatherFrame = "0";
     if (!snapshot || snapshot.formation.phase !== "stable-crust" || surfaceMode() === "planet-globe") return;
 
     const grid = snapshot.fields.elevation;
@@ -1228,8 +1229,8 @@ export const createMapCanvas = (
     scheduleRender();
   };
 
-  const animate = (time: number): void => {
-    if (animationEnabled && time - lastAnimationFrame >= 33) {
+  const renderAnimatedFrame = (time: number): void => {
+    if (!animationEnabled) return;
       const phase = time / 1000;
       lastAnimationFrame = time;
       if (snapshot?.formation.phase !== "stable-crust") {
@@ -1307,7 +1308,10 @@ export const createMapCanvas = (
         material.opacity = clamp(baseOpacity + Math.sin(phase * Number(route.userData.pulseRate ?? 1.5) + Number(route.userData.routePhase ?? 0)) * 0.16, 0.25, 0.98);
       }
       render();
-    }
+  };
+
+  const animate = (time: number): void => {
+    if (animationEnabled && time - lastAnimationFrame >= 33) renderAnimatedFrame(time);
     requestAnimationFrame(animate);
   };
   requestAnimationFrame(animate);
@@ -1498,7 +1502,13 @@ export const createMapCanvas = (
       updateSelectionMarker();
       scheduleRender();
     },
-    setAnimating: (next: boolean) => { animationEnabled = next; if (next) scheduleRender(); },
+    setAnimating: (next: boolean) => {
+      animationEnabled = next;
+      if (next) {
+        renderAnimatedFrame(performance.now());
+        scheduleRender();
+      }
+    },
     zoomIn: () => updateZoom(zoom < 2 ? zoom + 0.25 : zoom < 10 ? zoom + 1 : zoom < 24 ? zoom + 2 : zoom * 1.5),
     zoomOut: () => updateZoom(zoom <= 2 ? zoom - 0.25 : zoom <= 10 ? zoom - 1 : zoom <= 24 ? zoom - 2 : zoom / 1.5),
     resetZoom: () => { panWorldX = 0; panWorldZ = 0; updateZoom(1); },

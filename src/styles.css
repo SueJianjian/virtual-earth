@@ -141,7 +141,8 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
 .inspector-head > div { display: grid; min-width: 0; gap: 3px; }
 .inspector-head strong { min-width: 0; color: #e8dda8; font-family: Georgia, "STSong", serif; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .inspector-head small { color: #687169; font-family: monospace; font-size: 8px; overflow-wrap: anywhere; }
-.inspector-head span { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.inspector-head span { display: grid; justify-items: end; gap: 3px; color: var(--muted); font-size: 9px; text-align: right; white-space: nowrap; }
+.inspector-head .report-freshness { color: #849188; font-family: monospace; font-size: 8px; font-weight: 400; white-space: normal; }
 .worldview-records { margin-top: 17px; border-top: 1px solid var(--line); }
 .worldview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 13px 0 9px; }
 .worldview-heading strong { color: #e8dda8; font-family: Georgia, "STSong", serif; font-size: 14px; font-weight: 500; }

@@ -969,4 +969,19 @@ describe("region lineage inspector", () => {
     expect(element.innerHTML).toContain("24,677,258,232,167 年 38 天");
     expect(element.innerHTML).toContain("对象发生变化");
   });
+
+  it("labels reports with authoritative snapshot time and projection source", () => {
+    const snapshot = lineageSnapshot();
+    snapshot.timeline = { step: "9007199254740993", days: "9007199254740995" };
+    snapshot.projection = { ...snapshot.projection!, sourceRevision: 8, sourceRevisionStep: "9007199254740993" };
+    const element = { innerHTML: "" } as HTMLElement;
+
+    renderInspector(element, snapshot, { x: 0, y: 0, index: 0, regionId: region });
+
+    expect(element.innerHTML).toContain('data-report-source="micro"');
+    expect(element.innerHTML).toContain('data-report-timeline-step="9007199254740993"');
+    expect(element.innerHTML).toContain('data-report-timeline-days="9007199254740995"');
+    expect(element.innerHTML).toContain("报告时刻");
+    expect(element.innerHTML).toContain("权威演化步");
+  });
 });
