@@ -67,6 +67,8 @@ const banner = (seed: number): THREE.Group => {
   const flagMaterial = palette.cloth[seed % palette.cloth.length] ?? palette.cloth[0]!;
   const flag = box(0.78, 0.42, 0.035, flagMaterial);
   flag.position.set(0.41, 1.78, 0);
+  flag.userData.animationRole = "banner-flag";
+  flag.userData.restRotationZ = flag.rotation.z;
   group.add(flag);
   const emblem = cylinder(0.1, 0.1, 0.055, 6, palette.gold);
   emblem.rotation.x = Math.PI / 2;
@@ -162,10 +164,13 @@ const campfire = (): THREE.Group => {
 
 export const createAgentModel = (seed: number): THREE.Group => {
   const group = new THREE.Group();
+  const arms: THREE.Object3D[] = [];
+  const legs: THREE.Object3D[] = [];
   const cloth = palette.cloth[seed % palette.cloth.length] ?? palette.cloth[0]!;
   const hair = palette.hair[(seed >>> 4) % palette.hair.length] ?? palette.hair[0]!;
   const body = cylinder(0.22, 0.3, 0.72, 8, cloth);
   body.position.y = 0.95;
+  body.userData.animationRole = "agent-body";
   group.add(body);
   const belt = cylinder(0.305, 0.305, 0.12, 8, palette.leather);
   belt.position.y = 0.71;
@@ -183,9 +188,13 @@ export const createAgentModel = (seed: number): THREE.Group => {
     const arm = cylinder(0.075, 0.09, 0.58, 7, palette.skin);
     arm.position.set(side * 0.4, 0.87, 0);
     arm.rotation.z = side * 0.12;
+    arm.userData.animationRestRotationZ = arm.rotation.z;
+    arms.push(arm);
     group.add(arm);
     const leg = cylinder(0.09, 0.11, 0.62, 7, palette.leather);
     leg.position.set(side * 0.13, 0.32, 0);
+    leg.userData.animationRestRotationZ = leg.rotation.z;
+    legs.push(leg);
     group.add(leg);
   }
   if (seed % 2 === 0) {
@@ -199,6 +208,7 @@ export const createAgentModel = (seed: number): THREE.Group => {
     shield.position.set(-0.42, 0.92, 0.17);
     group.add(shield);
   }
+  group.userData.animation = { type: "agent", arms, legs, body };
   group.scale.setScalar(0.55);
   return group;
 };

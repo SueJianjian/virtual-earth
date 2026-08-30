@@ -1052,7 +1052,9 @@ export const createMapCanvas = (
       enableFantasyShadows(model);
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
-      model.traverse((child) => { if (child.userData.flame) animatedObjects.push(child); });
+      model.traverse((child) => {
+        if (child.userData.flame || child.userData.animationRole === "banner-flag") animatedObjects.push(child);
+      });
     }
     updateSceneLod();
   };
@@ -1310,9 +1312,27 @@ export const createMapCanvas = (
         if (object.userData.flame) {
           object.scale.y = 0.82 + Math.sin(phase * 7 + object.id) * 0.18;
           object.rotation.y = phase * 0.7;
+        } else if (object.userData.animationRole === "banner-flag") {
+          const restRotationZ = Number(object.userData.restRotationZ ?? 0);
+          object.rotation.z = restRotationZ + Math.sin(phase * 2.1 + object.id) * 0.08;
+          object.scale.x = 1 + Math.sin(phase * 2.1 + object.id) * 0.025;
         } else {
-          object.position.y = Number(object.userData.baseY ?? object.position.y) + Math.sin(phase * 2.8 + Number(object.userData.phase ?? 0)) * 0.035;
+          const animation = object.userData.animation as { type?: string; arms?: THREE.Object3D[]; legs?: THREE.Object3D[]; body?: THREE.Object3D } | undefined;
+          const motionPhase = phase * 2.8 + Number(object.userData.phase ?? 0);
+          object.position.y = Number(object.userData.baseY ?? object.position.y) + Math.sin(motionPhase) * 0.035;
           object.rotation.y += 0.0015;
+          if (animation?.type === "agent") {
+            const gait = Math.sin(phase * 5.4 + Number(object.userData.phase ?? 0));
+            animation.arms?.forEach((part, index) => {
+              const rest = Number(part.userData.animationRestRotationZ ?? 0);
+              part.rotation.z = rest + gait * (index === 0 ? 0.2 : -0.2);
+            });
+            animation.legs?.forEach((part, index) => {
+              const rest = Number(part.userData.animationRestRotationZ ?? 0);
+              part.rotation.z = rest + gait * (index === 0 ? -0.14 : 0.14);
+            });
+            if (animation.body) animation.body.scale.y = 1 + Math.sin(phase * 5.4 + Number(object.userData.phase ?? 0)) * 0.025;
+          }
         }
       }
       for (const route of animatedRouteObjects) {
