@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.cpu-profile/
 .tmp-*.png
 playwright-report/
 test-results/
