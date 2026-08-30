@@ -143,6 +143,7 @@ export const createMapCanvas = (
   let waterSurface: THREE.Mesh | undefined;
   let selectionMarker: THREE.Mesh | undefined;
   let entitySelectionMarker: THREE.Mesh | undefined;
+  let entitySelectionLabel: THREE.Sprite | undefined;
   let selectedSceneEntityId: string | undefined;
   let sceneEntities: SceneEntity[] = [];
   let sceneLinks: SceneLink[] = [];
@@ -1156,6 +1157,13 @@ export const createMapCanvas = (
       (entitySelectionMarker.material as THREE.Material).dispose();
       entitySelectionMarker = undefined;
     }
+    if (entitySelectionLabel) {
+      entitySelectionLabel.parent?.remove(entitySelectionLabel);
+      entitySelectionLabel.material.map?.dispose();
+      entitySelectionLabel.material.dispose();
+      entitySelectionLabel = undefined;
+    }
+    canvas.dataset.selectedSceneEntityLabel = "";
     if (!selection) return;
     if (surfaceMode() === "planet-globe") {
       const radius = globeRadius();
@@ -1184,7 +1192,8 @@ export const createMapCanvas = (
     effectRoot.add(selectionMarker);
     if (selectedSceneEntityId) {
       const entityPosition = entityPositions.get(selectedSceneEntityId);
-      if (entityPosition) {
+      const entity = sceneEntities.find((candidate) => candidate.id === selectedSceneEntityId);
+      if (entityPosition && entity) {
         const sceneLod = mapSceneLodForZoom(zoom);
         const radius = sceneLod === "individual" ? 0.24 : sceneLod === "settlement" ? 0.38 : 0.55;
         entitySelectionMarker = new THREE.Mesh(
@@ -1197,6 +1206,36 @@ export const createMapCanvas = (
         entitySelectionMarker.userData.baseScale = 1;
         entitySelectionMarker.userData.selectionMarker = true;
         effectRoot.add(entitySelectionMarker);
+
+        const kindLabel = entity.kind === "agent" ? "个人" : entity.kind === "population" ? "种群" : entity.kind === "facility" ? "设施" : entity.kind === "deity" ? "神话实体" : entity.kind === "sect" ? "研修流派" : entity.kind === "cultivation-path" ? "修行路径" : "组织";
+        const name = entity.speciesName ?? entity.cultureName ?? entity.facilityType ?? entity.id.slice(-8);
+        const labelText = `${kindLabel} · ${name}`;
+        const labelCanvas = document.createElement("canvas");
+        labelCanvas.width = 512;
+        labelCanvas.height = 96;
+        const context = labelCanvas.getContext("2d");
+        if (context) {
+          context.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+          context.fillStyle = "rgba(14, 20, 17, 0.9)";
+          context.fillRect(4, 8, labelCanvas.width - 8, labelCanvas.height - 16);
+          context.strokeStyle = "rgba(255, 224, 106, 0.9)";
+          context.lineWidth = 3;
+          context.strokeRect(4, 8, labelCanvas.width - 8, labelCanvas.height - 16);
+          context.fillStyle = "#f4e6a5";
+          context.font = "bold 32px sans-serif";
+          context.textAlign = "center";
+          context.textBaseline = "middle";
+          context.fillText(labelText.slice(0, 28), labelCanvas.width / 2, labelCanvas.height / 2);
+          const texture = new THREE.CanvasTexture(labelCanvas);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          entitySelectionLabel = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+          entitySelectionLabel.scale.set(sceneLod === "individual" ? 1.25 : 1.7, sceneLod === "individual" ? 0.235 : 0.32, 1);
+          entitySelectionLabel.position.copy(entityPosition);
+          entitySelectionLabel.position.y += sceneLod === "individual" ? 0.72 : 1.05;
+          entitySelectionLabel.userData.selectionLabel = true;
+          effectRoot.add(entitySelectionLabel);
+          canvas.dataset.selectedSceneEntityLabel = labelText;
+        }
       }
     }
   };
@@ -1384,6 +1423,15 @@ export const createMapCanvas = (
         const pulse = 1 + Math.sin(phase * 4.2) * 0.08;
         entitySelectionMarker.scale.setScalar(pulse);
         (entitySelectionMarker.material as THREE.MeshBasicMaterial).opacity = 0.72 + Math.sin(phase * 4.2) * 0.18;
+      }
+      if (entitySelectionMarker && entitySelectionLabel && selectedSceneEntityId) {
+        const selectedModel = entityRoot.children.find((child) => child.userData.sceneEntityId === selectedSceneEntityId);
+        if (selectedModel) {
+          const position = new THREE.Vector3();
+          selectedModel.getWorldPosition(position);
+          entitySelectionMarker.position.set(position.x, position.y + 0.08, position.z);
+          entitySelectionLabel.position.set(position.x, position.y + (mapSceneLodForZoom(zoom) === "individual" ? 0.72 : 1.05), position.z);
+        }
       }
       render();
   };
