@@ -20,6 +20,18 @@ Controls submit commands or external events; they do not mutate authoritative
 state directly. Pause the simulation before inspecting a fixed instant, use
 single-step to advance it explicitly, or reset to the original seed state.
 
+For a hardware-accelerated desktop run on Windows, use:
+
+```powershell
+npm run desktop
+```
+
+To create a portable Windows executable, use `npm run desktop:dist`. The
+desktop shell loads the same production build, keeps Node APIs out of the
+renderer, and leaves WebGL hardware acceleration enabled. It improves window
+stability and avoids browser-tab throttling; actual frame rate still depends
+on the computer's GPU and available memory.
+
 ## Verify
 
 ```powershell

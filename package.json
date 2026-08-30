@@ -1,5 +1,8 @@
 {
   "name": "virtual-earth",
+  "version": "0.1.0",
+  "description": "A deterministic autonomous virtual planet observer",
+  "author": "Virtual Earth",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,6 +11,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "desktop": "npm run build && electron desktop/main.cjs",
+    "desktop:dist": "npm run build && electron-builder --win portable",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
@@ -20,11 +25,28 @@
     "@playwright/test": "latest",
     "@types/node": "latest",
     "@types/three": "^0.185.4",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "latest"
   },
   "dependencies": {
     "three": "^0.185.1"
+  },
+  "build": {
+    "appId": "com.virtualearth.observer",
+    "productName": "Virtual Earth",
+    "asar": true,
+    "files": [
+      "dist/**/*",
+      "desktop/main.cjs",
+      "desktop/preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "VirtualEarth-${version}-${arch}.${ext}"
+    }
   }
 }
