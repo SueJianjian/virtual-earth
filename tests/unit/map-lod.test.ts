@@ -69,4 +69,11 @@ describe("map level of detail", () => {
     expect(otherSeed).not.toBe(first);
     expect(terrainReliefFor(4.25, 2.5, 42)).toBe(first);
   });
+
+  it("keeps neighboring close-up relief samples continuous", () => {
+    const left = terrainReliefFor(4.99, 2.5, 42);
+    const right = terrainReliefFor(5.01, 2.5, 42);
+
+    expect(Math.abs(right - left)).toBeLessThan(0.03);
+  });
 });

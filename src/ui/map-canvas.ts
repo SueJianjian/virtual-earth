@@ -354,6 +354,10 @@ export const createMapCanvas = (
     const xMax = clamp(options.xMax ?? grid.width - 1, xMin, grid.width - 1);
     const yMin = clamp(options.yMin ?? 0, 0, grid.height - 1);
     const yMax = clamp(options.yMax ?? grid.height - 1, yMin, grid.height - 1);
+    const reliefAmount = options.relief ?? 0;
+    const reliefEdgeWidth = reliefAmount > 0 && (options.xMin !== undefined || options.xMax !== undefined || options.yMin !== undefined || options.yMax !== undefined)
+      ? 1.5
+      : 0;
     const columns = Math.round((xMax - xMin) * detail) + 1;
     const rows = Math.round((yMax - yMin) * detail) + 1;
     const positions = new Float32Array(columns * rows * 3);
@@ -396,8 +400,10 @@ export const createMapCanvas = (
         const baseElevation = clamp(sampleValue(grid.values, x, y), 0, 1);
         const water = clamp(sampleValue(current.fields.water.values, x, y), 0, 1);
         const landRelief = clamp((baseElevation - 0.38) / 0.2, 0, 1) * (1 - water);
+        const edgeDistance = Math.min(x - xMin, xMax - x, y - yMin, yMax - y);
+        const reliefFade = reliefEdgeWidth > 0 ? clamp(edgeDistance / reliefEdgeWidth, 0, 1) : 1;
         const relief = terrainReliefFor(x, y, current.seed ^ detail * 811)
-          * (options.relief ?? 0) * landRelief;
+          * reliefAmount * landRelief * reliefFade;
         positions[offset] = x - (grid.width - 1) / 2;
         positions[offset + 1] = renderedElevation(baseElevation) + relief;
         positions[offset + 2] = y - (grid.height - 1) / 2;
