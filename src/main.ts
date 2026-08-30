@@ -251,6 +251,7 @@ inspector.addEventListener("click", (event) => {
         const y = Number(match[2] ?? 0);
         selection = { x, y, index: y * snapshot.fields.elevation.width + x, regionId: regionId as never };
         map.setSelection(selection);
+        map.selectSceneEntity(id);
         client.send({ type: "focusRegion", regionId: regionId as never });
       }
     }

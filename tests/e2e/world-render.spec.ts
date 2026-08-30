@@ -879,6 +879,7 @@ test("navigates from a city report to its state and family reports", async ({ pa
   await expect(page.locator("#zoom-level")).toHaveText("1200%");
   await expect(canvas).toHaveAttribute("data-scene-lod", "settlement");
   await inspector.locator(`[data-detail-link][data-detail-level=agent]`).first().click();
+  await expect(canvas).toHaveAttribute("data-selected-scene-entity", /agent:/);
   await expect(inspector).toContainText("个人报告");
   await expect(inspector.getByRole("button", { name: "定位到地图" })).toHaveAttribute("data-map-focus-lod", "individual");
   await inspector.getByRole("button", { name: "定位到地图" }).click();

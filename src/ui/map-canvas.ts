@@ -142,6 +142,7 @@ export const createMapCanvas = (
   let formationBodyMesh: THREE.Mesh | undefined;
   let waterSurface: THREE.Mesh | undefined;
   let selectionMarker: THREE.Mesh | undefined;
+  let entitySelectionMarker: THREE.Mesh | undefined;
   let selectedSceneEntityId: string | undefined;
   let sceneEntities: SceneEntity[] = [];
   let sceneLinks: SceneLink[] = [];
@@ -1149,6 +1150,12 @@ export const createMapCanvas = (
       (selectionMarker.material as THREE.Material).dispose();
       selectionMarker = undefined;
     }
+    if (entitySelectionMarker) {
+      entitySelectionMarker.parent?.remove(entitySelectionMarker);
+      entitySelectionMarker.geometry.dispose();
+      (entitySelectionMarker.material as THREE.Material).dispose();
+      entitySelectionMarker = undefined;
+    }
     if (!selection) return;
     if (surfaceMode() === "planet-globe") {
       const radius = globeRadius();
@@ -1175,6 +1182,23 @@ export const createMapCanvas = (
     selectionMarker.rotation.x = -Math.PI / 2;
     selectionMarker.position.copy(worldPosition(selection.x, selection.y, 0.12));
     effectRoot.add(selectionMarker);
+    if (selectedSceneEntityId) {
+      const entityPosition = entityPositions.get(selectedSceneEntityId);
+      if (entityPosition) {
+        const sceneLod = mapSceneLodForZoom(zoom);
+        const radius = sceneLod === "individual" ? 0.24 : sceneLod === "settlement" ? 0.38 : 0.55;
+        entitySelectionMarker = new THREE.Mesh(
+          new THREE.TorusGeometry(radius, Math.max(0.025, radius * 0.11), 8, 32),
+          new THREE.MeshBasicMaterial({ color: 0xffe06a, transparent: true, opacity: 0.95, depthWrite: false, toneMapped: false }),
+        );
+        entitySelectionMarker.rotation.x = -Math.PI / 2;
+        entitySelectionMarker.position.copy(entityPosition);
+        entitySelectionMarker.position.y += 0.08;
+        entitySelectionMarker.userData.baseScale = 1;
+        entitySelectionMarker.userData.selectionMarker = true;
+        effectRoot.add(entitySelectionMarker);
+      }
+    }
   };
 
   const applySnapshot = (next: WorldSnapshot): void => {
@@ -1355,6 +1379,11 @@ export const createMapCanvas = (
         const material = route.material as THREE.Material;
         const baseOpacity = Number(route.userData.baseOpacity ?? 0.7);
         material.opacity = clamp(baseOpacity + Math.sin(phase * Number(route.userData.pulseRate ?? 1.5) + Number(route.userData.routePhase ?? 0)) * 0.16, 0.25, 0.98);
+      }
+      if (entitySelectionMarker) {
+        const pulse = 1 + Math.sin(phase * 4.2) * 0.08;
+        entitySelectionMarker.scale.setScalar(pulse);
+        (entitySelectionMarker.material as THREE.MeshBasicMaterial).opacity = 0.72 + Math.sin(phase * 4.2) * 0.18;
       }
       render();
   };
@@ -1538,6 +1567,12 @@ export const createMapCanvas = (
       panWorldX = 0;
       panWorldZ = 0;
       if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
+      updateSelectionMarker();
+      scheduleRender();
+    },
+    selectSceneEntity: (id: string | undefined) => {
+      selectedSceneEntityId = id && sceneEntities.some((entity) => entity.id === id) ? id : undefined;
+      updateSceneLod();
       updateSelectionMarker();
       scheduleRender();
     },
