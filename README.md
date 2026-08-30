@@ -26,6 +26,14 @@ For a hardware-accelerated desktop run on Windows, use:
 npm run desktop
 ```
 
+The desktop shell runs as a tray application. Closing its window hides it and
+keeps the simulation Worker running without browser background throttling. Use
+the tray icon to reopen the observer or choose `Exit and save` to checkpoint
+the latest world before quitting. This keeps the world evolving while the
+computer is powered on; a powered-off computer cannot execute the simulation.
+When the computer starts again, opening the desktop app restores the latest
+checkpoint and resumes autonomous evolution.
+
 To create a portable Windows executable, use `npm run desktop:dist`. The
 desktop shell loads the same production build, keeps Node APIs out of the
 renderer, and leaves WebGL hardware acceleration enabled. It improves window

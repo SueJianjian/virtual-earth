@@ -136,6 +136,11 @@ const zoomLevel = query<HTMLOutputElement>("#zoom-level");
 const mapScaleLevel = query<HTMLElement>("#map-scale-level");
 const routeLegend = query<HTMLElement>("#strategic-route-legend");
 const autoStorage = browserWorldStorage();
+type DesktopBridge = {
+  onBeforeQuit?: (listener: () => void) => () => void;
+  checkpointComplete?: () => void;
+};
+const desktopBridge = (window as Window & { virtualEarthDesktop?: DesktopBridge }).virtualEarthDesktop;
 let initialAutoSavePayload = readWorldPayload(autoStorage, AUTO_SAVE_KEY);
 let snapshot: WorldSnapshot | undefined;
 type SnapshotMessage = Extract<WorkerMessage, { type: "snapshot" }>;
@@ -180,11 +185,13 @@ const formatCheckpointBytes = (bytes: number): string => {
 
 const checkpointSize = (payload: string): string => formatCheckpointBytes(new TextEncoder().encode(payload).byteLength);
 
-const persistCheckpoint = (payload: string, digest: string, prefix: string): void => {
+const persistCheckpoint = (payload: string, digest: string, prefix: string, onComplete?: () => void): void => {
   const generation = ++persistenceGeneration;
   queuePersistence(async () => {
     const result = await writePersistentWorldPayload(autoStorage, AUTO_SAVE_KEY, payload);
     if (generation !== persistenceGeneration) return;
+    onComplete?.();
+    desktopBridge?.checkpointComplete?.();
     if (result === "none") setPersistenceStatus(`${prefix}失败，模拟仍在运行`, "warning");
     else setPersistenceStatus(`${prefix}至${storageLabel(result)} · ${checkpointSize(payload)} · ${digest.slice(0, 8)}`, "saved");
   });
@@ -444,6 +451,7 @@ const applyMessage = (message: WorkerMessage): void => {
 };
 
 client.subscribe(applyMessage);
+desktopBridge?.onBeforeQuit?.(() => client.send({ type: "checkpoint" }));
 const bootstrap = async (): Promise<void> => {
   if (initialAutoSavePayload === null) {
     initialAutoSavePayload = await readIndexedWorldPayload(AUTO_SAVE_KEY);
