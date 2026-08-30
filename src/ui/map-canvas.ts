@@ -1397,6 +1397,7 @@ export const createMapCanvas = (
     panWorldX = 0;
     panWorldZ = 0;
     selectedSceneEntityId = entity?.id;
+    updateSceneLod();
     if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     updateSelectionMarker();
     canvas.dataset.selectedSceneEntity = entity?.id ?? "";
