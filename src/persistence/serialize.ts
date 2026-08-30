@@ -6,7 +6,7 @@ import { MAX_ARCHIVED_SPECIES_REGIONS, MAX_ARCHIVED_SPECIES_SUMMARIES, retainArc
 import { ensureCultureIdentity } from "../sim/culture/identity.ts";
 import { defaultGovernanceFor } from "../sim/society/organization.ts";
 import { createEventArchive, MAX_EVENT_MILESTONES, MAX_HISTORY_SAMPLES, MAX_STRATEGIC_ROUTE_SUMMARIES, retainHistorySamples, retainStrategicRoutes } from "../sim/events/ledger.ts";
-import { isSimulationTimeline, simulationDaysFromYears } from "../sim/time.ts";
+import { DAYS_PER_YEAR, isSimulationTimeline, simulationDaysFromYears } from "../sim/time.ts";
 import { MAX_PATHOGENS, normalizeAgentHealth, normalizePathogenState } from "../sim/health/disease.ts";
 import { normalizeAgentGenetics, normalizeGeneticRecord } from "../sim/agents/genetics.ts";
 import { MAX_ECOLOGICAL_RELATIONSHIPS } from "../sim/ecology/interactions.ts";
@@ -313,7 +313,7 @@ const validateWorld = (value: unknown): WorldState => {
   if (world.orbital !== undefined && !isOrbitalState(world.orbital)) throw new Error("Save contains invalid orbital state");
   const timelineDays = world.timeline?.days
     ?? String(world.simulationDays ?? simulationDaysFromYears(world.years as number, "Save world time"));
-  const orbital = world.orbital === undefined
+  const orbital = world.orbital === undefined || world.orbital.orbitalPeriodDays > DAYS_PER_YEAR * 10
     ? createOrbitalState(world.seed!, timelineDays)
     : world.orbital;
   const fieldValues = Object.values(fields);

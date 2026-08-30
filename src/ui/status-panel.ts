@@ -107,8 +107,16 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
   const peakPrevalence = activePathogens.reduce((maximum, pathogen) => Math.max(maximum, pathogen.prevalence), 0);
   const history = snapshot.historySamples ?? snapshot.eventArchive?.historySamples ?? [];
   const orbital = snapshot.orbital;
+  const lunar = snapshot.lunar;
   const climateCycle = snapshot.climateCycle;
   const seasonLabels = { spring: "春季", summer: "夏季", autumn: "秋季", winter: "冬季" } as const;
+  const lunarPhaseLabel = lunar === undefined ? "" : lunar.illumination < 0.08
+    ? "新月"
+    : lunar.illumination > 0.92
+      ? "满月"
+      : lunar.illumination < 0.48
+        ? "上弦月相"
+        : "下弦月相";
   const formationStatus = formation.phase === "stable-crust" ? "" : `
     <section class="metric-group" aria-label="行星形成">
       <h3><span>行星形成</span><small>从尘埃到稳定地壳</small></h3>
@@ -127,7 +135,7 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
   const runtime = snapshot.runtime;
   const orbitalStatus = orbital ? `
     <section class="metric-group" aria-label="轨道与季节">
-      <h3><span>轨道与季节</span><small>行星轨道驱动的气候周期</small></h3>
+      <h3><span>轨道与季节</span><small>恒星固定于中心 · 行星绕恒星公转</small></h3>
       <dl class="metric-list">
         ${metric("当前季节", { value: seasonLabels[orbital.season], unit: "" })}
         ${metric("轨道位置", { value: formatNumber(orbital.orbitalPhase * 100, 1), unit: "%" })}
@@ -148,6 +156,18 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
         ${climateCycle.lastCompleted ? metric("完整年均湿度", formatPercent(climateCycle.lastCompleted.meanHumidity)) : ""}
         ${climateCycle.lastCompleted ? metric("完整年水量", formatPercent(climateCycle.lastCompleted.meanWater)) : ""}
         ${climateCycle.lastCompleted ? metric("季节温差范围", { value: formatNumber(climateCycle.lastCompleted.seasonalRange * 100, 1), unit: "模型点" }) : ""}
+      </dl>
+    </section>
+  ` : "";
+  const lunarStatus = lunar ? `
+    <section class="metric-group" aria-label="天体与昼夜循环">
+      <h3><span>天体与昼夜循环</span><small>行星全球观察：昼夜、自转与月球轨道持续计算</small></h3>
+      <dl class="metric-list">
+        ${metric("月相", { value: lunarPhaseLabel, unit: "" })}
+        ${metric("月球轨道位置", { value: formatNumber(lunar.orbitalPhase * 100, 1), unit: "%" })}
+        ${metric("月球轨道周期", { value: formatNumber(lunar.orbitalPeriodDays, 1), unit: "天" })}
+        ${metric("轨道倾角", { value: formatNumber(lunar.inclinationDegrees, 1), unit: "°" })}
+        ${metric("月球照面", formatPercent(lunar.illumination))}
       </dl>
     </section>
   ` : "";
@@ -177,6 +197,7 @@ export const renderStatusPanel = (element: HTMLElement, snapshot: WorldSnapshot)
     </div>
     ${formationStatus}
     ${orbitalStatus}
+    ${lunarStatus}
     ${climateCycleStatus}
     ${runtimeStatus}
     ${historyStatus(history)}

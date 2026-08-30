@@ -70,12 +70,15 @@ h1 { margin: 0; font-family: Georgia, "STSong", serif; font-size: 25px; font-wei
   cursor: grab;
   touch-action: none;
 }
-.map-tools { position: absolute; top: 14px; right: 14px; z-index: 1; display: flex; max-width: calc(100% - 28px); align-items: center; gap: 4px; padding: 4px; background: rgba(17, 21, 18, 0.88); border: 1px solid var(--line); }
+.map-tools { position: absolute; top: 14px; right: 14px; z-index: 1; display: flex; max-width: calc(100% - 28px); flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; padding: 4px; background: rgba(17, 21, 18, 0.88); border: 1px solid var(--line); }
 .map-tool-group { display: flex; align-items: center; gap: 3px; }
+.view-tools { padding-right: 4px; border-right: 1px solid var(--line); }
 .camera-tools { padding-left: 4px; border-left: 1px solid var(--line); }
 .map-tools button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); background: #20261f; color: var(--ink); font-size: 17px; line-height: 1; cursor: pointer; }
 .camera-tools button { font-size: 13px; }
 .map-tools button:hover { border-color: var(--acid); color: #f0dda0; }
+.map-tools button.active { color: #171a16; border-color: var(--acid); background: var(--acid); }
+.map-tools button:disabled { cursor: not-allowed; opacity: 0.34; }
 .map-tools output { min-width: 52px; color: var(--muted); font-family: monospace; font-size: 10px; text-align: center; }
 .route-legend { position: absolute; top: 14px; left: 14px; z-index: 1; display: flex; flex-wrap: wrap; max-width: calc(100% - 350px); gap: 5px 11px; padding: 7px 9px; border: 1px solid var(--line); background: rgba(17, 21, 18, 0.88); color: var(--muted); font-size: 9px; }
 .route-legend[hidden] { display: none; }
@@ -289,5 +292,6 @@ dd { margin: 4px 0 0; color: var(--ink); font-family: Georgia, serif; font-size:
   .timeline-section, .god-section { grid-column: auto; }
   .map-workspace { min-height: 360px; }
   #world-map { height: 46vh; min-height: 340px; }
-  .route-legend { top: 54px; max-width: calc(100% - 28px); }
+  .map-tools { left: 14px; right: 14px; max-width: none; }
+  .route-legend { top: 96px; max-width: calc(100% - 28px); }
 }

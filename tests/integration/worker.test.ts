@@ -64,6 +64,21 @@ describe("simulation worker runtime", () => {
     expect(snapshot.snapshot.ocean?.seaIce.values).toHaveLength(64);
   });
 
+  it("exposes celestial state only after a stable crust exists", () => {
+    const formingRuntime = createSimulationRuntime(createWorld(147, { width: 8, height: 8 }));
+    const formingSnapshot = formingRuntime.dispatch({ type: "pause" }).find((message) => message.type === "snapshot");
+    const formedRuntime = createSimulationRuntime(createWorld(148, { width: 8, height: 8, formation: "formed" }));
+    const formedSnapshot = formedRuntime.dispatch({ type: "pause" }).find((message) => message.type === "snapshot");
+
+    if (!formingSnapshot || !formedSnapshot || formingSnapshot.type !== "snapshot" || formedSnapshot.type !== "snapshot") return;
+    expect(formingSnapshot.snapshot.lunar).toBeUndefined();
+    expect(formedSnapshot.snapshot.lunar).toMatchObject({
+      orbitalPeriodDays: expect.any(Number),
+      orbitalPhase: 0,
+      illumination: expect.any(Number),
+    });
+  });
+
   it("keeps long-running timing diagnostics bounded by a fixed recent window", () => {
     const runtime = createSimulationRuntime(createWorld(156, { width: 8, height: 8 }));
     const messages = runtime.dispatch({ type: "step", count: RUNTIME_PERFORMANCE_WINDOW_STEPS + 3 });

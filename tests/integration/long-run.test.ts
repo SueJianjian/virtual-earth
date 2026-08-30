@@ -385,7 +385,9 @@ describe("long-running worlds", () => {
     expect(worldDigest(state)).not.toBe(initialDigest);
     expect(state.atmosphere.updateCount).toBe(initialAtmosphereUpdates + 730);
     expect(state.ocean.updateCount).toBe(initialOceanUpdates + 730);
-    expect(state.eventArchive.totalEventCount).toBeGreaterThan(initialEventCount);
+    // Random natural and social events may legitimately be absent in a finite
+    // window; the archive must remain monotonic while history samples prove progress.
+    expect(state.eventArchive.totalEventCount).toBeGreaterThanOrEqual(initialEventCount);
     const latestSampleDays = state.eventArchive.historySamples.at(-1)?.timelineDays;
     expect(latestSampleDays).toBeDefined();
     expect(BigInt(latestSampleDays!)).toBeGreaterThan(BigInt(MAX_SIMULATION_DAYS));

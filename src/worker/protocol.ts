@@ -1,4 +1,4 @@
-import type { CultureIdentity, EcologicalRelationshipKind, FacilityStatus, Grid, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SimulationTimeline, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldHistorySample, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewInteractionState, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
+import type { CultureIdentity, EcologicalRelationshipKind, FacilityStatus, Grid, LunarState, OrganizationState, OrganizationType, RegionId, RegionProjection, RegionSummary, RelationshipState, SimulationTimeline, SpeciesBlueprint, StepResult, WorldEvent, WorldEventInput, WorldHistorySample, WorldState, WorldviewEntityKind, WorldviewEntityState, WorldviewEntityStatus, WorldviewInteractionState, WorldviewPhenomenonState, WorldviewPracticeState } from "../sim/types.ts";
 
 export type WorkerCommand =
   | { type: "start" }
@@ -36,6 +36,8 @@ export type WorldSnapshot = {
   years: number;
   timeline?: SimulationTimeline;
   orbital?: WorldState["orbital"];
+  /** Derived satellite state. The exact world clock remains authoritative. */
+  lunar?: LunarState;
   climateCycle?: WorldState["climateCycle"];
   formation: WorldState["formation"];
   tectonics?: WorldState["tectonics"];

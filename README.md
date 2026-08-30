@@ -146,9 +146,11 @@ attempting to replay unbounded wall-clock debt.
   organizations, mythology entities or cultivation entities.
 - Environment initialization is derived from generated terrain. Water and
   nutrients then evolve through field deltas and chemistry changes.
-- Every seed receives an independent orbital period, axial tilt, eccentricity,
-  periapsis, stellar flux and rotation period. Exact simulated days derive the
-  current orbit and four-season cycle, so opposite hemispheres receive
+- Every seed receives an independent, classically bounded orbital period,
+  axial tilt, eccentricity, periapsis, stellar flux and rotation period. The
+  central star remains fixed, the planet follows its elliptical orbit, and its
+  moon follows a nested planet-relative orbit. Exact simulated days derive the
+  current orbit and the matching four-season cycle, so opposite hemispheres receive
   opposite seasonal forcing and local reports can show the current climate
   driver. Greenhouse carbon, ocean thermal inertia and humidity complete the
   deterministic climate loop. Slow tectonics, erosion and deposition alter

@@ -21,6 +21,15 @@ export type OrbitalState = {
   solarFlux: number;
   season: PlanetSeason;
 };
+/** Seeded satellite orbit derived from the exact world day clock. */
+export type LunarState = {
+  orbitalPeriodDays: number;
+  inclinationDegrees: number;
+  eccentricity: number;
+  periapsisPhase: number;
+  orbitalPhase: number;
+  illumination: number;
+};
 export type ClimateYearSummary = {
   timelineStep: string;
   timelineDays: string;

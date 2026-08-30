@@ -403,6 +403,7 @@ test("animates bounded local weather without adding global particles", async ({ 
   humidWorld.fields.temperature.values.fill(0.68);
   humidWorld.fields.humidity.values.fill(0.86);
   humidWorld.fields.water.values.fill(0.42);
+  humidWorld.atmosphere.precipitation.values.fill(0.68);
   await page.locator("#load-input").setInputFiles({
     name: "humid-formed-world.json",
     mimeType: "application/json",
@@ -446,6 +447,7 @@ test("animates bounded local weather without adding global particles", async ({ 
   frozenWorld.fields.temperature.values.fill(0.18);
   frozenWorld.fields.humidity.values.fill(0.86);
   frozenWorld.fields.water.values.fill(0.42);
+  frozenWorld.atmosphere.precipitation.values.fill(0.68);
   await page.locator("#load-input").setInputFiles({
     name: "frozen-formed-world.json",
     mimeType: "application/json",
@@ -455,6 +457,54 @@ test("animates bounded local weather without adding global particles", async ({ 
   const snowParticleCount = Number(await canvas.getAttribute("data-weather-particle-count"));
   expect(snowParticleCount).toBeGreaterThan(0);
   expect(snowParticleCount).toBeLessThanOrEqual(180);
+
+  const clearWorld = createWorld(42_429, { width: 32, height: 16, formation: "formed" });
+  clearWorld.fields.temperature.values.fill(0.68);
+  clearWorld.fields.humidity.values.fill(0.86);
+  clearWorld.fields.water.values.fill(0.42);
+  clearWorld.atmosphere.precipitation.values.fill(0);
+  await page.locator("#load-input").setInputFiles({
+    name: "clear-formed-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(clearWorld)),
+  });
+  await expect(canvas).toHaveAttribute("data-weather-mode", "clear");
+  await expect(canvas).toHaveAttribute("data-weather-particle-count", "0");
+  await expect(canvas).toHaveAttribute("data-weather-precipitation", "0.00");
+});
+
+test("keeps zoom threshold clicks responsive while LOD refreshes in stages", async ({ page }) => {
+  await page.goto("/");
+  const canvas = page.locator("#world-map");
+  const formed = createWorld(42_430, { width: 32, height: 16, formation: "formed" });
+  await page.locator("#load-input").setInputFiles({
+    name: "zoom-performance-world.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(serializeWorld(formed)),
+  });
+  await page.locator("#pause-button").click();
+  await expect(canvas).toHaveAttribute("data-lod-rebuild", "ready");
+
+  const clickZoomIn = async (): Promise<number> => page.locator("#zoom-in").evaluate((button) => {
+    const started = performance.now();
+    (button as HTMLButtonElement).click();
+    return performance.now() - started;
+  });
+  const expectResponsiveThreshold = async (expectedZoom: string): Promise<void> => {
+    expect(await clickZoomIn()).toBeLessThan(35);
+    await expect(page.locator("#zoom-level")).toHaveText(expectedZoom);
+    await expect(canvas).toHaveAttribute("data-lod-rebuild", "ready");
+  };
+
+  await clickZoomIn();
+  await expectResponsiveThreshold("150%");
+  for (let click = 0; click < 3; click += 1) await clickZoomIn();
+  await expectResponsiveThreshold("400%");
+  for (let click = 0; click < 5; click += 1) await clickZoomIn();
+  await expectResponsiveThreshold("1000%");
+  for (let click = 0; click < 6; click += 1) await clickZoomIn();
+  await expectResponsiveThreshold("2400%");
+  await expect(canvas).toHaveAttribute("data-scene-lod", "individual");
 });
 
 test("renders global civilization routes and separates them from personal links", async ({ page }) => {

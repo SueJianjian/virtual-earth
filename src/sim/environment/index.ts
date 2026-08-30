@@ -349,7 +349,7 @@ export { calculateAtmosphere, createAtmosphereState, isAtmosphereState, restoreA
 export { calculateMarineChemistryPatches, calculateOcean, createOceanState, isOceanCoreState, isOceanState, restoreOceanState } from "./ocean.ts";
 export { applyNaturalHazardWaterEffects, naturalHazardDelta, naturalHazardsFor, MAX_NATURAL_HAZARDS_PER_STEP, type NaturalHazard, type NaturalHazardKind } from "./hazards.ts";
 export { deriveNaturalSubstance, MAX_SUBSTANCES, stepSubstances, substanceEffectProfileForRegion, substanceEffectProfilesForState } from "./substances.ts";
-export { createOrbitalState, diurnalTemperatureOffset, isOrbitalState, orbitalStateAtDays, orbitalStateForWorld, seasonalTemperatureOffset } from "./orbit.ts";
+export { createOrbitalState, diurnalTemperatureOffset, isLunarState, isOrbitalState, lunarDirectionAt, lunarDistanceScaleAt, lunarStateAtDays, lunarStateForWorld, moonPositionAt, orbitalStateAtDays, orbitalStateForWorld, planetPositionAt, planetRotationPhaseAt, seasonalTemperatureOffset, solarAltitudeFor, solarDirectionFor, starDirectionFromPlanetAt } from "./orbit.ts";
 export { advanceClimateCycle, annualClimateForLocal, createClimateCycleState, isClimateCycleState } from "./cycle.ts";
 export { ABIOGENESIS_WATER_THRESHOLD, OCEAN_MILESTONE_THRESHOLD, PREBIOTIC_ORGANICS_THRESHOLD } from "./thresholds.ts";
 export { completedPlanetFormationState, createPlanetFormationState, formationPhaseForProgress, formedElevation, FORMATION_DURATION_DAYS, primordialDustElevation, stepPlanetFormation } from "./formation.ts";

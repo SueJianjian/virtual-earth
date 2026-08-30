@@ -13,6 +13,7 @@ import { diseasePrevalenceForRegion } from "../sim/health/disease.ts";
 import { addPersistentTotal } from "../sim/numeric.ts";
 import { substanceReserveRatio } from "../sim/environment/substances.ts";
 import { RuntimePerformanceTracker } from "./performance.ts";
+import { lunarStateForWorld } from "../sim/environment/orbit.ts";
 
 const cloneFields = (fields: WorldState["fields"]): WorldState["fields"] => structuredClone(fields);
 const cloneChemistry = (chemistry: WorldState["chemistry"]): WorldState["chemistry"] => structuredClone(chemistry);
@@ -654,6 +655,7 @@ export const createSimulationRuntime = (initial: WorldState = createWorld(1, { e
       years: state.years,
       ...(state.timeline === undefined ? {} : { timeline: structuredClone(state.timeline) }),
       orbital: structuredClone(state.orbital),
+      ...(state.formation.phase === "stable-crust" ? { lunar: lunarStateForWorld(state) } : {}),
       climateCycle: structuredClone(state.climateCycle),
       formation: structuredClone(state.formation),
       tectonics: structuredClone(state.tectonics),

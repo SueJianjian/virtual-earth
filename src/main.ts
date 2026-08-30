@@ -197,7 +197,9 @@ const clearCheckpoint = (): void => {
 
 const syncRouteLegend = (zoom: number): void => {
   const hasRoutes = snapshot?.sceneLinks?.some((link) => link.scope === "strategic") ?? false;
-  routeLegend.hidden = snapshot?.formation.phase !== "stable-crust" || !hasRoutes || mapSceneLodForZoom(zoom) === "individual";
+  routeLegend.hidden = snapshot?.formation.phase !== "stable-crust"
+    || !hasRoutes
+    || mapSceneLodForZoom(zoom) === "individual";
 };
 
 const detailLevelForSceneEntity = (entity: SceneEntitySelection): InspectorDetail["level"] => {
@@ -403,7 +405,7 @@ const applyMessageNow = (message: WorkerMessage): void => {
     pendingManualLoadPayload = undefined;
     events = [];
   }
-  map.setAnimating(!message.paused && message.speed <= 4);
+  map.setAnimating(!message.paused, message.speed);
   if (message.snapshot.focusRegionId) {
     const match = /^region:(\d+):(\d+)$/.exec(message.snapshot.focusRegionId);
     if (match) {
@@ -436,7 +438,7 @@ const applyMessage = (message: WorkerMessage): void => {
   canvas.dataset.timelineStep = snapshot.timeline?.step ?? String(snapshot.tick);
   canvas.dataset.timelineDays = snapshot.timeline?.days ?? String(Math.round(snapshot.years * 365));
   // Start and pause must affect animation immediately even when snapshot UI is frame-coalesced.
-  map.setAnimating(!message.paused && message.speed <= 4);
+  map.setAnimating(!message.paused, message.speed);
   snapshotRenderer.enqueue(message);
   if (message.paused) snapshotRenderer.flush();
 };

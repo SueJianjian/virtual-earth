@@ -1,5 +1,17 @@
 import * as THREE from "three";
 import type { PlanetSeason, RegionId } from "../sim/types.ts";
+import { REAL_MILLISECONDS_PER_SIMULATED_DAY } from "../sim/time.ts";
+import {
+  MOON_RADIUS_IN_PLANET_RADII,
+  STAR_RADIUS_IN_PLANET_RADII,
+  moonSemiMajorAxisInPlanetRadii,
+  planetRotationPhaseAt,
+  planetSemiMajorAxisInPlanetRadii,
+  solarAltitudeFor,
+  solarDirectionFor,
+  starDirectionFromPlanetAt,
+  stellarSystemPositionsAt,
+} from "../sim/environment/orbit.ts";
 import type { SceneEntity, SceneLink, WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 import { createAgentModel, createFacilityModel, createFantasyTreeGeometry, createLifeformModel, createLifeformPopulation, createOrganizationModel, createPopulationCamp, createWorldviewModel, enableFantasyShadows, fantasyMaterials } from "./fantasy-assets.ts";
@@ -9,6 +21,7 @@ export type CellSelection = { x: number; y: number; index: number; regionId: Reg
 export type RenderQuality = 480 | 720 | 1080;
 export type SceneEntitySelection = { id: string; kind: SceneEntity["kind"] };
 export type MapFocusLod = "region" | "settlement" | "individual";
+export type MapObservationMode = "planet" | "stellar-system";
 
 const renderDimensions: Record<RenderQuality, { width: number; height: number }> = {
   480: { width: 854, height: 480 },
@@ -26,6 +39,10 @@ const focusZoomForLod = (lod: MapFocusLod): number => ({
 const radians = (degrees: number): number => degrees * Math.PI / 180;
 const degrees = (value: number): number => value * 180 / Math.PI;
 const normalizeYaw = (value: number): number => ((value % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+const SPACE_BACKGROUND = 0x020711;
+const SYSTEM_DISPLAY_STAR_RADIUS = 4.8;
+const SYSTEM_DISPLAY_PLANET_RADIUS = 1.25;
+const SYSTEM_DISPLAY_MOON_RADIUS = 0.68;
 
 const seasonVisuals: Record<PlanetSeason, {
   sky: number;
@@ -79,8 +96,8 @@ export const createMapCanvas = (
   renderer.toneMappingExposure = 0.92;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x141a16);
-  scene.fog = new THREE.FogExp2(0x8db5bd, 0.0055);
+  scene.background = new THREE.Color(SPACE_BACKGROUND);
+  scene.fog = null;
   const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 180);
   const terrainRoot = new THREE.Group();
   const territoryRoot = new THREE.Group();
@@ -89,7 +106,11 @@ export const createMapCanvas = (
   const entityRoot = new THREE.Group();
   const effectRoot = new THREE.Group();
   const weatherRoot = new THREE.Group();
-  scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot, weatherRoot);
+  const celestialRoot = new THREE.Group();
+  const starRoot = new THREE.Group();
+  const systemRoot = new THREE.Group();
+  scene.add(terrainRoot, territoryRoot, propRoot, linkRoot, entityRoot, effectRoot, weatherRoot, celestialRoot, systemRoot);
+  celestialRoot.add(starRoot);
 
   const hemisphereLight = new THREE.HemisphereLight(0xc8e7ef, 0x31422d, 1.05);
   scene.add(hemisphereLight);
@@ -109,13 +130,102 @@ export const createMapCanvas = (
   rimLight.position.set(18, 10, -20);
   scene.add(rimLight);
 
+  const starGeometry = new THREE.BufferGeometry();
+  const starCount = 360;
+  const starPositions = new Float32Array(starCount * 3);
+  const starColors = new Float32Array(starCount * 3);
+  for (let index = 0; index < starCount; index += 1) {
+    const horizontal = sceneHash(index, 17, 4049) * Math.PI * 2;
+    const vertical = sceneHash(index, 23, 4057) * 2 - 1;
+    const radius = 72 + sceneHash(index, 29, 4063) * 28;
+    const horizontalRadius = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+    const offset = index * 3;
+    starPositions[offset] = Math.cos(horizontal) * horizontalRadius * radius;
+    starPositions[offset + 1] = vertical * radius;
+    starPositions[offset + 2] = Math.sin(horizontal) * horizontalRadius * radius;
+    const color: [number, number, number] = index % 7 === 0 ? [1, 0.84, 0.58] : index % 5 === 0 ? [0.64, 0.82, 1] : [0.88, 0.94, 1];
+    starColors[offset] = color[0];
+    starColors[offset + 1] = color[1];
+    starColors[offset + 2] = color[2];
+  }
+  starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+  starGeometry.setAttribute("color", new THREE.BufferAttribute(starColors, 3));
+  const starMaterial = new THREE.PointsMaterial({ size: 1.05, vertexColors: true, transparent: true, opacity: 0.68, depthTest: true, depthWrite: false, sizeAttenuation: false, toneMapped: false });
+  const starField = new THREE.Points(starGeometry, starMaterial);
+  starField.renderOrder = 30;
+  starRoot.add(starField);
+  celestialRoot.visible = true;
+  canvas.dataset.spaceBackground = "black";
+  canvas.dataset.starOcclusion = "depth-tested";
+
+  const systemStar = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 48, 32),
+    new THREE.MeshBasicMaterial({ color: 0xffdc78, toneMapped: false }),
+  );
+  systemStar.scale.setScalar(SYSTEM_DISPLAY_STAR_RADIUS);
+  const systemStarGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 40, 28),
+    new THREE.MeshBasicMaterial({ color: 0xffa13b, transparent: true, opacity: 0.18, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
+  );
+  systemStarGlow.scale.setScalar(SYSTEM_DISPLAY_STAR_RADIUS * 1.34);
+  const systemPlanet = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 64, 40),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.72, metalness: 0.02 }),
+  );
+  systemPlanet.scale.setScalar(SYSTEM_DISPLAY_PLANET_RADIUS);
+  const systemPlanetAtmosphere = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 48, 32),
+    new THREE.MeshBasicMaterial({ color: 0x6fc2d3, transparent: true, opacity: 0.12, side: THREE.BackSide, depthWrite: false, toneMapped: false }),
+  );
+  systemPlanetAtmosphere.scale.setScalar(SYSTEM_DISPLAY_PLANET_RADIUS * 1.08);
+  const systemMoon = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 32, 20),
+    new THREE.MeshStandardMaterial({ color: 0xaeb8b8, roughness: 0.96, metalness: 0.01 }),
+  );
+  systemMoon.scale.setScalar(SYSTEM_DISPLAY_MOON_RADIUS);
+  systemRoot.add(systemStarGlow, systemStar, systemPlanet, systemPlanetAtmosphere, systemMoon);
+  systemRoot.visible = false;
+
+  const syncSystemPlanetTexture = (current: WorldSnapshot): void => {
+    const grid = current.fields.elevation;
+    const textureCanvas = document.createElement("canvas");
+    textureCanvas.width = grid.width;
+    textureCanvas.height = grid.height;
+    const context = textureCanvas.getContext("2d");
+    if (!context) return;
+    const image = context.createImageData(grid.width, grid.height);
+    for (let index = 0; index < grid.values.length; index += 1) {
+      const [red, green, blue] = colorForCell(current, index, "natural");
+      const offset = index * 4;
+      image.data[offset] = red;
+      image.data[offset + 1] = green;
+      image.data[offset + 2] = blue;
+      image.data[offset + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    const texture = new THREE.CanvasTexture(textureCanvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    const material = systemPlanet.material as THREE.MeshStandardMaterial;
+    material.map?.dispose();
+    material.map = texture;
+    material.needsUpdate = true;
+  };
+
   let snapshot: WorldSnapshot | undefined;
   let layer: MapLayer = "natural";
   let selection: CellSelection | undefined;
   let quality: RenderQuality = 480;
   let zoom = 1;
+  let systemZoom = 1;
+  let observationMode: MapObservationMode = "planet";
   let animationEnabled = false;
+  let animationSpeed = 1;
   let lastAnimationFrame = 0;
+  let lastCelestialTime = performance.now();
+  let visualDaysSinceSnapshot = 0;
   let scheduledRender = 0;
   let deferredCameraRender: ReturnType<typeof setTimeout> | undefined;
   let deferredDataRender: ReturnType<typeof setTimeout> | undefined;
@@ -126,6 +236,8 @@ export const createMapCanvas = (
   let cameraPitch = radians(42);
   let globeYaw = radians(-18);
   let globePitch = radians(-12);
+  let planetSpinPhase = 0;
+  const displaySystemBarycenter = new THREE.Vector3();
   let pointerStart: {
     x: number;
     y: number;
@@ -168,6 +280,43 @@ export const createMapCanvas = (
     zMin: number;
     zMax: number;
   } | undefined;
+  let lodRebuildGeneration = 0;
+
+  const scheduleDeferredLodTask = (task: () => void): void => {
+    // Let the current zoom frame paint before a rebuild stage starts. A timer
+    // after the frame keeps this deterministic even when the GPU is busy.
+    requestAnimationFrame(() => window.setTimeout(task, 0));
+  };
+
+  const invalidateLodRebuild = (): void => {
+    lodRebuildGeneration += 1;
+    canvas.dataset.lodRebuild = "ready";
+  };
+
+  const scheduleLodRebuild = (): void => {
+    const generation = ++lodRebuildGeneration;
+    canvas.dataset.lodRebuild = "pending";
+    const stages: Array<() => void> = [
+      rebuildTerrain,
+      rebuildProps,
+      rebuildWeather,
+      rebuildEntities,
+      rebuildLinks,
+      updateSelectionMarker,
+    ];
+    const runStage = (stageIndex: number): void => {
+      if (generation !== lodRebuildGeneration || !snapshot) return;
+      stages[stageIndex]?.();
+      if (generation !== lodRebuildGeneration || !snapshot) return;
+      if (stageIndex + 1 < stages.length) {
+        scheduleDeferredLodTask(() => runStage(stageIndex + 1));
+        return;
+      }
+      canvas.dataset.lodRebuild = "ready";
+      scheduleRender();
+    };
+    scheduleDeferredLodTask(() => runStage(0));
+  };
 
   const syncEnvironmentalPresentation = (): void => {
     if (!snapshot?.orbital) return;
@@ -175,18 +324,16 @@ export const createMapCanvas = (
     const visuals = seasonVisuals[orbital.season];
     const humidity = clamp(snapshot.metrics.meanHumidity ?? 0, 0, 1);
     const solarScale = clamp(orbital.solarFlux / 1.05, 0.45, 1.35);
-    (scene.background as THREE.Color).set(visuals.sky);
+    (scene.background as THREE.Color).set(SPACE_BACKGROUND);
     if (scene.fog instanceof THREE.FogExp2) {
       scene.fog.color.set(visuals.fog);
       scene.fog.density = 0.0042 + humidity * 0.0024;
     }
     hemisphereLight.color.set(visuals.hemisphere);
     hemisphereLight.groundColor.set(visuals.ground);
-    hemisphereLight.intensity = 0.82 + solarScale * 0.2;
+    hemisphereLight.intensity = 0.52 + solarScale * 0.2;
     sunlight.color.set(visuals.sunlight);
-    sunlight.intensity = 1.62 + solarScale * 0.55;
-    const solarAngle = orbital.seasonalPhase * Math.PI * 2 + orbital.periapsisPhase * Math.PI * 2;
-    sunlight.position.set(Math.cos(solarAngle) * 26, 19 + solarScale * 10, Math.sin(solarAngle) * 26);
+    sunlight.intensity = 1.25 + solarScale * 0.45;
     rimLight.color.set(visuals.rim);
     rimLight.intensity = 0.46 + (1 - humidity) * 0.22;
     canvas.dataset.season = orbital.season;
@@ -194,9 +341,206 @@ export const createMapCanvas = (
     canvas.dataset.atmosphereHumidity = humidity.toFixed(2);
   };
 
+  const normalizedPhase = (value: number): number => ((value % 1) + 1) % 1;
+  const stellarSystemViewActive = (): boolean => observationMode === "stellar-system"
+    && snapshot?.formation.phase === "stable-crust";
+  const systemViewActive = (): boolean => stellarSystemViewActive();
+  const activeObservationZoom = (): number => stellarSystemViewActive() ? systemZoom : zoom;
+  const celestialBaseSpan = (): number => {
+    if (!snapshot?.orbital || !snapshot.lunar) return 100;
+    return 68;
+  };
+  const timelineDaysForSnapshot = (candidate: WorldSnapshot): string =>
+    candidate.timeline?.days ?? String(Math.max(0, Math.round(candidate.years * 365)));
+  const syncCelestialClock = (previous: WorldSnapshot | undefined, next: WorldSnapshot): void => {
+    const previousDays = previous === undefined ? undefined : timelineDaysForSnapshot(previous);
+    const nextDays = timelineDaysForSnapshot(next);
+    const sameWorld = previous !== undefined && previous.seed === next.seed
+      && previous.formation.phase === "stable-crust"
+      && next.formation.phase === "stable-crust"
+      && previousDays !== undefined
+      && nextDays !== undefined;
+    if (!sameWorld) visualDaysSinceSnapshot = 0;
+    else if (previousDays !== nextDays) {
+      try {
+        const elapsedWholeDays = BigInt(nextDays) - BigInt(previousDays);
+        const elapsed = Number(elapsedWholeDays);
+        visualDaysSinceSnapshot = Number.isFinite(elapsed) && elapsed > 0
+          ? Math.max(0, visualDaysSinceSnapshot - elapsed)
+          : 0;
+      } catch {
+        visualDaysSinceSnapshot = 0;
+      }
+    }
+    lastCelestialTime = performance.now();
+  };
+  const updateCelestialPresentation = (time: number): void => {
+    const current = snapshot;
+    (scene.background as THREE.Color).set(SPACE_BACKGROUND);
+    if (!current?.orbital || !current.lunar || current.formation.phase !== "stable-crust") {
+      scene.fog = null;
+      celestialRoot.visible = true;
+      systemRoot.visible = false;
+      starRoot.scale.setScalar(1);
+      starMaterial.opacity = 0.68;
+      delete canvas.dataset.dayPhase;
+      delete canvas.dataset.solarAltitude;
+      delete canvas.dataset.daylightFactor;
+      delete canvas.dataset.nightFactor;
+      delete canvas.dataset.moonOrbitPhase;
+      delete canvas.dataset.moonIllumination;
+      delete canvas.dataset.celestialObjects;
+      delete canvas.dataset.celestialMode;
+      delete canvas.dataset.observationMode;
+      delete canvas.dataset.spatialScale;
+      delete canvas.dataset.distanceUnit;
+      delete canvas.dataset.starPosition;
+      delete canvas.dataset.systemBarycenterPosition;
+      delete canvas.dataset.planetPosition;
+      delete canvas.dataset.moonPosition;
+      return;
+    }
+    if (animationEnabled && time > lastCelestialTime) {
+      visualDaysSinceSnapshot += (time - lastCelestialTime) / REAL_MILLISECONDS_PER_SIMULATED_DAY * animationSpeed;
+    }
+    lastCelestialTime = time;
+    const baseRotationPhase = planetRotationPhaseAt(current.orbital, timelineDaysForSnapshot(current));
+    const dayPhase = normalizedPhase(baseRotationPhase + visualDaysSinceSnapshot * 24 / current.orbital.rotationPeriodHours);
+    const orbitalPhase = normalizedPhase(current.orbital.orbitalPhase + visualDaysSinceSnapshot / current.orbital.orbitalPeriodDays);
+    const seasonalPhase = normalizedPhase(current.orbital.seasonalPhase + visualDaysSinceSnapshot / current.orbital.orbitalPeriodDays);
+    const visualOrbital = { ...current.orbital, orbitalPhase, seasonalPhase };
+    const solarAltitude = solarAltitudeFor(visualOrbital, dayPhase);
+    const daylightRaw = clamp((solarAltitude + 0.12) / 0.28, 0, 1);
+    const daylightFactor = daylightRaw * daylightRaw * (3 - daylightRaw * 2);
+    const nightFactor = 1 - daylightFactor;
+    const systemView = systemViewActive();
+    const stellarSystemView = stellarSystemViewActive();
+    const globe = surfaceMode() === "planet-globe" && !systemView;
+    const surfaceSolarDirection = solarDirectionFor(visualOrbital, dayPhase);
+    const orbitalStarDirection = starDirectionFromPlanetAt(visualOrbital, orbitalPhase);
+    const inertialSolarDirection: [number, number, number] = orbitalStarDirection;
+    const lightDirection = globe || systemView ? inertialSolarDirection : surfaceSolarDirection;
+    planetSpinPhase = dayPhase;
+    syncGlobeRotation();
+    const lunarPhase = normalizedPhase(current.lunar.orbitalPhase + visualDaysSinceSnapshot / current.lunar.orbitalPeriodDays);
+    const visualLunar = { ...current.lunar, orbitalPhase: lunarPhase };
+    const physicalPositions = stellarSystemPositionsAt(visualOrbital, visualLunar, orbitalPhase, lunarPhase);
+    const physicalBarycenterLength = Math.max(1, Math.hypot(...physicalPositions.barycenter));
+    const physicalPlanetOrbit = planetSemiMajorAxisInPlanetRadii(visualOrbital);
+    const physicalMoonVector: [number, number, number] = [
+      physicalPositions.moon[0] - physicalPositions.barycenter[0],
+      physicalPositions.moon[1] - physicalPositions.barycenter[1],
+      physicalPositions.moon[2] - physicalPositions.barycenter[2],
+    ];
+    const physicalMoonDistance = Math.max(1, Math.hypot(...physicalMoonVector));
+    // The simulation keeps linear physical coordinates. The remote observer uses
+    // a logarithmic presentation so the three bodies remain visible in one frame.
+    const displayPlanetDistance = 25 * physicalBarycenterLength / physicalPlanetOrbit;
+    const displayMoonDistance = 5.6 * physicalMoonDistance / moonSemiMajorAxisInPlanetRadii(visualLunar);
+    const planetDirection = new THREE.Vector3(...physicalPositions.barycenter).normalize();
+    const moonDirection = new THREE.Vector3(...physicalMoonVector).normalize();
+    const displayBarycenter = planetDirection.multiplyScalar(displayPlanetDistance);
+    const displayPlanetPosition = displayBarycenter.clone();
+    const displayMoonPosition = displayBarycenter.clone().add(moonDirection.multiplyScalar(displayMoonDistance));
+    systemStar.position.set(...physicalPositions.star);
+    systemStarGlow.position.copy(systemStar.position);
+    systemPlanet.position.copy(displayPlanetPosition);
+    systemPlanetAtmosphere.position.copy(systemPlanet.position);
+    systemMoon.position.copy(displayMoonPosition);
+    displaySystemBarycenter.copy(displayBarycenter);
+    systemPlanet.rotation.order = "ZYX";
+    systemPlanet.rotation.z = radians(current.orbital.axialTiltDegrees);
+    systemPlanet.rotation.y = dayPhase * Math.PI * 2;
+    systemRoot.visible = systemView;
+    const rootPosition = globe ? new THREE.Vector3() : cameraFocus();
+    celestialRoot.position.copy(rootPosition);
+    const backgroundScale = systemView ? celestialBaseSpan() * (stellarSystemView ? 2.8 : 4.2) / 86 : 1;
+    starRoot.scale.setScalar(backgroundScale);
+    const solarScale = clamp(current.orbital.solarFlux / 1.05, 0.45, 1.35);
+    const lightTarget = systemView ? displaySystemBarycenter : rootPosition;
+    const lightDistance = globe ? globeRadius() * 3.1 : Math.max(16, globeRadius() * 3.4);
+    if (systemView) sunlight.position.copy(systemStar.position);
+    else sunlight.position.set(
+        lightTarget.x + lightDirection[0] * lightDistance,
+        lightTarget.y + lightDirection[1] * lightDistance,
+        lightTarget.z + lightDirection[2] * lightDistance,
+      );
+    sunlight.target.position.copy(lightTarget);
+    sunlight.intensity = globe || systemView
+      ? 1.1 + solarScale * 0.55
+      : 0.18 + daylightFactor * (1.35 + solarScale * 0.55);
+    hemisphereLight.intensity = systemView
+      ? 0.03
+      : globe
+      ? 0.3 + solarScale * 0.28
+      : 0.2 + daylightFactor * (0.68 + solarScale * 0.2);
+    rimLight.intensity = systemView
+      ? 0.06
+      : globe
+      ? 0.28 + nightFactor * 0.22
+      : 0.2 + nightFactor * 0.34;
+    const visuals = seasonVisuals[current.orbital.season];
+    const humidity = clamp(current.metrics.meanHumidity ?? 0, 0, 1);
+    if (globe || systemView) {
+      scene.fog = null;
+      (scene.background as THREE.Color).set(SPACE_BACKGROUND);
+      starMaterial.opacity = 0.68;
+    } else if (scene.fog instanceof THREE.FogExp2) {
+      const sky = new THREE.Color(visuals.sky).lerp(new THREE.Color(SPACE_BACKGROUND), nightFactor * 0.94);
+      (scene.background as THREE.Color).copy(sky);
+      scene.fog.color.set(visuals.fog);
+      scene.fog.density = 0.0042 + humidity * 0.0024;
+      starMaterial.opacity = 0.02 + nightFactor * 0.66;
+    } else {
+      const sky = new THREE.Color(visuals.sky).lerp(new THREE.Color(SPACE_BACKGROUND), nightFactor * 0.94);
+      (scene.background as THREE.Color).copy(sky);
+      scene.fog = new THREE.FogExp2(visuals.fog, 0.0042 + humidity * 0.0024);
+      starMaterial.opacity = 0.02 + nightFactor * 0.66;
+    }
+    // Global space stays black; only the atmosphere in a local surface view follows daylight.
+    const illumination = clamp(current.lunar.illumination, 0, 1);
+    celestialRoot.visible = true;
+    canvas.dataset.dayPhase = dayPhase.toFixed(4);
+    canvas.dataset.solarAltitude = solarAltitude.toFixed(4);
+    canvas.dataset.daylightFactor = daylightFactor.toFixed(4);
+    canvas.dataset.nightFactor = nightFactor.toFixed(4);
+    canvas.dataset.moonOrbitPhase = lunarPhase.toFixed(4);
+    canvas.dataset.solarSizeRelativeToPlanet = systemView ? String(STAR_RADIUS_IN_PLANET_RADII) : "not-rendered";
+    canvas.dataset.moonSizeRelativeToPlanet = systemView ? String(MOON_RADIUS_IN_PLANET_RADII) : "not-rendered";
+    canvas.dataset.moonIllumination = illumination.toFixed(4);
+    canvas.dataset.celestialMode = systemView ? observationMode : globe ? "planetary-orbit" : "local-sky";
+    canvas.dataset.celestialObjects = stellarSystemView ? "star-planet-moon-visible" : "hidden";
+    canvas.dataset.spaceBackground = globe || systemView ? "black" : "atmospheric";
+    canvas.dataset.orbitalFrame = "star-centered";
+    canvas.dataset.starOrbitsPlanet = "false";
+    canvas.dataset.planetOrbitsStar = "true";
+    canvas.dataset.moonOrbitsPlanet = "true";
+    canvas.dataset.solarLightFrame = systemView ? "fixed-star" : globe ? "inertial" : "surface-local";
+    canvas.dataset.planetSpinPhase = dayPhase.toFixed(4);
+    canvas.dataset.planetSpinAxisTilt = current.orbital.axialTiltDegrees.toFixed(4);
+    canvas.dataset.solarLightDirection = lightDirection.map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.solarLightPosition = sunlight.position.toArray().map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.observationMode = systemView ? observationMode : "planet";
+    canvas.dataset.spatialScale = systemView ? "physical-orbit;visible-observer" : "surface";
+    canvas.dataset.distanceUnit = systemView ? "planet-radius" : "map-region";
+    canvas.dataset.starRadiusRatio = String(STAR_RADIUS_IN_PLANET_RADII);
+    canvas.dataset.moonRadiusRatio = String(MOON_RADIUS_IN_PLANET_RADII);
+    canvas.dataset.planetSemiMajorAxis = planetSemiMajorAxisInPlanetRadii(visualOrbital).toFixed(4);
+    canvas.dataset.moonSemiMajorAxis = moonSemiMajorAxisInPlanetRadii(visualLunar).toFixed(4);
+    canvas.dataset.starPosition = physicalPositions.star.map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.systemBarycenterPosition = physicalPositions.barycenter.map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.planetPosition = physicalPositions.planet.map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.moonPosition = physicalPositions.moon.map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.systemDisplayBarycenter = displayBarycenter.toArray().map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.systemDisplayPlanetPosition = displayPlanetPosition.toArray().map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.systemDisplayMoonPosition = displayMoonPosition.toArray().map((value) => value.toFixed(4)).join(",");
+    canvas.dataset.systemDistanceScale = systemView ? "physical-orbits;resolved-display" : "not-applicable";
+    canvas.dataset.systemOrbitLines = "hidden";
+  };
+
   const dimensionsFor = (): { width: number; height: number } => {
     const base = renderDimensions[quality];
-    const rasterScale = Math.min(2.25, Math.max(1, zoom));
+    const rasterScale = Math.min(2.25, Math.max(1, activeObservationZoom()));
     const displayAspect = canvas.clientWidth > 0 && canvas.clientHeight > 0
       ? clamp(canvas.clientWidth / canvas.clientHeight, 0.5, 3)
       : base.width / base.height;
@@ -216,11 +560,12 @@ export const createMapCanvas = (
   const syncGlobeRotation = (): void => {
     const globeView = surfaceMode() === "planet-globe";
     const pitch = globeView ? globePitch : 0;
-    const yaw = globeView ? globeYaw : 0;
+    const yaw = globeView ? globeYaw + planetSpinPhase * Math.PI * 2 : 0;
+    const axialTilt = globeView && snapshot?.orbital ? radians(snapshot.orbital.axialTiltDegrees) : 0;
     terrainRoot.rotation.order = "YXZ";
     linkRoot.rotation.order = "YXZ";
-    terrainRoot.rotation.set(pitch, yaw, 0);
-    linkRoot.rotation.set(pitch, yaw, 0);
+    terrainRoot.rotation.set(pitch, yaw, axialTilt);
+    linkRoot.rotation.set(pitch, yaw, axialTilt);
   };
 
   const globeRadius = (): number => {
@@ -260,6 +605,7 @@ export const createMapCanvas = (
 
   const cameraFocus = (): THREE.Vector3 => {
     if (!snapshot) return new THREE.Vector3();
+    if (stellarSystemViewActive()) return new THREE.Vector3(panWorldX, 0, panWorldZ);
     if (surfaceMode() === "planet-globe") return new THREE.Vector3();
     const grid = snapshot.fields.elevation;
     const baseX = selection ? selection.x : (grid.width - 1) / 2;
@@ -271,7 +617,18 @@ export const createMapCanvas = (
   };
 
   const clampSurfacePan = (): void => {
-    if (!snapshot || surfaceMode() !== "local-surface") {
+    if (!snapshot) {
+      panWorldX = 0;
+      panWorldZ = 0;
+      return;
+    }
+    if (systemViewActive()) {
+      const limit = celestialBaseSpan() * 0.58;
+      panWorldX = clamp(panWorldX, -limit, limit);
+      panWorldZ = clamp(panWorldZ, -limit, limit);
+      return;
+    }
+    if (surfaceMode() !== "local-surface") {
       panWorldX = 0;
       panWorldZ = 0;
       return;
@@ -295,6 +652,27 @@ export const createMapCanvas = (
     clampSurfacePan();
     const dimensions = dimensionsFor();
     const aspect = dimensions.width / dimensions.height;
+    if (systemViewActive()) {
+      const baseSpan = celestialBaseSpan();
+      const visibleHeight = baseSpan / activeObservationZoom();
+      camera.left = -visibleHeight * aspect / 2;
+      camera.right = visibleHeight * aspect / 2;
+      camera.top = visibleHeight / 2;
+      camera.bottom = -visibleHeight / 2;
+      camera.near = 0.1;
+      camera.far = baseSpan * 8;
+      camera.updateProjectionMatrix();
+      const focus = cameraFocus();
+      const distance = baseSpan * 0.92;
+      const horizontalDistance = Math.cos(cameraPitch) * distance;
+      camera.position.set(
+        focus.x + Math.sin(cameraYaw) * horizontalDistance,
+        focus.y + Math.sin(cameraPitch) * distance,
+        focus.z + Math.cos(cameraYaw) * horizontalDistance,
+      );
+      camera.lookAt(focus);
+      return;
+    }
     const grid = snapshot.fields.elevation;
     const bodyView = surfaceMode() === "planet-globe" || snapshot.formation.phase !== "stable-crust";
     const baseSpan = Math.max(10, (bodyView ? Math.min(grid.width, grid.height) : Math.max(grid.width, grid.height)) * 0.94);
@@ -303,6 +681,8 @@ export const createMapCanvas = (
     camera.right = visibleHeight * aspect / 2;
     camera.top = visibleHeight / 2;
     camera.bottom = -visibleHeight / 2;
+    camera.near = 0.1;
+    camera.far = 180;
     camera.updateProjectionMatrix();
     const focus = cameraFocus();
     const distance = Math.max(22, baseSpan * 0.82);
@@ -323,6 +703,7 @@ export const createMapCanvas = (
 
   const render = (): void => {
     if (!snapshot) return;
+    updateCelestialPresentation(performance.now());
     updateRendererSize();
     updateCamera();
     renderer.render(scene, camera);
@@ -770,6 +1151,8 @@ export const createMapCanvas = (
     canvas.dataset.weatherMode = "clear";
     canvas.dataset.weatherParticleCount = "0";
     canvas.dataset.weatherIntensity = "0.00";
+    canvas.dataset.weatherPrecipitation = "0.00";
+    canvas.dataset.weatherTemperature = "0.00";
     if (!animationEnabled) canvas.dataset.weatherFrame = "0";
     else if (canvas.dataset.weatherFrame === undefined) canvas.dataset.weatherFrame = "0";
     if (!snapshot || snapshot.formation.phase !== "stable-crust" || surfaceMode() === "planet-globe") return;
@@ -781,24 +1164,35 @@ export const createMapCanvas = (
       : { xMin: 0, xMax: grid.width - 1, yMin: 0, yMax: grid.height - 1 };
     let humidityTotal = 0;
     let waterTotal = 0;
+    let precipitationTotal = 0;
     let temperatureTotal = 0;
     let sampleCount = 0;
     for (let y = bounds.yMin; y <= bounds.yMax; y += 1) for (let x = bounds.xMin; x <= bounds.xMax; x += 1) {
       const index = y * grid.width + x;
       humidityTotal += clamp(snapshot.fields.humidity.values[index] ?? 0, 0, 1);
       waterTotal += currentWater(index);
+      precipitationTotal += clamp(snapshot.atmosphere?.precipitation.values[index] ?? 0, 0, 1);
       temperatureTotal += clamp(snapshot.fields.temperature.values[index] ?? 0, 0, 1);
       sampleCount += 1;
     }
     const humidity = humidityTotal / Math.max(1, sampleCount);
     const water = waterTotal / Math.max(1, sampleCount);
+    const precipitation = precipitationTotal / Math.max(1, sampleCount);
     const temperature = temperatureTotal / Math.max(1, sampleCount);
-    const intensity = clamp((humidity - 0.3) * 1.8 + water * 0.42, 0, 1);
-    const count = intensity < 0.06 ? 0 : Math.min(180, 24 + Math.round(intensity * 156));
+    // Humidity and surface water support clouds; only authoritative atmospheric
+    // precipitation is allowed to create visible rain or snow.
+    const precipitationThreshold = 0.12;
+    const humidityThreshold = 0.34;
+    const activePrecipitation = precipitation >= precipitationThreshold && humidity >= humidityThreshold;
+    const intensity = activePrecipitation
+      ? clamp((precipitation - precipitationThreshold) * 1.55 + (humidity - humidityThreshold) * 0.28, 0, 1)
+      : 0;
+    const count = intensity < 0.06 ? 0 : Math.min(180, 18 + Math.round(intensity * 162));
     const kind: "rain" | "snow" = temperature < 0.32 ? "snow" : "rain";
     canvas.dataset.weatherMode = count > 0 ? kind : "clear";
     canvas.dataset.weatherParticleCount = String(count);
     canvas.dataset.weatherIntensity = intensity.toFixed(2);
+    canvas.dataset.weatherPrecipitation = precipitation.toFixed(2);
     canvas.dataset.weatherTemperature = temperature.toFixed(2);
     if (count === 0) return;
 
@@ -1063,7 +1457,8 @@ export const createMapCanvas = (
 
   const updateSceneLod = (): void => {
     const sceneLod = mapSceneLodForZoom(zoom);
-    const globeView = surfaceMode() === "planet-globe";
+    const systemView = systemViewActive();
+    const globeView = surfaceMode() === "planet-globe" && !systemView;
     let visibleAgentCount = 0;
     let visiblePopulationCount = 0;
     let visibleOrganizationCount = 0;
@@ -1075,7 +1470,7 @@ export const createMapCanvas = (
       const entityId = String(child.userData.sceneEntityId ?? "");
       const isLocal = !selection || child.userData.sceneRegionId === selection.regionId;
       const isFocused = entityId.length > 0 && entityId === selectedSceneEntityId;
-      if (globeView) child.visible = false;
+      if (globeView || systemView) child.visible = false;
       else if (sceneLod === "individual") {
         if (!isLocal) child.visible = false;
         else if (isFocused) child.visible = true;
@@ -1109,13 +1504,16 @@ export const createMapCanvas = (
         visibleEntityIds.add(String(child.userData.sceneEntityId));
       }
     }
-    propRoot.visible = snapshot?.formation.phase !== "stable-crust" || (!globeView && propsPerCellForZoom(zoom) > 0);
-    territoryRoot.visible = !globeView && sceneLod !== "individual";
-    linkRoot.visible = snapshot?.formation.phase === "stable-crust";
-    weatherRoot.visible = snapshot?.formation.phase === "stable-crust" && !globeView && sceneLod !== "global";
+    terrainRoot.visible = !systemView;
+    propRoot.visible = !systemView && (snapshot?.formation.phase !== "stable-crust" || (!globeView && propsPerCellForZoom(zoom) > 0));
+    territoryRoot.visible = !systemView && !globeView && sceneLod !== "individual";
+    entityRoot.visible = !systemView;
+    linkRoot.visible = !systemView && snapshot?.formation.phase === "stable-crust";
+    weatherRoot.visible = !systemView && snapshot?.formation.phase === "stable-crust" && !globeView && sceneLod !== "global";
+    systemRoot.visible = systemView;
     let visibleStrategicLinkCount = 0;
     let visiblePersonalLinkCount = 0;
-    effectRoot.visible = !globeView;
+    effectRoot.visible = !systemView && !globeView;
     for (const link of linkRoot.children) {
       const strategic = link.userData.linkScope === "strategic";
       const touchesSelection = !selection
@@ -1129,16 +1527,18 @@ export const createMapCanvas = (
       if (link.visible && strategic) visibleStrategicLinkCount += 1;
       else if (link.visible) visiblePersonalLinkCount += 1;
     }
-    canvas.dataset.sceneLod = sceneLod;
+    canvas.dataset.sceneLod = systemView ? observationMode : sceneLod;
     canvas.dataset.visibleSceneEntityCount = String(visibleEntityCount);
     canvas.dataset.selectedSceneEntity = selectedSceneEntityId ?? "";
     canvas.dataset.visibleStrategicLinkCount = String(visibleStrategicLinkCount);
     canvas.dataset.visiblePersonalLinkCount = String(visiblePersonalLinkCount);
     canvas.dataset.maxZoom = String(MAX_MAP_ZOOM);
-    canvas.dataset.worldScope = snapshot?.formation.phase === "stable-crust" ? "planetary" : "forming-body";
+    canvas.dataset.worldScope = systemView ? observationMode : snapshot?.formation.phase === "stable-crust" ? "planetary" : "forming-body";
     if (snapshot) {
       const grid = snapshot.fields.elevation;
-      canvas.dataset.visibleRegionSpan = globeView
+      canvas.dataset.visibleRegionSpan = systemView
+        ? observationMode
+        : globeView
         ? `${grid.width.toFixed(2)}x${grid.height.toFixed(2)}`
         : `${Math.max(1 / MAX_MAP_ZOOM, grid.width / zoom).toFixed(2)}x${Math.max(1 / MAX_MAP_ZOOM, grid.height / zoom).toFixed(2)}`;
     }
@@ -1241,7 +1641,12 @@ export const createMapCanvas = (
   };
 
   const applySnapshot = (next: WorldSnapshot): void => {
+    invalidateLodRebuild();
+    const previousSnapshot = snapshot;
     snapshot = next;
+    if (next.formation.phase !== "stable-crust") observationMode = "planet";
+    if (next.formation.phase === "stable-crust") syncSystemPlanetTexture(next);
+    syncCelestialClock(previousSnapshot, next);
     syncEnvironmentalPresentation();
     sceneEntities = next.sceneEntities ?? [];
     sceneLinks = next.sceneLinks ?? [];
@@ -1263,8 +1668,7 @@ export const createMapCanvas = (
       clearGroup(propRoot);
       clearGroup(entityRoot);
       clearGroup(linkRoot);
-      clearGroup(weatherRoot);
-      weatherMotion = undefined;
+      rebuildWeather();
       animatedObjects.length = 0;
       entityPositions.clear();
       rebuildLinks();
@@ -1281,18 +1685,22 @@ export const createMapCanvas = (
   };
 
   const updateZoom = (next: number): void => {
+    if (systemViewActive()) {
+      const nextZoom = clamp(next, 0.55, 12);
+      systemZoom = nextZoom;
+      onZoomChange?.(nextZoom);
+      scheduleRender();
+      return;
+    }
     const previousLod = mapSceneLodForZoom(zoom);
     zoom = clampZoom(next);
     const nextLod = mapSceneLodForZoom(zoom);
     if (snapshot && previousLod !== nextLod) {
-      rebuildTerrain();
-      rebuildProps();
-      rebuildWeather();
-      rebuildEntities();
-      rebuildLinks();
-      updateSelectionMarker();
+      scheduleLodRebuild();
     }
+    if (snapshot) updateCelestialPresentation(performance.now());
     updateSceneLod();
+    updateSelectionMarker();
     onZoomChange?.(zoom);
     if (deferredCameraRender !== undefined) clearTimeout(deferredCameraRender);
     deferredCameraRender = setTimeout(() => {
@@ -1303,7 +1711,20 @@ export const createMapCanvas = (
 
   const updateOrbit = (nextYaw: number, nextPitch: number): void => {
     cameraYaw = normalizeYaw(nextYaw);
-    cameraPitch = clamp(nextPitch, radians(28), radians(68));
+    cameraPitch = clamp(nextPitch, systemViewActive() ? radians(18) : radians(28), systemViewActive() ? radians(78) : radians(68));
+    scheduleRender();
+  };
+
+  const updateObservationMode = (next: MapObservationMode): void => {
+    observationMode = next !== "planet" && snapshot?.formation.phase === "stable-crust"
+      ? next
+      : "planet";
+    panWorldX = 0;
+    panWorldZ = 0;
+    updateCelestialPresentation(performance.now());
+    updateSceneLod();
+    updateSelectionMarker();
+    onZoomChange?.(activeObservationZoom());
     scheduleRender();
   };
 
@@ -1311,6 +1732,7 @@ export const createMapCanvas = (
     if (!animationEnabled) return;
       const phase = time / 1000;
       lastAnimationFrame = time;
+      updateCelestialPresentation(time);
       if (snapshot?.formation.phase !== "stable-crust") {
         propRoot.rotation.y = phase * 0.035;
         if (formationBodyMesh) formationBodyMesh.rotation.y = phase * 0.08;
@@ -1493,6 +1915,7 @@ export const createMapCanvas = (
 
   canvas.addEventListener("click", (event) => {
     if (didPan) { didPan = false; return; }
+    if (systemViewActive()) return;
     const entity = pickSceneEntity(event.clientX, event.clientY);
     const next = entity
       ? (() => {
@@ -1539,6 +1962,19 @@ export const createMapCanvas = (
     const deltaY = event.clientY - pointerStart.y;
     if (Math.hypot(deltaX, deltaY) < 3) return;
     didPan = true;
+    if (systemViewActive()) {
+      if (pointerStart.mode === "rotate") {
+        cameraYaw = normalizeYaw(pointerStart.yaw - deltaX * 0.008);
+        cameraPitch = clamp(pointerStart.pitch - deltaY * 0.005, radians(18), radians(78));
+      } else {
+        const unitsPerPixel = celestialBaseSpan() / activeObservationZoom() / Math.max(1, canvas.clientHeight);
+        panWorldX = pointerStart.panX + (-deltaX * Math.cos(cameraYaw) - deltaY * Math.sin(cameraYaw) * 0.72) * unitsPerPixel;
+        panWorldZ = pointerStart.panZ + (deltaX * Math.sin(cameraYaw) - deltaY * Math.cos(cameraYaw) * 0.72) * unitsPerPixel;
+        clampSurfacePan();
+      }
+      scheduleRender();
+      return;
+    }
     if (pointerStart.mode === "rotate") {
       cameraYaw = normalizeYaw(pointerStart.yaw - deltaX * 0.008);
       cameraPitch = clamp(pointerStart.pitch - deltaY * 0.005, radians(28), radians(68));
@@ -1561,8 +1997,11 @@ export const createMapCanvas = (
   });
   const endPointer = (event?: PointerEvent): void => {
     clampSurfacePan();
-    if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
-    if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildWeather();
+    if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
+      invalidateLodRebuild();
+      rebuildTerrain();
+      rebuildWeather();
+    }
     pointerStart = undefined;
     if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     canvas.style.cursor = "grab";
@@ -1572,7 +2011,8 @@ export const createMapCanvas = (
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
-    updateZoom(event.deltaY < 0 ? zoom * 1.12 : zoom / 1.12);
+    const activeZoom = activeObservationZoom();
+    updateZoom(event.deltaY < 0 ? activeZoom * 1.12 : activeZoom / 1.12);
   }, { passive: false });
   new ResizeObserver(scheduleRender).observe(canvas);
 
@@ -1601,6 +2041,7 @@ export const createMapCanvas = (
     setLayer: (next: MapLayer) => {
       layer = next;
       if (snapshot) {
+        invalidateLodRebuild();
         rebuildTerrain();
         updateSelectionMarker();
       }
@@ -1614,7 +2055,10 @@ export const createMapCanvas = (
       if (!changed) return;
       panWorldX = 0;
       panWorldZ = 0;
-      if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
+      if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
+        invalidateLodRebuild();
+        rebuildTerrain();
+      }
       updateSelectionMarker();
       scheduleRender();
     },
@@ -1633,20 +2077,29 @@ export const createMapCanvas = (
       panWorldZ = 0;
       updateZoom(focusZoomForLod(lod));
       if (changed && previousLod === mapSceneLodForZoom(zoom) && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
+        invalidateLodRebuild();
         rebuildTerrain();
       }
       updateSelectionMarker();
       scheduleRender();
     },
-    setAnimating: (next: boolean) => {
+    setAnimating: (next: boolean, speed = animationSpeed) => {
       animationEnabled = next;
+      animationSpeed = [1, 4, 16, 64].includes(speed) ? speed : 1;
+      if (!next) lastCelestialTime = performance.now();
       if (next) {
         renderAnimatedFrame(performance.now());
         scheduleRender();
       }
     },
-    zoomIn: () => updateZoom(zoom < 2 ? zoom + 0.25 : zoom < 10 ? zoom + 1 : zoom < 24 ? zoom + 2 : zoom * 1.5),
-    zoomOut: () => updateZoom(zoom <= 2 ? zoom - 0.25 : zoom <= 10 ? zoom - 1 : zoom <= 24 ? zoom - 2 : zoom / 1.5),
+    zoomIn: () => {
+      const activeZoom = activeObservationZoom();
+      updateZoom(systemViewActive() ? activeZoom * 1.35 : activeZoom < 2 ? activeZoom + 0.25 : activeZoom < 10 ? activeZoom + 1 : activeZoom < 24 ? activeZoom + 2 : activeZoom * 1.5);
+    },
+    zoomOut: () => {
+      const activeZoom = activeObservationZoom();
+      updateZoom(systemViewActive() ? activeZoom / 1.35 : activeZoom <= 2 ? activeZoom - 0.25 : activeZoom <= 10 ? activeZoom - 1 : activeZoom <= 24 ? activeZoom - 2 : activeZoom / 1.5);
+    },
     resetZoom: () => { panWorldX = 0; panWorldZ = 0; updateZoom(1); },
     rotateLeft: () => updateOrbit(cameraYaw - radians(15), cameraPitch),
     rotateRight: () => updateOrbit(cameraYaw + radians(15), cameraPitch),
@@ -1660,9 +2113,11 @@ export const createMapCanvas = (
       syncGlobeRotation();
       updateOrbit(0, radians(42));
     },
+    setObservationMode: updateObservationMode,
     getLayer: () => layer,
     getQuality: () => quality,
-    getZoom: () => zoom,
+    getZoom: activeObservationZoom,
+    getObservationMode: () => observationMode,
     getCameraYaw: () => degrees(cameraYaw),
     getCameraPitch: () => degrees(cameraPitch),
   };
