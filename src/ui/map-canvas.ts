@@ -142,6 +142,7 @@ export const createMapCanvas = (
   let formationBodyMesh: THREE.Mesh | undefined;
   let waterSurface: THREE.Mesh | undefined;
   let selectionMarker: THREE.Mesh | undefined;
+  let selectedSceneEntityId: string | undefined;
   let sceneEntities: SceneEntity[] = [];
   let sceneLinks: SceneLink[] = [];
   let frameCount = 0;
@@ -1067,14 +1068,17 @@ export const createMapCanvas = (
     for (const child of entityRoot.children) {
       const kind = child.userData.sceneKind as SceneEntity["kind"] | undefined;
       const rank = Number(child.userData.sceneRank ?? 0);
+      const entityId = String(child.userData.sceneEntityId ?? "");
       const isLocal = !selection || child.userData.sceneRegionId === selection.regionId;
+      const isFocused = entityId.length > 0 && entityId === selectedSceneEntityId;
       if (globeView) child.visible = false;
       else if (sceneLod === "individual") {
         if (!isLocal) child.visible = false;
-        else if (kind === "agent") child.visible = visibleAgentCount++ < 12;
-        else if (kind === "population") child.visible = visiblePopulationCount++ < 2;
-        else if (kind === "facility") child.visible = visibleOrganizationCount++ < 10;
-        else child.visible = rank <= 6 && visibleOrganizationCount++ < 8;
+        else if (isFocused) child.visible = true;
+        else if (kind === "agent") child.visible = visibleAgentCount++ < (selectedSceneEntityId ? 4 : 12);
+        else if (kind === "population") child.visible = visiblePopulationCount++ < (selectedSceneEntityId ? 1 : 2);
+        else if (kind === "facility") child.visible = visibleOrganizationCount++ < (selectedSceneEntityId ? 6 : 10);
+        else child.visible = rank <= 6 && visibleOrganizationCount++ < (selectedSceneEntityId ? 5 : 8);
       } else {
         child.visible = (sceneLod === "settlement" && kind !== "agent" && rank >= 1)
           || (sceneLod === "region" && kind !== "agent" && rank >= 3)
@@ -1083,18 +1087,19 @@ export const createMapCanvas = (
       }
       const modelScale = sceneLod === "global" ? 1
         : sceneLod === "continent" ? 0.82
-          : sceneLod === "region" ? 0.62
-            : sceneLod === "settlement" ? 0.38
-              : kind === "agent" ? 0.16
-                : kind === "population" ? 0.14
-                  : rank <= 2 ? 0.12
-                    : rank <= 5 ? 0.09
-                      : 0.07;
+              : sceneLod === "region" ? 0.62
+                : sceneLod === "settlement" ? 0.38
+              : kind === "agent" ? 0.22
+                : kind === "population" ? 0.17
+                  : kind === "facility" ? 0.15
+                    : rank <= 2 ? 0.14
+                      : rank <= 5 ? 0.11
+                        : 0.085;
       const facilityScale = kind === "facility" ? 0.84 + Number(child.userData.facilityLevel ?? 1) * 0.16 : 1;
       const worldviewScale = kind === "deity" || kind === "sect" || kind === "cultivation-path"
         ? (child.userData.worldviewStatus === "dormant" ? 0.68 : 0.82) + Number(child.userData.worldviewInfluence ?? 0) * 0.35
         : 1;
-      child.scale.setScalar(modelScale * facilityScale * worldviewScale);
+      child.scale.setScalar(modelScale * facilityScale * worldviewScale * (isFocused && sceneLod === "individual" ? 1.45 : 1));
       if (child.visible) {
         visibleEntityCount += 1;
         visibleEntityIds.add(String(child.userData.sceneEntityId));
@@ -1122,6 +1127,7 @@ export const createMapCanvas = (
     }
     canvas.dataset.sceneLod = sceneLod;
     canvas.dataset.visibleSceneEntityCount = String(visibleEntityCount);
+    canvas.dataset.selectedSceneEntity = selectedSceneEntityId ?? "";
     canvas.dataset.visibleStrategicLinkCount = String(visibleStrategicLinkCount);
     canvas.dataset.visiblePersonalLinkCount = String(visiblePersonalLinkCount);
     canvas.dataset.maxZoom = String(MAX_MAP_ZOOM);
@@ -1174,6 +1180,7 @@ export const createMapCanvas = (
     syncEnvironmentalPresentation();
     sceneEntities = next.sceneEntities ?? [];
     sceneLinks = next.sceneLinks ?? [];
+    if (selectedSceneEntityId && !sceneEntities.some((entity) => entity.id === selectedSceneEntityId)) selectedSceneEntityId = undefined;
     canvas.dataset.sceneEntityCount = String(sceneEntities.length);
     canvas.dataset.sceneLinkCount = String(sceneLinks.length);
     canvas.dataset.strategicLinkCount = String(sceneLinks.filter((link) => link.scope === "strategic").length);
@@ -1389,6 +1396,7 @@ export const createMapCanvas = (
     selection = next;
     panWorldX = 0;
     panWorldZ = 0;
+    selectedSceneEntityId = entity?.id;
     if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
     updateSelectionMarker();
     canvas.dataset.selectedSceneEntity = entity?.id ?? "";
@@ -1488,6 +1496,7 @@ export const createMapCanvas = (
     setSelection: (next: CellSelection | undefined) => {
       const changed = selection?.regionId !== next?.regionId;
       selection = next;
+      if (changed) selectedSceneEntityId = undefined;
       if (!changed) return;
       panWorldX = 0;
       panWorldZ = 0;
@@ -1499,6 +1508,7 @@ export const createMapCanvas = (
       const changed = selection?.regionId !== next.regionId;
       const previousLod = mapSceneLodForZoom(zoom);
       selection = next;
+      selectedSceneEntityId = undefined;
       panWorldX = 0;
       panWorldZ = 0;
       updateZoom(focusZoomForLod(lod));
