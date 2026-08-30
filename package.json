@@ -4,6 +4,7 @@
   "description": "A deterministic autonomous virtual planet observer",
   "author": "Virtual Earth",
   "private": true,
+  "main": "desktop/main.cjs",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -38,6 +39,7 @@
     "appId": "com.virtualearth.observer",
     "productName": "Virtual Earth",
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
     "files": [
       "dist/**/*",
       "desktop/main.cjs",
