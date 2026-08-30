@@ -27,6 +27,8 @@ const palette = {
   crop: material(0x8ea83b, 0.88),
   healing: material(0xcfe4dc, 0.68),
   energy: material(0x62d4d6, 0.3, 0.35),
+  eye: material(0x1b2725, 0.4, 0.05),
+  copper: material(0xc47a3c, 0.38, 0.32),
 };
 
 const lifeMaterials: Record<SpeciesBlueprint["biochemistry"], THREE.MeshStandardMaterial> = {
@@ -109,7 +111,7 @@ const cottage = (seed: number, scale = 1): THREE.Group => {
 
 const tower = (seed: number, height = 2.5, scale = 1): THREE.Group => {
   const group = new THREE.Group();
-  const base = cylinder(0.62, 0.76, height, 10, palette.stone);
+  const base = cylinder(0.62, 0.76, height, 12, palette.stone);
   base.position.y = height / 2;
   group.add(base);
   const top = cylinder(0.82, 0.7, 0.3, 10, palette.darkStone);
@@ -123,7 +125,11 @@ const tower = (seed: number, height = 2.5, scale = 1): THREE.Group => {
   }
   const door = box(0.3, 0.62, 0.08, palette.wood);
   door.position.set(0, 0.38, 0.7);
-  group.add(door);
+  const slit = box(0.07, 0.34, 0.04, palette.energy);
+  slit.position.set(0.28, height * 0.62, 0.61);
+  const doorHandle = mesh(new THREE.SphereGeometry(0.035, 8, 6), palette.copper);
+  doorHandle.position.set(0.08, 0.4, 0.75);
+  group.add(door, slit, doorHandle);
   const flag = banner(seed);
   flag.position.set(0, height + 0.25, 0);
   flag.scale.setScalar(0.7);
@@ -168,19 +174,24 @@ export const createAgentModel = (seed: number): THREE.Group => {
   const legs: THREE.Object3D[] = [];
   const cloth = palette.cloth[seed % palette.cloth.length] ?? palette.cloth[0]!;
   const hair = palette.hair[(seed >>> 4) % palette.hair.length] ?? palette.hair[0]!;
-  const body = cylinder(0.22, 0.3, 0.72, 8, cloth);
+  const body = cylinder(0.22, 0.3, 0.72, 10, cloth);
   body.position.y = 0.95;
   body.userData.animationRole = "agent-body";
   group.add(body);
   const belt = cylinder(0.305, 0.305, 0.12, 8, palette.leather);
   belt.position.y = 0.71;
   group.add(belt);
-  const head = mesh(new THREE.SphereGeometry(0.23, 10, 8), palette.skin);
+  const head = mesh(new THREE.SphereGeometry(0.23, 16, 12), palette.skin);
   head.position.y = 1.55;
   group.add(head);
-  const hairCap = mesh(new THREE.SphereGeometry(0.245, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.58), hair);
+  const hairCap = mesh(new THREE.SphereGeometry(0.245, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.58), hair);
   hairCap.position.y = 1.59;
   group.add(hairCap);
+  for (const side of [-1, 1]) {
+    const eye = mesh(new THREE.SphereGeometry(0.038, 8, 6), palette.eye);
+    eye.position.set(side * 0.085, 1.56, 0.218);
+    group.add(eye);
+  }
   for (const side of [-1, 1]) {
     const shoulder = mesh(new THREE.SphereGeometry(0.16, 8, 6), side > 0 && seed % 3 === 0 ? palette.steel : cloth);
     shoulder.position.set(side * 0.34, 1.17, 0);
@@ -190,7 +201,9 @@ export const createAgentModel = (seed: number): THREE.Group => {
     arm.rotation.z = side * 0.12;
     arm.userData.animationRestRotationZ = arm.rotation.z;
     arms.push(arm);
-    group.add(arm);
+    const hand = mesh(new THREE.SphereGeometry(0.09, 8, 6), palette.skin);
+    hand.position.set(side * 0.43, 0.58, 0);
+    group.add(arm, hand);
     const leg = cylinder(0.09, 0.11, 0.62, 7, palette.leather);
     leg.position.set(side * 0.13, 0.32, 0);
     leg.userData.animationRestRotationZ = leg.rotation.z;
