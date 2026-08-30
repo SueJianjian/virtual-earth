@@ -3,7 +3,7 @@ import type { PlanetSeason, RegionId } from "../sim/types.ts";
 import type { SceneEntity, SceneLink, WorldSnapshot } from "../worker/protocol.ts";
 import { colorForCell, type MapLayer } from "./layers.ts";
 import { createAgentModel, createFacilityModel, createFantasyTreeGeometry, createLifeformModel, createLifeformPopulation, createOrganizationModel, createPopulationCamp, createWorldviewModel, enableFantasyShadows, fantasyMaterials } from "./fantasy-assets.ts";
-import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZoom, mapSurfaceModeFor, propScaleForZoom, propsPerCellForZoom, terrainPatchLodForZoom, terrainVerticalScaleForZoom } from "./map-lod.ts";
+import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZoom, mapSurfaceModeFor, propScaleForZoom, propsPerCellForZoom, terrainPatchLodForZoom, terrainReliefFor, terrainVerticalScaleForZoom } from "./map-lod.ts";
 
 export type CellSelection = { x: number; y: number; index: number; regionId: RegionId };
 export type RenderQuality = 480 | 720 | 1080;
@@ -396,13 +396,13 @@ export const createMapCanvas = (
         const baseElevation = clamp(sampleValue(grid.values, x, y), 0, 1);
         const water = clamp(sampleValue(current.fields.water.values, x, y), 0, 1);
         const landRelief = clamp((baseElevation - 0.38) / 0.2, 0, 1) * (1 - water);
-        const relief = (sceneHash(Math.round(x * detail), Math.round(y * detail), current.seed ^ detail * 811) - 0.5)
+        const relief = terrainReliefFor(x, y, current.seed ^ detail * 811)
           * (options.relief ?? 0) * landRelief;
         positions[offset] = x - (grid.width - 1) / 2;
         positions[offset + 1] = renderedElevation(baseElevation) + relief;
         positions[offset + 2] = y - (grid.height - 1) / 2;
         const [red, green, blue] = sampleLayerColor(x, y);
-        const variation = 0.92 + sceneHash(Math.round(x * detail), Math.round(y * detail), current.seed + 811) * 0.12;
+        const variation = 0.96 + terrainReliefFor(x, y, current.seed + 811) * 0.045;
         colors[offset] = red / 255 * variation;
         colors[offset + 1] = green / 255 * variation;
         colors[offset + 2] = blue / 255 * variation;
@@ -615,7 +615,7 @@ export const createMapCanvas = (
     });
     terrainMesh = new THREE.Mesh(terrainGeometryFor(snapshot, { detail: BASE_TERRAIN_DETAIL }), terrainMaterial);
     terrainMesh.receiveShadow = true;
-    terrainMesh.castShadow = true;
+    terrainMesh.castShadow = false;
     terrainRoot.add(terrainMesh);
     const patchLod = terrainPatchLodForZoom(zoom);
     if (patchLod) {
@@ -626,7 +626,7 @@ export const createMapCanvas = (
       patchMaterial.polygonOffsetUnits = -1;
       const patch = new THREE.Mesh(terrainGeometryFor(snapshot, { ...bounds, detail: patchLod.detail, relief: patchLod.relief }), patchMaterial);
       patch.receiveShadow = true;
-      patch.castShadow = true;
+      patch.castShadow = false;
       terrainRoot.add(patch);
       canvas.dataset.terrainDetail = String(patchLod.detail);
       canvas.dataset.terrainPatch = `${bounds.xMin}:${bounds.yMin}:${bounds.xMax}:${bounds.yMax}`;

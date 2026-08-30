@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { completedPlanetFormationState, createPlanetFormationState } from "../../src/sim/environment/formation.ts";
-import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZoom, mapSceneLodLabel, mapSurfaceModeFor, propScaleForZoom, propsPerCellForZoom, terrainPatchLodForZoom, terrainVerticalScaleForZoom } from "../../src/ui/map-lod.ts";
+import { BASE_TERRAIN_DETAIL, MAX_MAP_ZOOM, formationBodyScale, mapSceneLodForZoom, mapSceneLodLabel, mapSurfaceModeFor, propScaleForZoom, propsPerCellForZoom, terrainPatchLodForZoom, terrainReliefFor, terrainVerticalScaleForZoom } from "../../src/ui/map-lod.ts";
 
 describe("map level of detail", () => {
   it("progresses from a global view to individual detail", () => {
@@ -58,5 +58,15 @@ describe("map level of detail", () => {
     expect(formationBodyScale(dust)).toBeCloseTo(0.07);
     expect(formationBodyScale(halfFormed)).toBeCloseTo(0.535);
     expect(formationBodyScale(formed)).toBe(1);
+  });
+
+  it("uses continuous seeded relief for close-up terrain", () => {
+    const first = terrainReliefFor(4.25, 2.5, 42);
+    const nearby = terrainReliefFor(4.26, 2.5, 42);
+    const otherSeed = terrainReliefFor(4.25, 2.5, 43);
+
+    expect(Math.abs(nearby - first)).toBeLessThan(0.02);
+    expect(otherSeed).not.toBe(first);
+    expect(terrainReliefFor(4.25, 2.5, 42)).toBe(first);
   });
 });
