@@ -13,6 +13,7 @@ import { createGodEvent, godToolLabels, type GodTool } from "./ui/god-mode.ts";
 import { formatSimulationAgeFromDays } from "./ui/formatters.ts";
 import { AUTO_SAVE_KEY, browserWorldStorage, readIndexedWorldPayload, readWorldPayload, removePersistentWorldPayload, writePersistentWorldPayload, type PersistentStorageResult } from "./persistence/storage.ts";
 import { createLatestOnlyQueue } from "./persistence/queue.ts";
+import { createLatestOnlyRenderer } from "./ui/render-coordinator.ts";
 
 const app = document.querySelector<HTMLElement>("#app");
 if (!app) throw new Error("Application root was not found");
@@ -137,6 +138,7 @@ const routeLegend = query<HTMLElement>("#strategic-route-legend");
 const autoStorage = browserWorldStorage();
 let initialAutoSavePayload = readWorldPayload(autoStorage, AUTO_SAVE_KEY);
 let snapshot: WorldSnapshot | undefined;
+type SnapshotMessage = Extract<WorkerMessage, { type: "snapshot" }>;
 let selection: CellSelection | undefined;
 let detail: InspectorDetail = { level: "region" };
 let events: WorldEvent[] = [];
@@ -339,7 +341,7 @@ query<HTMLInputElement>("#load-input").addEventListener("change", async (event) 
   }
 });
 
-const applyMessage = (message: WorkerMessage): void => {
+const applyMessageNow = (message: WorkerMessage): void => {
   if (message.type === "error") {
     if (awaitingAutoRestore) {
       awaitingAutoRestore = false;
@@ -421,6 +423,19 @@ const applyMessage = (message: WorkerMessage): void => {
   status.textContent = message.paused ? "模拟已暂停" : `${message.speed}× 自主演化中`;
   status.dataset.state = message.paused ? "paused" : "running";
   if (shouldStartAfterRestore) client.send({ type: "start" });
+};
+
+const snapshotRenderer = createLatestOnlyRenderer<SnapshotMessage>(applyMessageNow);
+const applyMessage = (message: WorkerMessage): void => {
+  if (message.type !== "snapshot") {
+    applyMessageNow(message);
+    return;
+  }
+  snapshot = message.snapshot;
+  canvas.dataset.timelineStep = snapshot.timeline?.step ?? String(snapshot.tick);
+  canvas.dataset.timelineDays = snapshot.timeline?.days ?? String(Math.round(snapshot.years * 365));
+  snapshotRenderer.enqueue(message);
+  if (message.paused) snapshotRenderer.flush();
 };
 
 client.subscribe(applyMessage);
