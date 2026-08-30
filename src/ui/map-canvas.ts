@@ -1053,7 +1053,7 @@ export const createMapCanvas = (
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
       model.traverse((child) => {
-        if (child.userData.flame || child.userData.animationRole === "banner-flag") animatedObjects.push(child);
+        if (child.userData.flame || child.userData.animationRole === "banner-flag" || child.userData.animationRole === "crop" || child.userData.animationRole === "sail") animatedObjects.push(child);
       });
     }
     updateSceneLod();
@@ -1316,8 +1316,15 @@ export const createMapCanvas = (
           const restRotationZ = Number(object.userData.restRotationZ ?? 0);
           object.rotation.z = restRotationZ + Math.sin(phase * 2.1 + object.id) * 0.08;
           object.scale.x = 1 + Math.sin(phase * 2.1 + object.id) * 0.025;
+        } else if (object.userData.animationRole === "crop") {
+          const restRotationZ = Number(object.userData.restRotationZ ?? 0);
+          object.rotation.z = restRotationZ + Math.sin(phase * 2.4 + object.id) * 0.08;
+        } else if (object.userData.animationRole === "sail") {
+          const restRotationY = Number(object.userData.restRotationY ?? 0);
+          object.rotation.y = restRotationY + Math.sin(phase * 1.8 + object.id) * 0.035;
+          object.scale.x = 1 + Math.sin(phase * 1.8 + object.id) * 0.045;
         } else {
-          const animation = object.userData.animation as { type?: string; arms?: THREE.Object3D[]; legs?: THREE.Object3D[]; body?: THREE.Object3D } | undefined;
+          const animation = object.userData.animation as { type?: string; arms?: THREE.Object3D[]; legs?: THREE.Object3D[]; body?: THREE.Object3D; cores?: THREE.Object3D[]; limbs?: THREE.Object3D[] } | undefined;
           const motionPhase = phase * 2.8 + Number(object.userData.phase ?? 0);
           object.position.y = Number(object.userData.baseY ?? object.position.y) + Math.sin(motionPhase) * 0.035;
           object.rotation.y += 0.0015;
@@ -1332,6 +1339,15 @@ export const createMapCanvas = (
               part.rotation.z = rest + gait * (index === 0 ? -0.14 : 0.14);
             });
             if (animation.body) animation.body.scale.y = 1 + Math.sin(phase * 5.4 + Number(object.userData.phase ?? 0)) * 0.025;
+          } else if (animation?.type === "lifeform") {
+            const lifePhase = phase * 3.1 + Number(object.userData.phase ?? 0);
+            animation.limbs?.forEach((part, index) => {
+              const rest = Number(part.userData.animationRestRotationZ ?? part.rotation.z);
+              part.rotation.z = rest + Math.sin(lifePhase + index * 0.7) * 0.12;
+            });
+            animation.cores?.forEach((part, index) => {
+              part.scale.y = 1 + Math.sin(lifePhase * 0.72 + index * 0.4) * 0.035;
+            });
           }
         }
       }

@@ -242,6 +242,8 @@ const lifeBodyScaleFor = (blueprint: SpeciesBlueprint): number => 0.24 + Math.mi
 // lineage is visually distinct without depending on copied game assets.
 export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): THREE.Group => {
   const group = new THREE.Group();
+  const cores: THREE.Object3D[] = [];
+  const limbs: THREE.Object3D[] = [];
   const bodyMaterial = lifeMaterials[blueprint.biochemistry];
   const accentMaterial = lifeAccents[blueprint.biochemistry];
   const bodyScale = lifeBodyScaleFor(blueprint);
@@ -261,6 +263,7 @@ export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): 
       core.scale.z = blueprint.bodyPlan.symmetry === "spiral" ? 1.45 : 1;
     }
     core.position.set(offset, bodyScale * 0.5 * scale, 0);
+    cores.push(core);
     group.add(core);
   };
   for (let index = 0; index < bodyParts; index += 1) addCore((index - (bodyParts - 1) / 2) * bodyScale * 0.9, 1 - index * 0.09);
@@ -284,6 +287,8 @@ export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): 
       root.position.set(Math.cos(angle) * bodyScale * 0.3, bodyScale * 0.16, Math.sin(angle) * bodyScale * 0.3);
       root.rotation.z = Math.cos(angle) * 0.65;
       root.rotation.x = Math.sin(angle) * 0.65;
+      root.userData.animationRestRotationZ = root.rotation.z;
+      limbs.push(root);
       group.add(root);
     }
   } else {
@@ -292,6 +297,8 @@ export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): 
         const limb = cylinder(bodyScale * 0.045, bodyScale * 0.085, bodyScale * 0.82, 6, accentMaterial);
         limb.position.set(side * bodyScale * (0.45 + pair * 0.09), bodyScale * 0.36, (pair - appendagePairs / 2) * bodyScale * 0.18);
         limb.rotation.z = side * (blueprint.bodyPlan.locomotion === "gliding" ? Math.PI / 2.7 : Math.PI / 5);
+        limb.userData.animationRestRotationZ = limb.rotation.z;
+        limbs.push(limb);
         group.add(limb);
       }
     }
@@ -312,6 +319,7 @@ export const createLifeformModel = (blueprint: SpeciesBlueprint, seed: number): 
     pod.position.set(bodyScale * 0.56, bodyScale * 0.5, 0);
     group.add(pod);
   }
+  group.userData.animation = { type: "lifeform", cores, limbs };
   group.userData.lifeform = true;
   group.userData.lifeBlueprint = blueprint.noveltySignature;
   return group;
@@ -414,6 +422,8 @@ export const createFacilityModel = (kind: FacilityKind, seed: number): THREE.Gro
       for (let row = -2; row <= 2; row += 1) for (let column = -2; column <= 2; column += 1) {
         const crop = cylinder(0.035, 0.055, 0.28 + (seed + row + column) % 3 * 0.04, 5, palette.crop);
         crop.position.set(column * 0.25, 0.22, row * 0.2);
+        crop.userData.animationRole = "crop";
+        crop.userData.restRotationZ = crop.rotation.z;
         group.add(crop);
       }
       break;
@@ -428,6 +438,8 @@ export const createFacilityModel = (kind: FacilityKind, seed: number): THREE.Gro
       mast.position.set(0, 0.82, 0);
       const sail = box(0.62, 0.82, 0.035, palette.cloth[seed % palette.cloth.length] ?? palette.cloth[0]!);
       sail.position.set(0.28, 0.87, 0);
+      sail.userData.animationRole = "sail";
+      sail.userData.restRotationY = sail.rotation.y;
       group.add(dock, mast, sail);
       break;
     }
