@@ -1,5 +1,7 @@
 # Virtual Earth
 
+[![CI](https://github.com/SueJianjian/virtual-earth/actions/workflows/ci.yml/badge.svg)](https://github.com/SueJianjian/virtual-earth/actions/workflows/ci.yml)
+
 Virtual Earth is a deterministic, rule-driven sandbox. It starts with an empty
 entity state and lets terrain, climate, chemistry, ecology, individuals,
 families, cultures and organizations emerge from local conditions and seeded
