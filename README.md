@@ -56,7 +56,7 @@ npm run benchmark:soak
 
 `npm run benchmark` checks the normal autonomous formation path against a
 10 ms/step budget. `npm run benchmark:dense` first warms up a formed world for
-1,000 steps on a compact 16x8 grid, then checks a fully active ecological and
+1,400 steps on a compact 16x8 grid, then checks a fully active ecological and
 social world against a 60 ms/step budget. `npm run benchmark:dense:default`
 runs the same active state on the default 96x48 map; the benchmark copies the
 warmup environment window into the larger deterministic planet before timing,

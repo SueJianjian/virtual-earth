@@ -473,10 +473,17 @@ test("animates bounded local weather without adding global particles", async ({ 
   await expect(canvas).toHaveAttribute("data-weather-precipitation", "0.00");
 });
 
-test("keeps zoom threshold clicks responsive while LOD refreshes in stages", async ({ page }) => {
+for (const quality of ["480", "1080"] as const) test(`keeps zoom threshold clicks responsive at ${quality}p while LOD refreshes in stages`, async ({ page }) => {
   await page.goto("/");
+  await page.locator("#render-quality").selectOption(quality);
   const canvas = page.locator("#world-map");
-  const formed = createWorld(42_430, { width: 32, height: 16, formation: "formed" });
+  const formed = createWorld(42_430, { width: 96, height: 48, formation: "formed" });
+  const species = createSpecies("zoom-performance", "consumer");
+  const regionId = "region:48:24" as never;
+  const population = { id: "population:zoom-performance" as never, speciesId: species.id, regionId, count: 192, energy: 1 };
+  formed.species = [species];
+  formed.populations = [population];
+  formed.agents = Array.from({ length: 192 }, (_, index) => createAgent(population, species, index, "zoom-performance"));
   await page.locator("#load-input").setInputFiles({
     name: "zoom-performance-world.json",
     mimeType: "application/json",
@@ -484,27 +491,85 @@ test("keeps zoom threshold clicks responsive while LOD refreshes in stages", asy
   });
   await page.locator("#pause-button").click();
   await expect(canvas).toHaveAttribute("data-lod-rebuild", "ready");
+  await expect(canvas).toHaveAttribute("data-scene-entity-count", "193");
 
-  const clickZoomIn = async (): Promise<number> => page.locator("#zoom-in").evaluate((button) => {
-    const started = performance.now();
-    (button as HTMLButtonElement).click();
-    return performance.now() - started;
-  });
-  const expectResponsiveThreshold = async (expectedZoom: string): Promise<void> => {
-    expect(await clickZoomIn()).toBeLessThan(35);
+  const clickZoomIn = async (): Promise<void> => {
+    await page.locator("#zoom-in").evaluate((button) => (button as HTMLButtonElement).click());
+  };
+  const expectResponsiveThreshold = async (expectedZoom: string, maximumRenderedEntities: number): Promise<void> => {
+    const timing = await page.locator("#zoom-in").evaluate((button) => new Promise<{
+      eventMs: number;
+      firstFrameMs: number;
+      readyMs: number;
+      maxFrameGapMs: number;
+      renderMs: number;
+      renderCalls: number;
+      renderTriangles: number;
+    }>((resolve, reject) => {
+      const canvas = document.querySelector<HTMLCanvasElement>("#world-map");
+      if (!canvas) { reject(new Error("World map is missing")); return; }
+      const started = performance.now();
+      const initialFrame = Number(canvas.dataset.webglFrame ?? 0);
+      let previousFrameTime = started;
+      let firstFrameMs = 0;
+      let maxFrameGapMs = 0;
+      (button as HTMLButtonElement).click();
+      const eventMs = performance.now() - started;
+      const observeFrame = (): void => {
+        const now = performance.now();
+        const elapsed = now - started;
+        if (firstFrameMs === 0) firstFrameMs = elapsed;
+        maxFrameGapMs = Math.max(maxFrameGapMs, now - previousFrameTime);
+        previousFrameTime = now;
+        const renderedFrames = Number(canvas.dataset.webglFrame ?? 0) - initialFrame;
+        if (canvas.dataset.lodRebuild === "ready" && canvas.dataset.lodPreview === "ready" && renderedFrames >= 1) {
+          resolve({
+            eventMs,
+            firstFrameMs,
+            readyMs: elapsed,
+            maxFrameGapMs,
+            renderMs: Number(canvas.dataset.lastRenderMs ?? 0),
+            renderCalls: Number(canvas.dataset.renderCalls ?? 0),
+            renderTriangles: Number(canvas.dataset.renderTriangles ?? 0),
+          });
+          return;
+        }
+        if (elapsed > 8_000) { reject(new Error(`LOD refresh timed out after ${elapsed.toFixed(1)}ms`)); return; }
+        requestAnimationFrame(observeFrame);
+      };
+      requestAnimationFrame(observeFrame);
+    }));
+    expect(timing.eventMs).toBeLessThan(35);
+    expect(timing.firstFrameMs).toBeLessThan(250);
+    expect(timing.readyMs).toBeLessThan(2_500);
+    expect(timing.maxFrameGapMs).toBeLessThan(1_800);
+    expect(timing.renderMs).toBeLessThan(600);
+    expect(timing.renderCalls).toBeLessThan(260);
+    expect(timing.renderTriangles).toBeLessThan(130_000);
     await expect(page.locator("#zoom-level")).toHaveText(expectedZoom);
     await expect(canvas).toHaveAttribute("data-lod-rebuild", "ready");
+    expect(Number(await canvas.getAttribute("data-lod-rebuild-max-stage-ms"))).toBeLessThan(350);
+    expect(Number(await canvas.getAttribute("data-rendered-scene-entity-count"))).toBeLessThanOrEqual(maximumRenderedEntities);
   };
 
   await clickZoomIn();
-  await expectResponsiveThreshold("150%");
+  await expectResponsiveThreshold("150%", 0);
   for (let click = 0; click < 3; click += 1) await clickZoomIn();
-  await expectResponsiveThreshold("400%");
+  await expectResponsiveThreshold("400%", 0);
   for (let click = 0; click < 5; click += 1) await clickZoomIn();
-  await expectResponsiveThreshold("1000%");
+  await expectResponsiveThreshold("1000%", 1);
   for (let click = 0; click < 6; click += 1) await clickZoomIn();
-  await expectResponsiveThreshold("2400%");
+  await expectResponsiveThreshold("2400%", 7);
   await expect(canvas).toHaveAttribute("data-scene-lod", "individual");
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    await page.locator("#zoom-reset").evaluate((button) => (button as HTMLButtonElement).click());
+    for (let click = 0; click < 22; click += 1) await clickZoomIn();
+    await expect(page.locator("#zoom-level")).toHaveText("6400%");
+    await expect(canvas).toHaveAttribute("data-lod-rebuild", "ready", { timeout: 8_000 });
+    await expect(canvas).toHaveAttribute("data-lod-preview", "ready");
+    expect(Number(await canvas.getAttribute("data-cached-scene-entity-count"))).toBeLessThanOrEqual(7);
+    expect(Number(await canvas.getAttribute("data-rendered-scene-entity-count"))).toBeLessThanOrEqual(7);
+  }
 });
 
 test("renders global civilization routes and separates them from personal links", async ({ page }) => {

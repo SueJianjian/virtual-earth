@@ -43,6 +43,8 @@ const SPACE_BACKGROUND = 0x020711;
 const SYSTEM_DISPLAY_STAR_RADIUS = 4.8;
 const SYSTEM_DISPLAY_PLANET_RADIUS = 1.25;
 const SYSTEM_DISPLAY_MOON_RADIUS = 0.68;
+const INDIVIDUAL_AGENT_LIMIT = 6;
+const INDIVIDUAL_POPULATION_LIMIT = 1;
 
 const seasonVisuals: Record<PlanetSeason, {
   sky: number;
@@ -70,15 +72,19 @@ const sceneHash = (x: number, y: number, salt: number): number => {
   return ((value ^ (value >>> 16)) >>> 0) / 0xffffffff;
 };
 
+const disposeObject = (object: THREE.Object3D): void => {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points)) return;
+    child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const item of materials) if (!item.userData.shared) item.dispose();
+  });
+};
+
 const clearGroup = (group: THREE.Group): void => {
   for (const child of [...group.children]) {
     group.remove(child);
-    child.traverse((object) => {
-      if (!(object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)) return;
-      object.geometry.dispose();
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const item of materials) if (!item.userData.shared) item.dispose();
-    });
+    disposeObject(child);
   }
 };
 
@@ -117,7 +123,7 @@ export const createMapCanvas = (
   const sunlight = new THREE.DirectionalLight(0xffe8bc, 2.15);
   sunlight.position.set(-18, 28, 14);
   sunlight.castShadow = true;
-  sunlight.shadow.mapSize.set(2048, 2048);
+  sunlight.shadow.mapSize.set(1024, 1024);
   sunlight.shadow.camera.left = -38;
   sunlight.shadow.camera.right = 38;
   sunlight.shadow.camera.top = 38;
@@ -219,6 +225,7 @@ export const createMapCanvas = (
   let selection: CellSelection | undefined;
   let quality: RenderQuality = 480;
   let zoom = 1;
+  let renderedZoom = zoom;
   let systemZoom = 1;
   let observationMode: MapObservationMode = "planet";
   let animationEnabled = false;
@@ -259,6 +266,7 @@ export const createMapCanvas = (
   let selectedSceneEntityId: string | undefined;
   let sceneEntities: SceneEntity[] = [];
   let sceneLinks: SceneLink[] = [];
+  const entityModelCache = new Map<string, THREE.Group>();
   let frameCount = 0;
   const animatedObjects: THREE.Object3D[] = [];
   const animatedRouteObjects: Array<THREE.Line | THREE.Mesh> = [];
@@ -293,26 +301,48 @@ export const createMapCanvas = (
     canvas.dataset.lodRebuild = "ready";
   };
 
+  const showLodZoomPreview = (): void => {
+    const scale = clamp(zoom / Math.max(0.01, renderedZoom), 0.65, 1.5);
+    canvas.style.transformOrigin = "50% 50%";
+    canvas.style.transform = `scale(${scale})`;
+    canvas.dataset.lodPreview = "active";
+  };
+
   const scheduleLodRebuild = (): void => {
     const generation = ++lodRebuildGeneration;
     canvas.dataset.lodRebuild = "pending";
-    const stages: Array<() => void> = [
-      rebuildTerrain,
-      rebuildProps,
-      rebuildWeather,
-      rebuildEntities,
-      rebuildLinks,
-      updateSelectionMarker,
+    canvas.dataset.lodRebuildStage = "queued";
+    canvas.dataset.lodRebuildMaxStageMs = "0.00";
+    const started = performance.now();
+    let maxStageMs = 0;
+    const stages: Array<{ name: string; run: () => void }> = [
+      { name: "terrain", run: rebuildTerrain },
+      { name: "territories", run: rebuildTerritories },
+      { name: "props", run: rebuildProps },
+      { name: "weather", run: rebuildWeather },
+      { name: "entities", run: rebuildEntities },
+      { name: "links", run: rebuildLinks },
+      { name: "selection", run: updateSelectionMarker },
     ];
     const runStage = (stageIndex: number): void => {
       if (generation !== lodRebuildGeneration || !snapshot) return;
-      stages[stageIndex]?.();
+      const stage = stages[stageIndex];
+      if (!stage) return;
+      canvas.dataset.lodRebuildStage = stage.name;
+      const stageStarted = performance.now();
+      stage.run();
+      const stageMs = performance.now() - stageStarted;
+      maxStageMs = Math.max(maxStageMs, stageMs);
+      canvas.dataset.lodRebuildLastStageMs = stageMs.toFixed(2);
+      canvas.dataset.lodRebuildMaxStageMs = maxStageMs.toFixed(2);
       if (generation !== lodRebuildGeneration || !snapshot) return;
       if (stageIndex + 1 < stages.length) {
         scheduleDeferredLodTask(() => runStage(stageIndex + 1));
         return;
       }
       canvas.dataset.lodRebuild = "ready";
+      canvas.dataset.lodRebuildStage = "ready";
+      canvas.dataset.lodRebuildMs = (performance.now() - started).toFixed(2);
       scheduleRender();
     };
     scheduleDeferredLodTask(() => runStage(0));
@@ -703,10 +733,21 @@ export const createMapCanvas = (
 
   const render = (): void => {
     if (!snapshot) return;
+    const started = performance.now();
     updateCelestialPresentation(performance.now());
     updateRendererSize();
     updateCamera();
     renderer.render(scene, camera);
+    canvas.dataset.lastRenderMs = (performance.now() - started).toFixed(2);
+    canvas.dataset.renderCalls = String(renderer.info.render.calls);
+    canvas.dataset.renderTriangles = String(renderer.info.render.triangles);
+    canvas.dataset.renderLines = String(renderer.info.render.lines);
+    renderedZoom = zoom;
+    if (canvas.dataset.lodPreview === "active" && canvas.dataset.lodRebuild === "ready") {
+      canvas.style.transform = "";
+      canvas.style.transformOrigin = "";
+      canvas.dataset.lodPreview = "ready";
+    }
     frameCount += 1;
     canvas.dataset.webglFrame = String(frameCount);
     canvas.dataset.renderStyle = "fantasy-3d";
@@ -1024,15 +1065,12 @@ export const createMapCanvas = (
       canvas.dataset.terrainDetail = String(BASE_TERRAIN_DETAIL);
       canvas.dataset.terrainPatch = "global";
     }
-    const seaMaterial = new THREE.MeshPhysicalMaterial({
+    const seaMaterial = new THREE.MeshStandardMaterial({
       color: 0x287f9b,
       transparent: true,
       opacity: 0.7,
-      roughness: 0.2,
-      metalness: 0.08,
-      transmission: 0.08,
-      clearcoat: 0.55,
-      clearcoatRoughness: 0.16,
+      roughness: 0.26,
+      metalness: 0.12,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
@@ -1042,7 +1080,9 @@ export const createMapCanvas = (
     waterSurface.receiveShadow = true;
     terrainRoot.add(waterSurface);
     const wateryCells: THREE.Vector3[] = [];
-    for (let y = 0; y < grid.height; y += 1) for (let x = 0; x < grid.width; x += 1) {
+    const visibleRadius = Math.ceil(Math.max(grid.width, grid.height) * 0.47 / zoom) + 2;
+    const waterBounds = terrainPatchBounds(Math.max((patchLod?.radius ?? visibleRadius) + 1, visibleRadius));
+    for (let y = waterBounds.yMin; y <= waterBounds.yMax; y += 1) for (let x = waterBounds.xMin; x <= waterBounds.xMax; x += 1) {
       const index = y * grid.width + x;
       if (currentWater(index) > 0.45 && elevationAt(x, y) > 1.48) wateryCells.push(worldPosition(x, y, 0.045));
     }
@@ -1379,9 +1419,15 @@ export const createMapCanvas = (
     clearGroup(linkRoot);
     animatedRouteObjects.length = 0;
     const globeView = surfaceMode() === "planet-globe";
+    const sceneLod = mapSceneLodForZoom(zoom);
     syncGlobeRotation();
     for (const link of sceneLinks) {
       if (globeView && link.scope !== "strategic") continue;
+      if (!globeView && link.scope === "strategic") {
+        const touchesSelection = !selection || link.fromRegion === selection.regionId || link.toRegion === selection.regionId;
+        if (sceneLod === "individual" || (sceneLod === "settlement" && !touchesSelection)) continue;
+      }
+      if (!globeView && link.scope === "personal" && sceneLod !== "individual") continue;
       const points = link.scope === "strategic" ? strategicRoutePoints(link, globeView) : personalRoutePoints(link);
       if (!points) continue;
       const appearance = routeAppearance(link);
@@ -1407,28 +1453,87 @@ export const createMapCanvas = (
       linkRoot.add(route);
       if (link.scope === "strategic") animatedRouteObjects.push(route);
     }
+    canvas.dataset.renderedSceneLinkCount = String(linkRoot.children.length);
+  };
+
+  const sceneEntityCandidates = (): SceneEntity[] => {
+    if (systemViewActive() || surfaceMode() === "planet-globe") return [];
+    const sceneLod = mapSceneLodForZoom(zoom);
+    let visibleAgentCount = 0;
+    let visiblePopulationCount = 0;
+    let visibleOrganizationCount = 0;
+    return sceneEntities.filter((entity) => {
+      const isLocal = !selection || entity.regionId === selection.regionId;
+      const isFocused = entity.id === selectedSceneEntityId;
+      if (sceneLod === "individual") {
+        if (!isLocal) return false;
+        if (isFocused) return true;
+        if (entity.kind === "agent") return visibleAgentCount++ < (selectedSceneEntityId ? 4 : INDIVIDUAL_AGENT_LIMIT);
+        if (entity.kind === "population") return visiblePopulationCount++ < INDIVIDUAL_POPULATION_LIMIT;
+        if (entity.kind === "facility") return visibleOrganizationCount++ < (selectedSceneEntityId ? 6 : 10);
+        return entity.rank <= 6 && visibleOrganizationCount++ < (selectedSceneEntityId ? 5 : 8);
+      }
+      return (sceneLod === "settlement" && entity.kind !== "agent" && entity.rank >= 1)
+        || (sceneLod === "region" && entity.kind !== "agent" && entity.rank >= 3)
+        || (sceneLod === "continent" && entity.rank >= 5)
+        || (sceneLod === "global" && entity.rank >= 7);
+    });
+  };
+
+  const entityVisualSignature = (entity: SceneEntity): string => [
+    entity.kind,
+    entity.facilityType ?? "",
+    entity.lifeBlueprint?.noveltySignature ?? "",
+  ].join("|");
+
+  const createEntityModel = (entity: SceneEntity, seed: number): THREE.Group => {
+    const model = entity.kind === "agent"
+      ? entity.lifeBlueprint ? createLifeformModel(entity.lifeBlueprint, seed) : createAgentModel(seed)
+      : entity.kind === "population"
+        ? entity.lifeBlueprint ? createLifeformPopulation(entity.lifeBlueprint, seed) : createPopulationCamp(seed)
+        : entity.kind === "facility"
+          ? createFacilityModel(entity.facilityType ?? "governance", seed)
+          : entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path"
+            ? createWorldviewModel(entity.kind, seed)
+            : createOrganizationModel(entity.kind, seed);
+    model.userData.visualSignature = entityVisualSignature(entity);
+    enableFantasyShadows(model);
+    return model;
+  };
+
+  const pruneEntityModelCache = (): void => {
+    const currentEntities = new Map(sceneEntities.map((entity) => [entity.id, entity]));
+    for (const [id, model] of entityModelCache) {
+      const entity = currentEntities.get(id);
+      if (entity && model.userData.visualSignature === entityVisualSignature(entity)) continue;
+      model.removeFromParent();
+      disposeObject(model);
+      entityModelCache.delete(id);
+    }
+  };
+
+  const detachEntityModels = (): void => {
+    entityRoot.clear();
+    animatedObjects.length = 0;
+    entityPositions.clear();
+    canvas.dataset.renderedSceneEntityCount = "0";
   };
 
   const rebuildEntities = (): void => {
-    clearGroup(entityRoot);
-    animatedObjects.length = 0;
-    entityPositions.clear();
-    for (const entity of sceneEntities) {
+    pruneEntityModelCache();
+    detachEntityModels();
+    for (const entity of sceneEntityCandidates()) {
       const position = pointForEntity(entity);
       if (!position) continue;
       entityPositions.set(entity.id, position);
       const seed = stringSeed(entity.id);
-      const model = entity.kind === "agent"
-        ? entity.lifeBlueprint ? createLifeformModel(entity.lifeBlueprint, seed) : createAgentModel(seed)
-        : entity.kind === "population"
-          ? entity.lifeBlueprint ? createLifeformPopulation(entity.lifeBlueprint, seed) : createPopulationCamp(seed)
-          : entity.kind === "facility"
-            ? createFacilityModel(entity.facilityType ?? "governance", seed)
-            : entity.kind === "deity" || entity.kind === "sect" || entity.kind === "cultivation-path"
-              ? createWorldviewModel(entity.kind, seed)
-              : createOrganizationModel(entity.kind, seed);
+      let model = entityModelCache.get(entity.id);
+      if (!model) {
+        model = createEntityModel(entity, seed);
+        entityModelCache.set(entity.id, model);
+      }
       model.position.copy(position);
-      model.rotation.y = (seed % 628) / 100;
+      model.rotation.set(0, (seed % 628) / 100, 0);
       model.userData.baseY = position.y;
       model.userData.phase = seed % 31;
       model.userData.sceneKind = entity.kind;
@@ -1445,13 +1550,14 @@ export const createMapCanvas = (
         model.rotation.z = (1 - (entity.facilityCondition ?? 1)) * 0.12;
         model.position.y -= 0.08;
       }
-      enableFantasyShadows(model);
       entityRoot.add(model);
       if (entity.kind === "agent" || entity.kind === "population") animatedObjects.push(model);
       model.traverse((child) => {
         if (child.userData.flame || child.userData.animationRole === "banner-flag" || child.userData.animationRole === "crop" || child.userData.animationRole === "sail") animatedObjects.push(child);
       });
     }
+    canvas.dataset.renderedSceneEntityCount = String(entityRoot.children.length);
+    canvas.dataset.cachedSceneEntityCount = String(entityModelCache.size);
     updateSceneLod();
   };
 
@@ -1474,8 +1580,8 @@ export const createMapCanvas = (
       else if (sceneLod === "individual") {
         if (!isLocal) child.visible = false;
         else if (isFocused) child.visible = true;
-        else if (kind === "agent") child.visible = visibleAgentCount++ < (selectedSceneEntityId ? 4 : 12);
-        else if (kind === "population") child.visible = visiblePopulationCount++ < (selectedSceneEntityId ? 1 : 2);
+        else if (kind === "agent") child.visible = visibleAgentCount++ < (selectedSceneEntityId ? 4 : INDIVIDUAL_AGENT_LIMIT);
+        else if (kind === "population") child.visible = visiblePopulationCount++ < INDIVIDUAL_POPULATION_LIMIT;
         else if (kind === "facility") child.visible = visibleOrganizationCount++ < (selectedSceneEntityId ? 6 : 10);
         else child.visible = rank <= 6 && visibleOrganizationCount++ < (selectedSceneEntityId ? 5 : 8);
       } else {
@@ -1591,8 +1697,8 @@ export const createMapCanvas = (
     selectionMarker.position.copy(worldPosition(selection.x, selection.y, 0.12));
     effectRoot.add(selectionMarker);
     if (selectedSceneEntityId) {
-      const entityPosition = entityPositions.get(selectedSceneEntityId);
       const entity = sceneEntities.find((candidate) => candidate.id === selectedSceneEntityId);
+      const entityPosition = entityPositions.get(selectedSceneEntityId) ?? (entity ? pointForEntity(entity) : undefined);
       if (entityPosition && entity) {
         const sceneLod = mapSceneLodForZoom(zoom);
         const radius = sceneLod === "individual" ? 0.24 : sceneLod === "settlement" ? 0.38 : 0.55;
@@ -1666,11 +1772,10 @@ export const createMapCanvas = (
     if (surfaceMode() === "planet-globe") {
       clearGroup(territoryRoot);
       clearGroup(propRoot);
-      clearGroup(entityRoot);
+      pruneEntityModelCache();
+      detachEntityModels();
       clearGroup(linkRoot);
       rebuildWeather();
-      animatedObjects.length = 0;
-      entityPositions.clear();
       rebuildLinks();
       updateSceneLod();
     } else {
@@ -1695,7 +1800,9 @@ export const createMapCanvas = (
     const previousLod = mapSceneLodForZoom(zoom);
     zoom = clampZoom(next);
     const nextLod = mapSceneLodForZoom(zoom);
-    if (snapshot && previousLod !== nextLod) {
+    const lodChanged = previousLod !== nextLod;
+    if (snapshot && lodChanged) {
+      showLodZoomPreview();
       scheduleLodRebuild();
     }
     if (snapshot) updateCelestialPresentation(performance.now());
@@ -1703,6 +1810,10 @@ export const createMapCanvas = (
     updateSelectionMarker();
     onZoomChange?.(zoom);
     if (deferredCameraRender !== undefined) clearTimeout(deferredCameraRender);
+    if (lodChanged) {
+      deferredCameraRender = undefined;
+      return;
+    }
     deferredCameraRender = setTimeout(() => {
       deferredCameraRender = undefined;
       render();
@@ -1739,7 +1850,7 @@ export const createMapCanvas = (
       }
       if (waterSurface) {
         waterSurface.position.y = 1.47 + Math.sin(phase * 0.85) * 0.025;
-        (waterSurface.material as THREE.MeshPhysicalMaterial).clearcoatRoughness = 0.13 + Math.sin(phase * 0.6) * 0.04;
+        (waterSurface.material as THREE.MeshStandardMaterial).roughness = 0.24 + Math.sin(phase * 0.6) * 0.035;
       }
       if (weatherMotion && weatherRoot.visible) {
         const motion = weatherMotion;
@@ -1934,7 +2045,7 @@ export const createMapCanvas = (
     panWorldZ = 0;
     selectedSceneEntityId = entity?.id;
     updateSceneLod();
-    if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) rebuildTerrain();
+    if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) scheduleLodRebuild();
     updateSelectionMarker();
     canvas.dataset.selectedSceneEntity = entity?.id ?? "";
     onSelect(next, entity);
@@ -1998,9 +2109,7 @@ export const createMapCanvas = (
   const endPointer = (event?: PointerEvent): void => {
     clampSurfacePan();
     if (didPan && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
-      invalidateLodRebuild();
-      rebuildTerrain();
-      rebuildWeather();
+      scheduleLodRebuild();
     }
     pointerStart = undefined;
     if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
@@ -2056,8 +2165,7 @@ export const createMapCanvas = (
       panWorldX = 0;
       panWorldZ = 0;
       if (snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
-        invalidateLodRebuild();
-        rebuildTerrain();
+        scheduleLodRebuild();
       }
       updateSelectionMarker();
       scheduleRender();
@@ -2066,6 +2174,7 @@ export const createMapCanvas = (
       selectedSceneEntityId = id && sceneEntities.some((entity) => entity.id === id) ? id : undefined;
       updateSceneLod();
       updateSelectionMarker();
+      if (snapshot?.formation.phase === "stable-crust" && mapSceneLodForZoom(zoom) === "individual") scheduleLodRebuild();
       scheduleRender();
     },
     focusSelection: (next: CellSelection, lod: MapFocusLod) => {
@@ -2077,8 +2186,7 @@ export const createMapCanvas = (
       panWorldZ = 0;
       updateZoom(focusZoomForLod(lod));
       if (changed && previousLod === mapSceneLodForZoom(zoom) && snapshot?.formation.phase === "stable-crust" && terrainPatchLodForZoom(zoom)) {
-        invalidateLodRebuild();
-        rebuildTerrain();
+        scheduleLodRebuild();
       }
       updateSelectionMarker();
       scheduleRender();
