@@ -1,6 +1,6 @@
 {
   "name": "virtual-earth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A deterministic autonomous virtual planet observer",
   "author": "Virtual Earth",
   "private": true,

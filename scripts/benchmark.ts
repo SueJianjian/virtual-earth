@@ -25,7 +25,7 @@ const seed = Number.isFinite(requestedSeed) ? Math.trunc(requestedSeed) : 42;
 const defaultSteps = scenario === "dense" ? 100 : 900;
 const requestedSteps = Number(process.argv[2] ?? process.env.BENCHMARK_STEPS ?? defaultSteps);
 const steps = Number.isFinite(requestedSteps) && requestedSteps > 0 ? Math.trunc(requestedSteps) : defaultSteps;
-const requestedWarmup = Number(process.env.BENCHMARK_WARMUP_STEPS ?? (scenario === "dense" ? 1_000 : 0));
+const requestedWarmup = Number(process.env.BENCHMARK_WARMUP_STEPS ?? (scenario === "dense" ? 1_400 : 0));
 const warmupSteps = Number.isFinite(requestedWarmup) && requestedWarmup >= 0 ? Math.trunc(requestedWarmup) : 0;
 const requestedBudget = Number(process.env.BENCHMARK_STEP_BUDGET_MS ?? (scenario === "dense" ? 60 : 10));
 const stepBudgetMs = Number.isFinite(requestedBudget) && requestedBudget > 0 ? requestedBudget : Infinity;
