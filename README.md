@@ -52,9 +52,10 @@ npm run server
 
 The server listens on `127.0.0.1:8787` by default and stores its world at
 `data/virtual-earth-world.json`. It starts the same simulation runtime used by
-the browser Worker, advances at the normal rate of one real minute per
-simulated day, broadcasts snapshots over Server-Sent Events, and saves every
-120 simulation steps. Connect the browser observer with:
+the browser Worker, broadcasts snapshots over Server-Sent Events, and saves
+every 120 simulation steps. With no observer connected, the world advances at
+`64x`; while one or more observer webpages are connected, it automatically
+returns to `1x`. Connect the browser observer with:
 
 ```text
 http://127.0.0.1:4173/?server=http%3A%2F%2F127.0.0.1%3A8787

@@ -7,6 +7,7 @@ import type { WorkerCommand, WorkerMessage } from "../src/worker/protocol.ts";
 import { scheduledStepBatch, simulationStepIntervalMs } from "../src/worker/scheduler.ts";
 import { deserializeWorld, serializeWorld } from "../src/persistence/serialize.ts";
 import { timelineForWorld } from "../src/sim/time.ts";
+import { simulationSpeedForViewerCount } from "./viewer-speed.ts";
 
 const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const host = process.env.HOST ?? "127.0.0.1";
@@ -41,6 +42,20 @@ let shuttingDown = false;
 const stopSchedule = (): void => {
   if (timer !== undefined) clearTimeout(timer);
   timer = undefined;
+};
+
+const restartScheduleForCurrentSpeed = (): void => {
+  nextStepAtMs = performance.now() + simulationStepIntervalMs(runtime.getSpeed());
+  stopSchedule();
+  schedule();
+};
+
+const enforceViewerSpeed = (): boolean => {
+  const speed = simulationSpeedForViewerCount(clients.size);
+  if (runtime.getSpeed() === speed) return false;
+  handleMessages(runtime.dispatch({ type: "setSpeed", multiplier: speed }));
+  restartScheduleForCurrentSpeed();
+  return true;
 };
 
 const persist = (payload = serializeWorld(runtime.getState())): Promise<void> => {
@@ -103,6 +118,7 @@ const health = () => ({
   timelineDays: latestSnapshot.timeline?.days ?? timelineForWorld(runtime.getState()).days,
   digest: latestSnapshot.digest,
   worldPath,
+  viewerCount: clients.size,
 });
 
 const requestHandler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -115,21 +131,24 @@ const requestHandler = async (request: IncomingMessage, response: ServerResponse
   if (request.method === "GET" && url.pathname === "/api/snapshot") { writeJson(response, 200, { type: "snapshot", snapshot: latestSnapshot, paused: runtime.isPaused(), speed: runtime.getSpeed() }); return; }
   if (request.method === "GET" && url.pathname === "/api/stream") {
     response.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" });
-    response.write(`data: ${json({ type: "snapshot", snapshot: latestSnapshot, paused: runtime.isPaused(), speed: runtime.getSpeed() })}\n\n`);
     clients.add(response);
-    request.on("close", () => clients.delete(response));
+    if (!enforceViewerSpeed()) {
+      response.write(`data: ${json({ type: "snapshot", snapshot: latestSnapshot, paused: runtime.isPaused(), speed: runtime.getSpeed() })}\n\n`);
+    }
+    request.on("close", () => {
+      if (clients.delete(response) && !shuttingDown) enforceViewerSpeed();
+    });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/command") {
     let command: WorkerCommand;
     try { command = JSON.parse(await readBody(request)) as WorkerCommand; } catch { writeJson(response, 400, { error: "invalid-json" }); return; }
-    const messages = runtime.dispatch(command);
+    const effectiveCommand: WorkerCommand = command.type === "setSpeed"
+      ? { type: "setSpeed", multiplier: simulationSpeedForViewerCount(clients.size) }
+      : command;
+    const messages = runtime.dispatch(effectiveCommand);
     handleMessages(messages);
-    if (command.type === "start" || command.type === "setSpeed") {
-      nextStepAtMs = performance.now() + simulationStepIntervalMs(runtime.getSpeed());
-      stopSchedule();
-      schedule();
-    }
+    if (command.type === "start" || command.type === "setSpeed") restartScheduleForCurrentSpeed();
     if (command.type === "pause" || command.type === "reset" || command.type === "load") {
       stopSchedule();
       await persist();
@@ -168,6 +187,7 @@ process.once("SIGINT", () => { void shutdown(); });
 process.once("SIGTERM", () => { void shutdown(); });
 
 server.listen(port, host, () => {
+  handleMessages(runtime.dispatch({ type: "setSpeed", multiplier: simulationSpeedForViewerCount(0) }));
   handleMessages(runtime.dispatch({ type: "start" }));
   schedule();
   console.log(`虚拟地球服务器已启动：http://${host}:${port}`);
