@@ -69,6 +69,25 @@ Turning off the viewing computer does not stop a remote server, but turning
 off the server host does stop simulation until that host starts again; the
 latest checkpoint is restored automatically on restart.
 
+### Cloud service templates
+
+The `deploy` directory contains production templates for a small Linux host:
+
+- `virtual-earth.service` runs the authoritative simulation under `systemd`,
+  restarts it after a failure or reboot, and only permits writes to the world
+  data directory.
+- `nginx.conf.template` serves the built observer over HTTPS, requires HTTP
+  basic authentication, proxies `/api/` to the loopback-only simulation port,
+  and keeps the ACME challenge path available for certificate renewal.
+
+Replace `__DOMAIN__` and `__SERVER_TOKEN__` while installing the Nginx
+template. Store the matching token in a root-readable environment file rather
+than source control, and create the password file directly on the host. Keep
+port `8787` closed in the cloud firewall; only SSH, HTTP and HTTPS need public
+rules. Build the static observer on a development machine before copying
+`dist` to a memory-constrained server, so desktop and browser test dependencies
+do not need to be installed on the host.
+
 ## Verify
 
 ```powershell

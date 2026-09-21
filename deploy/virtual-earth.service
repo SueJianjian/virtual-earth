@@ -1,0 +1,23 @@
+[Unit]
+Description=Virtual Earth autonomous simulation server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/virtual-earth
+EnvironmentFile=/etc/virtual-earth.env
+ExecStart=/usr/local/bin/node --experimental-strip-types /opt/virtual-earth/server/index.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/virtual-earth/data
+
+[Install]
+WantedBy=multi-user.target
