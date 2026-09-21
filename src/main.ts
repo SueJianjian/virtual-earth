@@ -1,5 +1,6 @@
 import "./styles.css";
 import { createWorkerClient } from "./worker/client.ts";
+import { createRemoteClient } from "./worker/remote-client.ts";
 import type { WorkerMessage, WorldSnapshot } from "./worker/protocol.ts";
 import type { WorldEvent } from "./sim/types.ts";
 import { createMapCanvas, type CellSelection, type MapFocusLod, type SceneEntitySelection } from "./ui/map-canvas.ts";
@@ -119,7 +120,9 @@ const emptySnapshot: WorldSnapshot = {
   metrics: {},
   foodSecurity: { width: 1, height: 1, values: new Float32Array(1) },
 };
-const client = createWorkerClient();
+const remoteServerUrl = new URLSearchParams(window.location.search).get("server");
+const isRemoteMode = remoteServerUrl !== null && remoteServerUrl.trim().length > 0;
+const client = isRemoteMode ? createRemoteClient(remoteServerUrl) : createWorkerClient();
 const canvas = query<HTMLCanvasElement>("#world-map");
 const statusPanel = query<HTMLElement>("#status-panel");
 const inspector = query<HTMLElement>("#inspector");
@@ -141,7 +144,7 @@ type DesktopBridge = {
   checkpointComplete?: () => void;
 };
 const desktopBridge = (window as Window & { virtualEarthDesktop?: DesktopBridge }).virtualEarthDesktop;
-let initialAutoSavePayload = readWorldPayload(autoStorage, AUTO_SAVE_KEY);
+let initialAutoSavePayload = isRemoteMode ? null : readWorldPayload(autoStorage, AUTO_SAVE_KEY);
 let snapshot: WorldSnapshot | undefined;
 type SnapshotMessage = Extract<WorkerMessage, { type: "snapshot" }>;
 let selection: CellSelection | undefined;
@@ -160,7 +163,8 @@ const setPersistenceStatus = (message: string, state: PersistenceState): void =>
   persistenceStatus.dataset.state = state;
 };
 
-if (initialAutoSavePayload !== null) setPersistenceStatus("恢复点：正在恢复最近存档", "loading");
+if (isRemoteMode) setPersistenceStatus("服务器模式：等待权威世界快照", "loading");
+else if (initialAutoSavePayload !== null) setPersistenceStatus("恢复点：正在恢复最近存档", "loading");
 else setPersistenceStatus("恢复点：正在检查持久存档", "loading");
 
 const persistenceQueue = createLatestOnlyQueue();
@@ -389,7 +393,7 @@ const applyMessageNow = (message: WorkerMessage): void => {
     return;
   }
   if (message.type === "autosaved") {
-    persistCheckpoint(message.payload, message.digest, "恢复点：已自动保存");
+    if (!isRemoteMode) persistCheckpoint(message.payload, message.digest, "恢复点：已自动保存");
     return;
   }
   if (message.type === "saved") {
@@ -432,7 +436,7 @@ const applyMessageNow = (message: WorkerMessage): void => {
   digest.textContent = `状态 ${snapshot.digest.slice(0, 8)}`;
   status.textContent = message.paused ? "模拟已暂停" : `${message.speed}× 自主演化中`;
   status.dataset.state = message.paused ? "paused" : "running";
-  if (shouldStartAfterRestore) client.send({ type: "start" });
+  if (shouldStartAfterRestore && !isRemoteMode) client.send({ type: "start" });
 };
 
 const snapshotRenderer = createLatestOnlyRenderer<SnapshotMessage>(applyMessageNow);
@@ -453,6 +457,7 @@ const applyMessage = (message: WorkerMessage): void => {
 client.subscribe(applyMessage);
 desktopBridge?.onBeforeQuit?.(() => client.send({ type: "checkpoint" }));
 const bootstrap = async (): Promise<void> => {
+  if (isRemoteMode) return;
   if (initialAutoSavePayload === null) {
     initialAutoSavePayload = await readIndexedWorldPayload(AUTO_SAVE_KEY);
     if (initialAutoSavePayload !== null) {

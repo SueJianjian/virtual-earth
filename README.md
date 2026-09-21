@@ -42,6 +42,33 @@ renderer, and leaves WebGL hardware acceleration enabled. It improves window
 stability and avoids browser-tab throttling; actual frame rate still depends
 on the computer's GPU and available memory.
 
+For a world that continues while your own computer is turned off, run the
+authoritative simulation on a computer or cloud server that remains powered
+on:
+
+```powershell
+npm run server
+```
+
+The server listens on `127.0.0.1:8787` by default and stores its world at
+`data/virtual-earth-world.json`. It starts the same simulation runtime used by
+the browser Worker, advances at the normal rate of one real minute per
+simulated day, broadcasts snapshots over Server-Sent Events, and saves every
+120 simulation steps. Connect the browser observer with:
+
+```text
+http://127.0.0.1:4173/?server=http%3A%2F%2F127.0.0.1%3A8787
+```
+
+When the server host is reachable from the Internet, set `VE_SERVER_TOKEN`
+and configure the firewall before exposing it. A token can be added to the
+observer URL as part of the server value, for example
+`?server=http%3A%2F%2F127.0.0.1%3A8787%3Ftoken%3Dyour-token`.
+The local Worker mode remains the default when no `server` URL is present.
+Turning off the viewing computer does not stop a remote server, but turning
+off the server host does stop simulation until that host starts again; the
+latest checkpoint is restored automatically on restart.
+
 ## Verify
 
 ```powershell
